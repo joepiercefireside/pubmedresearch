@@ -4,3 +4,4 @@ psycopg2-binary==2.9.9
 bcrypt==3.2.0
 gunicorn==21.2.0
 requests==2.28.1
+werkzeug==2.0.3
