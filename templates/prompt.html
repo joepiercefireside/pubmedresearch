@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Prompts - PubMed Research Hub</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 font-sans">
+    <header class="bg-blue-700 text-white shadow-md">
+        <nav class="container mx-auto p-4 flex justify-between items-center">
+            <a href="{{ url_for('index') }}" class="text-2xl font-semibold">PubMed Research Hub</a>
+            <div class="space-x-4">
+                <a href="{{ url_for('search') }}" class="hover:underline">Search</a>
+                <a href="{{ url_for('prompt') }}" class="hover:underline">Prompts</a>
+                <a href="{{ url_for('notifications') }}" class="hover:underline">Notifications</a>
+                <a href="{{ url_for('logout') }}" class="hover:underline">Logout</a>
+            </div>
+        </nav>
+    </header>
+    <main class="container mx-auto p-6">
+        {% for message in get_flashed_messages(with_categories=true) %}
+            <div class="bg-{{ 'green' if message[0] == 'success' else 'red' }}-100 border-l-4 border-{{ 'green' if message[0] == 'success' else 'red' }}-500 text-{{ 'green' if message[0] == 'success' else 'red' }}-700 p-4 mb-6 rounded-r">
+                {{ message[1] }}
+            </div>
+        {% endfor %}
+        <section class="bg-white p-8 rounded-lg shadow-md mb-6">
+            <h1 class="text-2xl font-bold text-gray-800 mb-4">Manage LLM Prompts</h1>
+            <form method="POST" class="space-y-4">
+                <div>
+                    <label for="prompt_name" class="block text-gray-700 font-medium">Prompt Name</label>
+                    <input type="text" name="prompt_name" id="prompt_name" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Diabetes Summary" required>
+                </div>
+                <div>
+                    <label for="prompt_text" class="block text-gray-700 font-medium">Prompt Text</label>
+                    <textarea name="prompt_text" id="prompt_text" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows="6" placeholder="e.g., Summarize key findings on diabetes treatments, include PubMed links" required></textarea>
+                </div>
+                <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Create Prompt</button>
+            </form>
+        </section>
+        <section class="bg-white p-8 rounded-lg shadow-md">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Your Prompts</h2>
+            {% if prompts %}
+                <div class="space-y-4">
+                    {% for prompt in prompts %}
+                        <div class="border-b pb-4">
+                            <p class="font-semibold text-gray-800">{{ prompt.prompt_name }}</p>
+                            <p class="text-gray-600">{{ prompt.prompt_text }}</p>
+                            <p class="text-gray-500 text-sm">Created: {{ prompt.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="text-gray-600">No prompts created yet.</p>
+            {% endif %}
+        </section>
+    </main>
+    <footer class="bg-gray-200 p-4 text-center text-gray-600">
+        <p>&copy; 2025 PubMed Research Hub. All rights reserved.</p>
+    </footer>
+</body>
+</html>

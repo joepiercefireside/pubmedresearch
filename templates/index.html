@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PubMed Research Hub</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 font-sans">
+    <header class="bg-blue-700 text-white shadow-md">
+        <nav class="container mx-auto p-4 flex justify-between items-center">
+            <a href="{{ url_for('index') }}" class="text-2xl font-semibold">PubMed Research Hub</a>
+            <div class="space-x-4">
+                {% if current_user.is_authenticated %}
+                    <a href="{{ url_for('search') }}" class="hover:underline">Search</a>
+                    <a href="{{ url_for('prompt') }}" class="hover:underline">Prompts</a>
+                    <a href="{{ url_for('notifications') }}" class="hover:underline">Notifications</a>
+                    <a href="{{ url_for('logout') }}" class="hover:underline">Logout</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" class="hover:underline">Login</a>
+                    <a href="{{ url_for('register') }}" class="hover:underline">Register</a>
+                {% endif %}
+            </div>
+        </nav>
+    </header>
+    <main class="container mx-auto p-6">
+        {% for message in get_flashed_messages(with_categories=true) %}
+            <div class="bg-{{ 'green' if message[0] == 'success' else 'red' }}-100 border-l-4 border-{{ 'green' if message[0] == 'success' else 'red' }}-500 text-{{ 'green' if message[0] == 'success' else 'red' }}-700 p-4 mb-6 rounded-r">
+                {{ message[1] }}
+            </div>
+        {% endfor %}
+        <section class="bg-white p-8 rounded-lg shadow-md">
+            <h1 class="text-3xl font-bold text-gray-800 mb-4">Welcome to PubMed Research Hub</h1>
+            <p class="text-gray-600 mb-6">Search and analyze biomedical literature from PubMed, customize LLM prompts for advanced queries, and set up notifications for the latest research updates.</p>
+            {% if current_user.is_authenticated %}
+                <div class="flex space-x-4">
+                    <a href="{{ url_for('search') }}" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Start Searching</a>
+                    <a href="{{ url_for('notifications') }}" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">Set Notifications</a>
+                </div>
+            {% else %}
+                <a href="{{ url_for('login') }}" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Login to Get Started</a>
+            {% endif %}
+        </section>
+    </main>
+    <footer class="bg-gray-200 p-4 text-center text-gray-600">
+        <p>&copy; 2025 PubMed Research Hub. All rights reserved.</p>
+    </footer>
+</body>
+</html>
