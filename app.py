@@ -114,51 +114,34 @@ def generate_summary(results, query):
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
 def search():
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
-    cur = conn.cursor()
     if request.method == 'POST':
-        query = request.form.get('query', '').strip()
-        prompt_id = request.form.get('prompt_id')
-        if prompt_id:
-            cur.execute("SELECT prompt_text FROM prompts WHERE id = %s AND user_id = %s", (prompt_id, current_user.id))
-            query = cur.fetchone()[0] if cur.rowcount > 0 else query
-        if query:
-            keywords = extract_keywords(query)
-            tsquery = ' & '.join(keywords) if keywords else '*:*'
-            try:
-                cur.execute("""
-                    SELECT pmid, title, abstract, publication_date, authors, journal
-                    FROM articles
-                    WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(%s)
-                """, (tsquery,))
-                results = cur.fetchall()
-                results = [dict(zip(['pmid', 'title', 'abstract', 'publication_date', 'authors', 'journal', 'keywords'], row + (','.join(keywords),))) for row in results]
-                # Score and sort results
-                for result in results:
-                    result['score'] = score_abstract(result['abstract'] or '', keywords)
-                high_relevance = [r for r in results if r['score'] >= 0.05]
-                low_relevance = [r for r in results if r['score'] < 0.05]
-                high_relevance.sort(key=lambda x: x['score'], reverse=True)
-                low_relevance.sort(key=lambda x: x['score'], reverse=True)
-                # Generate summary
-                summary = generate_summary(high_relevance, query)
-            except psycopg2.Error:
-                high_relevance = []
-                low_relevance = []
-                summary = "Error processing search query."
-        else:
-            high_relevance = []
-            low_relevance = []
-            summary = "No query provided."
-        cur.close()
+        query = request.form.get('query')
+        if not query:
+            return render_template('search.html', error="Query cannot be empty")
+        nlp = spacy.load('en_core_web_sm')
+        doc = nlp(query)
+        keywords = [token.text for token in doc if token.is_alpha and not token.is_stop]
+        if not keywords:
+            return render_template('search.html', error="No valid keywords found")
+        ts_query = ' & '.join(keywords)
+        conn = get_db_connection()
+        try:
+            results = conn.execute(
+                'SELECT id, title, abstract, ts_rank(to_tsvector('english', title || ' ' || abstract), to_tsquery(%s)) AS rank '
+                'FROM articles WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(%s) '
+                'ORDER BY rank DESC LIMIT 10',
+                (ts_query, ts_query)
+            ).fetchall()
+            summaries = []
+            for r in results:
+                summary = summarize_article(r[2], nlp)[:500]  # Limit summary length
+                summaries.append(summary)
+        except Exception as e:
+            conn.close()
+            return render_template('search.html', error=f"Search failed: {str(e)}")
         conn.close()
-        return render_template('search.html', high_relevance=high_relevance, low_relevance=low_relevance, query=query, summary=summary)
-    else:
-        cur.execute("SELECT id, prompt_name FROM prompts WHERE user_id = %s", (current_user.id,))
-        prompts = cur.fetchall()
-        cur.close()
-        conn.close()
-        return render_template('search.html', prompts=prompts)
+        return render_template('search.html', results=results, query=query, summaries=summaries)
+    return render_template('search.html')
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
