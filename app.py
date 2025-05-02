@@ -105,13 +105,10 @@ def generate_summary(abstract, query, prompt_text=None):
         return "No abstract available to summarize."
     # Check prompt for output style
     if prompt_text and "insights" in prompt_text.lower():
-        # Basic insights: first 300 characters with keyword emphasis
         return abstract[:300]
     elif prompt_text and "google" in prompt_text.lower():
-        # Google-style: short snippet
         return abstract[:100]
     else:
-        # Default: first 200 characters
         return abstract[:200]
 
 @app.route('/search', methods=['GET', 'POST'])
@@ -136,30 +133,52 @@ def search():
         keywords = extract_keywords(query)
         if not keywords:
             return render_template('search.html', error="No valid keywords found", prompts=prompts)
-        ts_query = ' & '.join(keywords)
+        # Use OR and prefix matching
+        ts_query = ' | '.join([f"{kw}:*" for kw in keywords])
         logger.info(f"TS query: {ts_query}")
         conn = get_db_connection()
         cur = conn.cursor()
+        results = []
         try:
+            # Use precomputed tsvector column
             cur.execute(
-                "SELECT id, title, abstract, ts_rank(to_tsvector('english', title || ' ' || abstract), to_tsquery(%s)) AS rank "
-                "FROM articles WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(%s) "
+                "SELECT id, title, abstract, ts_rank(tsv, to_tsquery(%s)) AS rank "
+                "FROM articles WHERE tsv @@ to_tsquery(%s) "
                 "ORDER BY rank DESC LIMIT 3",
                 (ts_query, ts_query)
             )
             results = cur.fetchall()
-            logger.info(f"Search results count: {len(results)}")
-            summaries = []
-            selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
-            prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
-            for r in results:
-                summary = generate_summary(r[2], query, prompt_text)
-                summaries.append(summary)
+            logger.info(f"Full-text search results count: {len(results)}")
+            # Log sample title for debugging
+            if results:
+                logger.info(f"Sample title: {results[0][1][:50]}")
+            
+            # Fallback to LIKE search if no results
+            if not results:
+                logger.info("Falling back to LIKE search")
+                like_conditions = ' OR '.join([f"title ILIKE %s OR abstract ILIKE %s" for _ in keywords])
+                like_params = [f"%{kw}%" for kw in keywords for _ in (1, 2)]
+                cur.execute(
+                    f"SELECT id, title, abstract, 0 AS rank "
+                    f"FROM articles WHERE {like_conditions} "
+                    "LIMIT 3",
+                    like_params
+                )
+                results = cur.fetchall()
+                logger.info(f"LIKE search results count: {len(results)}")
+                if results:
+                    logger.info(f"Sample LIKE title: {results[0][1][:50]}")
         except Exception as e:
             logger.error(f"Search error: {str(e)}")
             cur.close()
             conn.close()
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
+        summaries = []
+        selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
+        prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
+        for r in results:
+            summary = generate_summary(r[2], query, prompt_text)
+            summaries.append(summary)
         cur.close()
         conn.close()
         return render_template('search.html', results=results, query=query, summaries=summaries, prompts=prompts, prompt_text=prompt_text)
