@@ -173,15 +173,26 @@ def search():
             cur.close()
             conn.close()
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
-        summaries = []
+        
+        # Convert results to objects for search.html
+        high_relevance = [
+            {
+                'id': r[0],
+                'title': r[1],
+                'abstract': r[2],
+                'score': r[3],
+                'authors': None,  # Fetch or set as needed
+                'journal': None,
+                'publication_date': None,
+                'keywords': None
+            } for r in results
+        ]
+        summaries = [generate_summary(r[2], query, selected_prompt['prompt_text'] if selected_prompt else None) for r in results]
         selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
         prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
-        for r in results:
-            summary = generate_summary(r[2], query, prompt_text)
-            summaries.append(summary)
         cur.close()
         conn.close()
-        return render_template('search.html', results=results, query=query, summaries=summaries, prompts=prompts, prompt_text=prompt_text)
+        return render_template('search.html', high_relevance=high_relevance, query=query, summaries=summaries, prompts=prompts, prompt_text=prompt_text)
     return render_template('search.html', prompts=prompts)
 
 @app.route('/prompt', methods=['GET', 'POST'])
@@ -222,17 +233,3 @@ def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
-        keywords = request.form.get('keywords')
-        cur.execute("INSERT INTO notifications (user_id, keywords) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET keywords = %s", 
-                    (current_user.id, keywords, keywords))
-        conn.commit()
-        flash('Notification settings updated.', 'success')
-        return redirect(url_for('notifications'))
-    cur.execute("SELECT keywords FROM notifications WHERE user_id = %s", (current_user.id,))
-    notifications = cur.fetchone()
-    cur.close()
-    conn.close()
-    return render_template('notifications.html', notifications=notifications)
-
-if __name__ == '__main__':
-    app.run(debug=True)

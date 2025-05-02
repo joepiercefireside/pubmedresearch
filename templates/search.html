@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Search - PubMed Research</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        select { color: black !important; }
+        .error { color: red; }
+    </style>
 </head>
 <body class="bg-gray-100">
     <nav class="bg-white shadow">
@@ -29,67 +33,41 @@
 
     <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <h1 class="text-2xl font-bold text-gray-900">Search Articles</h1>
-        <form method="POST" action="/search" class="mt-4">
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+        <form method="POST" action="{{ url_for('search') }}" class="mt-4">
             <div class="flex space-x-4">
                 <input type="text" name="query" placeholder="Enter search terms (e.g., weight loss and diabetes)" class="flex-1 px-4 py-2 border rounded-md" value="{{ query | default('') }}">
                 <select name="prompt_id" class="px-4 py-2 border rounded-md">
                     <option value="">Select a prompt (optional)</option>
                     {% for prompt in prompts %}
-                    <option value="{{ prompt[0] }}">{{ prompt[1] }}</option>
+                        <option value="{{ prompt.id }}">{{ prompt.prompt_name }}</option>
                     {% endfor %}
                 </select>
                 <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">Search</button>
             </div>
         </form>
 
-        {% if summary %}
-        <div class="mt-6">
-            <h2 class="text-xl font-semibold text-gray-900">Summary</h2>
-            <p class="mt-2 text-gray-600">{{ summary }}</p>
-        </div>
-        {% endif %}
-
         {% if high_relevance %}
-        <div class="mt-6">
-            <h2 class="text-xl font-semibold text-gray-900">Relevant Articles</h2>
-            <div class="mt-4 space-y-4">
-                {% for result in high_relevance %}
-                <div class="bg-white p-6 rounded-lg shadow">
-                    <h3 class="text-lg font-medium text-gray-900">{{ result.title }}</h3>
-                    <p class="mt-2 text-gray-600">{{ result.abstract | truncate(300) }}</p>
-                    <p class="mt-2 text-gray-500 text-sm"><strong>Authors:</strong> {{ result.authors }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Journal:</strong> {{ result.journal }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Publication Date:</strong> {{ result.publication_date | default('Unknown') }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ result.keywords | default('') }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Relevance Score:</strong> {{ '%.2f' % result.score }}</p>
+            <div class="mt-6">
+                <h2 class="text-xl font-semibold text-gray-900">Relevant Articles</h2>
+                <div class="mt-4 space-y-4">
+                    {% for result in high_relevance %}
+                        <div class="bg-white p-6 rounded-lg shadow">
+                            <h3 class="text-lg font-medium text-gray-900">{{ result.title }}</h3>
+                            <p class="mt-2 text-gray-600">{{ result.abstract | truncate(300) }}</p>
+                            <p class="mt-2 text-gray-500 text-sm"><strong>Authors:</strong> {{ result.authors | default('Unknown') }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Journal:</strong> {{ result.journal | default('Unknown') }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Publication Date:</strong> {{ result.publication_date | default('Unknown') }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ result.keywords | default('None') }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Relevance Score:</strong> {{ '%.2f' % result.score }}</p>
+                        </div>
+                    {% endfor %}
                 </div>
-                {% endfor %}
             </div>
-        </div>
-        {% endif %}
-
-        {% if low_relevance %}
-        <div class="mt-6">
-            <h2 class="text-xl font-semibold text-gray-900">Additional Results</h2>
-            <p class="mt-2 text-gray-600">The following results may not match exactly.</p>
-            <div class="mt-4 space-y-4">
-                {% for result in low_relevance %}
-                <div class="bg-white p-6 rounded-lg shadow">
-                    <h3 class="text-lg font-medium text-gray-900">{{ result.title }}</h3>
-                    <p class="mt-2 text-gray-600">{{ result.abstract | truncate(300) }}</p>
-                    <p class="mt-2 text-gray-500 text-sm"><strong>Authors:</strong> {{ result.authors }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Journal:</strong> {{ result.journal }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Publication Date:</strong> {{ result.publication_date | default('Unknown') }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ result.keywords | default('') }}</p>
-                    <p class="text-gray-500 text-sm"><strong>Relevance Score:</strong> {{ '%.2f' % result.score }}</p>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-        {% endif %}
-
-        {% if not high_relevance and not low_relevance %}
-        <p class="mt-4 text-gray-600">No results found. Try a different query.</p>
+        {% else %}
+            <p class="mt-4 text-gray-600">No results found. Try a different query.</p>
         {% endif %}
     </div>
 </body>
