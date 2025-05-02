@@ -52,7 +52,7 @@
                             <a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.pmid }}/" class="text-blue-600 font-semibold text-lg hover:underline">{{ result.title }}</a>
                             <p class="text-gray-600 mt-2">{{ result.abstract[:200] }}...</p>
                             <p class="text-gray-500 text-sm"><strong>Authors:</strong> {{ result.authors | tojson | safe }}</p>
-                            <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ result.keywords | tojson | safe }}</p>
+                           <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ result.keywords | default('') | tojson | safe }}</p>
                             <p class="text-gray-500 text-sm"><strong>Published:</strong> {{ result.publication_date }}</p>
                         </article>
                     {% endfor %}
