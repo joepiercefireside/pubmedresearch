@@ -13,7 +13,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Load spaCy model
+# Load spaCy model globally
 nlp = spacy.load('en_core_web_sm')
 
 # Database connection function
@@ -94,27 +94,19 @@ def extract_keywords(query):
     keywords.extend(phrases)
     # Deduplicate and prioritize phrases
     keywords = list(dict.fromkeys(keywords))
-    return keywords
+    return keywords[:5]  # Limit to 5 keywords
 
 def score_abstract(abstract, keywords):
     abstract_words = re.findall(r'\w+', abstract.lower())
     keyword_counts = sum(abstract_words.count(keyword.lower()) for keyword in keywords)
     return keyword_counts / (len(abstract_words) + 1)  # Normalize by abstract length
 
-def generate_summary(results, query):
-    if not results:
-        return "No relevant articles found to summarize."
-    # Simple TextRank-like summary: extract top sentences from top 3 abstracts
-    abstracts = [result['abstract'] for result in results[:3] if result['abstract']]
-    if not abstracts:
-        return "No abstracts available to summarize."
-    doc = nlp(' '.join(abstracts))
-    sentences = [sent.text for sent in doc.sents]
-    # Score sentences by keyword overlap
-    keyword_scores = [(sent, sum(sent.lower().count(keyword.lower()) for keyword in extract_keywords(query))) for sent in sentences]
-    top_sentences = sorted(keyword_scores, key=lambda x: x[1], reverse=True)[:2]
-    summary = ' '.join(sent for sent, score in top_sentences if score > 0)
-    return summary or "Summary could not be generated from available abstracts."
+def generate_summary(abstract, query):
+    if not abstract:
+        return "No abstract available to summarize."
+    doc = nlp(abstract)
+    sentences = [sent.text for sent in doc.sents][:2]  # Take first 2 sentences
+    return ' '.join(sentences)[:200]  # Limit to 200 characters
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
@@ -123,7 +115,6 @@ def search():
         query = request.form.get('query')
         if not query:
             return render_template('search.html', error="Query cannot be empty")
-        nlp = spacy.load('en_core_web_sm')
         doc = nlp(query)
         keywords = [token.text for token in doc if token.is_alpha and not token.is_stop][:5]
         if not keywords:
@@ -141,7 +132,7 @@ def search():
             results = cur.fetchall()
             summaries = []
             for r in results:
-                summary = generate_summary([{'abstract': r[2]}], query)[:200]
+                summary = generate_summary(r[2], query)
                 summaries.append(summary)
         except Exception as e:
             cur.close()
