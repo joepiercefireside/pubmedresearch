@@ -5,13 +5,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import spacy
 import re
 import os
-from collections import Counter
+import logging
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key')
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load spaCy model globally with minimal pipeline
 nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
@@ -87,20 +91,28 @@ def logout():
 
 def extract_keywords(query):
     doc = nlp(query.lower())
-    stop_words = nlp.Defaults.stop_words | {'information', 'show', 'shows', 'affect', 'affects'}
-    keywords = [token.text for token in doc if token.is_alpha and token.text not in stop_words and len(token.text) > 2]
+    stop_words = nlp.Defaults.stop_words
+    keywords = [token.text for token in doc if token.is_alpha and token.text not in stop_words and len(token.text) > 1]
+    logger.info(f"Extracted keywords: {keywords}")
+    if not keywords:
+        # Fallback: use query terms split by spaces, removing stop words
+        keywords = [word for word in query.lower().split() if word not in stop_words and len(word) > 1]
+        logger.info(f"Fallback keywords: {keywords}")
     return keywords[:3]  # Limit to 3 keywords
 
-def score_abstract(abstract, keywords):
-    abstract_words = re.findall(r'\w+', abstract.lower())
-    keyword_counts = sum(abstract_words.count(keyword.lower()) for keyword in keywords)
-    return keyword_counts / (len(abstract_words) + 1)  # Normalize by abstract length
-
-def generate_summary(abstract, query):
+def generate_summary(abstract, query, prompt_text=None):
     if not abstract:
         return "No abstract available to summarize."
-    # Use first 200 characters of abstract as summary
-    return abstract[:200]
+    # Check prompt for output style
+    if prompt_text and "insights" in prompt_text.lower():
+        # Basic insights: first 300 characters with keyword emphasis
+        return abstract[:300]
+    elif prompt_text and "google" in prompt_text.lower():
+        # Google-style: short snippet
+        return abstract[:100]
+    else:
+        # Default: first 200 characters
+        return abstract[:200]
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
@@ -118,12 +130,14 @@ def search():
     if request.method == 'POST':
         query = request.form.get('query')
         selected_prompt_id = request.form.get('prompt_id')
+        logger.info(f"Search query: {query}, selected prompt ID: {selected_prompt_id}")
         if not query:
             return render_template('search.html', error="Query cannot be empty", prompts=prompts)
         keywords = extract_keywords(query)
         if not keywords:
             return render_template('search.html', error="No valid keywords found", prompts=prompts)
         ts_query = ' & '.join(keywords)
+        logger.info(f"TS query: {ts_query}")
         conn = get_db_connection()
         cur = conn.cursor()
         try:
@@ -134,14 +148,15 @@ def search():
                 (ts_query, ts_query)
             )
             results = cur.fetchall()
+            logger.info(f"Search results count: {len(results)}")
             summaries = []
-            for r in results:
-                summary = generate_summary(r[2], query)
-                summaries.append(summary)
-            # If a prompt is selected, include its text in the response
             selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
             prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
+            for r in results:
+                summary = generate_summary(r[2], query, prompt_text)
+                summaries.append(summary)
         except Exception as e:
+            logger.error(f"Search error: {str(e)}")
             cur.close()
             conn.close()
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
