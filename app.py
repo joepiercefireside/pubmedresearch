@@ -13,8 +13,8 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Load spaCy model globally
-nlp = spacy.load('en_core_web_sm')
+# Load spaCy model globally with minimal pipeline
+nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
 
 # Database connection function
 def get_db_connection():
@@ -89,12 +89,7 @@ def extract_keywords(query):
     doc = nlp(query.lower())
     stop_words = nlp.Defaults.stop_words | {'information', 'show', 'shows', 'affect', 'affects'}
     keywords = [token.text for token in doc if token.is_alpha and token.text not in stop_words and len(token.text) > 2]
-    # Handle multi-word phrases (e.g., "weight loss")
-    phrases = [chunk.text for chunk in doc.noun_chunks if chunk.text not in stop_words]
-    keywords.extend(phrases)
-    # Deduplicate and prioritize phrases
-    keywords = list(dict.fromkeys(keywords))
-    return keywords[:5]  # Limit to 5 keywords
+    return keywords[:3]  # Limit to 3 keywords
 
 def score_abstract(abstract, keywords):
     abstract_words = re.findall(r'\w+', abstract.lower())
@@ -104,21 +99,30 @@ def score_abstract(abstract, keywords):
 def generate_summary(abstract, query):
     if not abstract:
         return "No abstract available to summarize."
-    doc = nlp(abstract)
-    sentences = [sent.text for sent in doc.sents][:2]  # Take first 2 sentences
-    return ' '.join(sentences)[:200]  # Limit to 200 characters
+    # Use first 200 characters of abstract as summary
+    return abstract[:200]
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
 def search():
+    # Fetch user's prompts for dropdown
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, prompt_name, prompt_text FROM prompts WHERE user_id = %s', 
+                (current_user.id,))
+    prompts = cur.fetchall()
+    cur.close()
+    conn.close()
+    prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2]} for p in prompts]
+
     if request.method == 'POST':
         query = request.form.get('query')
+        selected_prompt_id = request.form.get('prompt_id')
         if not query:
-            return render_template('search.html', error="Query cannot be empty")
-        doc = nlp(query)
-        keywords = [token.text for token in doc if token.is_alpha and not token.is_stop][:5]
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts)
+        keywords = extract_keywords(query)
         if not keywords:
-            return render_template('search.html', error="No valid keywords found")
+            return render_template('search.html', error="No valid keywords found", prompts=prompts)
         ts_query = ' & '.join(keywords)
         conn = get_db_connection()
         cur = conn.cursor()
@@ -126,7 +130,7 @@ def search():
             cur.execute(
                 "SELECT id, title, abstract, ts_rank(to_tsvector('english', title || ' ' || abstract), to_tsquery(%s)) AS rank "
                 "FROM articles WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(%s) "
-                "ORDER BY rank DESC LIMIT 5",
+                "ORDER BY rank DESC LIMIT 3",
                 (ts_query, ts_query)
             )
             results = cur.fetchall()
@@ -134,14 +138,17 @@ def search():
             for r in results:
                 summary = generate_summary(r[2], query)
                 summaries.append(summary)
+            # If a prompt is selected, include its text in the response
+            selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
+            prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
         except Exception as e:
             cur.close()
             conn.close()
-            return render_template('search.html', error=f"Search failed: {str(e)}")
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
         cur.close()
         conn.close()
-        return render_template('search.html', results=results, query=query, summaries=summaries)
-    return render_template('search.html')
+        return render_template('search.html', results=results, query=query, summaries=summaries, prompts=prompts, prompt_text=prompt_text)
+    return render_template('search.html', prompts=prompts)
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
