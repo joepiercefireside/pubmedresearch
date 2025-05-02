@@ -130,20 +130,24 @@ def search():
             return render_template('search.html', error="No valid keywords found")
         ts_query = ' & '.join(keywords)
         conn = get_db_connection()
+        cur = conn.cursor()
         try:
-            results = conn.execute(
-                "SELECT id, title, abstract, ts_rank(to_tsvector('english', title || ' ' || abstract), to_tsquery(?)) AS rank "
-                "FROM articles WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(?) "
+            cur.execute(
+                "SELECT id, title, abstract, ts_rank(to_tsvector('english', title || ' ' || abstract), to_tsquery(%s)) AS rank "
+                "FROM articles WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(%s) "
                 "ORDER BY rank DESC LIMIT 5",
                 (ts_query, ts_query)
-            ).fetchall()
+            )
+            results = cur.fetchall()
             summaries = []
             for r in results:
                 summary = generate_summary([{'abstract': r[2]}], query)[:200]
                 summaries.append(summary)
         except Exception as e:
+            cur.close()
             conn.close()
             return render_template('search.html', error=f"Search failed: {str(e)}")
+        cur.close()
         conn.close()
         return render_template('search.html', results=results, query=query, summaries=summaries)
     return render_template('search.html')
@@ -157,14 +161,19 @@ def prompt():
             flash('Prompt cannot be empty.', 'error')
         else:
             conn = get_db_connection()
-            conn.execute('INSERT INTO prompts (user_id, prompt_text) VALUES (?, ?)', 
-                         (current_user.id, prompt_text))
+            cur = conn.cursor()
+            cur.execute('INSERT INTO prompts (user_id, prompt_text) VALUES (%s, %s)', 
+                        (current_user.id, prompt_text))
             conn.commit()
+            cur.close()
             conn.close()
             flash('Prompt saved successfully.', 'success')
     conn = get_db_connection()
-    prompts = conn.execute('SELECT id, prompt_text, created_at FROM prompts WHERE user_id = ?', 
-                           (current_user.id,)).fetchall()
+    cur = conn.cursor()
+    cur.execute('SELECT id, prompt_text, created_at FROM prompts WHERE user_id = %s', 
+                (current_user.id,))
+    prompts = cur.fetchall()
+    cur.close()
     conn.close()
     prompts = [{'id': p[0], 'prompt_text': p[1], 'created_at': p[2]} for p in prompts]
     return render_template('prompt.html', prompts=prompts)
