@@ -16,6 +16,11 @@ login_manager.login_view = 'login'
 # Load spaCy model
 nlp = spacy.load('en_core_web_sm')
 
+# Database connection function
+def get_db_connection():
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    return conn
+
 class User(UserMixin):
     def __init__(self, id, email):
         self.id = id
@@ -23,7 +28,7 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT id, email FROM users WHERE id = %s", (user_id,))
     user = cur.fetchone()
@@ -42,7 +47,7 @@ def register():
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
-        conn = psycopg2.connect(os.environ['DATABASE_URL'])
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
@@ -62,7 +67,7 @@ def login():
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
-        conn = psycopg2.connect(os.environ['DATABASE_URL'])
+        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
         user = cur.fetchone()
@@ -134,7 +139,7 @@ def search():
             ).fetchall()
             summaries = []
             for r in results:
-                summary = summarize_article(r[2], nlp)[:200]
+                summary = generate_summary([{'abstract': r[2]}], query)[:200]
                 summaries.append(summary)
         except Exception as e:
             conn.close()
@@ -148,23 +153,26 @@ def search():
 def prompt():
     if request.method == 'POST':
         prompt_text = request.form.get('prompt_text')
-        conn = get_db_connection()
-        conn.execute('INSERT INTO prompts (user_id, prompt_text) VALUES (?, ?)', 
-                     (current_user.id, prompt_text))
-        conn.commit()
-        conn.close()
+        if not prompt_text:
+            flash('Prompt cannot be empty.', 'error')
+        else:
+            conn = get_db_connection()
+            conn.execute('INSERT INTO prompts (user_id, prompt_text) VALUES (?, ?)', 
+                         (current_user.id, prompt_text))
+            conn.commit()
+            conn.close()
+            flash('Prompt saved successfully.', 'success')
     conn = get_db_connection()
     prompts = conn.execute('SELECT id, prompt_text, created_at FROM prompts WHERE user_id = ?', 
                            (current_user.id,)).fetchall()
     conn.close()
-    # Convert tuples to dicts for template compatibility
     prompts = [{'id': p[0], 'prompt_text': p[1], 'created_at': p[2]} for p in prompts]
     return render_template('prompt.html', prompts=prompts)
 
 @app.route('/notifications', methods=['GET', 'POST'])
 @login_required
 def notifications():
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
         keywords = request.form.get('keywords')
