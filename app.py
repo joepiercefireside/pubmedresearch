@@ -163,19 +163,19 @@ def search():
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
 def prompt():
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
-    cur = conn.cursor()
     if request.method == 'POST':
-        prompt_name = request.form.get('prompt_name')
         prompt_text = request.form.get('prompt_text')
-        cur.execute("INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)", (current_user.id, prompt_name, prompt_text))
+        conn = get_db_connection()
+        conn.execute('INSERT INTO prompts (user_id, prompt_text) VALUES (?, ?)', 
+                     (current_user.id, prompt_text))
         conn.commit()
-        flash('Prompt saved successfully.', 'success')
-        return redirect(url_for('prompt'))
-    cur.execute("SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s", (current_user.id,))
-    prompts = cur.fetchall()
-    cur.close()
+        conn.close()
+    conn = get_db_connection()
+    prompts = conn.execute('SELECT id, prompt_text, created_at FROM prompts WHERE user_id = ?', 
+                           (current_user.id,)).fetchall()
     conn.close()
+    # Convert tuples to dicts for template compatibility
+    prompts = [{'id': p[0], 'prompt_text': p[1], 'created_at': p[2]} for p in prompts]
     return render_template('prompt.html', prompts=prompts)
 
 @app.route('/notifications', methods=['GET', 'POST'])
