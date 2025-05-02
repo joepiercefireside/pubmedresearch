@@ -120,21 +120,21 @@ def search():
             return render_template('search.html', error="Query cannot be empty")
         nlp = spacy.load('en_core_web_sm')
         doc = nlp(query)
-        keywords = [token.text for token in doc if token.is_alpha and not token.is_stop]
+        keywords = [token.text for token in doc if token.is_alpha and not token.is_stop][:5]
         if not keywords:
             return render_template('search.html', error="No valid keywords found")
         ts_query = ' & '.join(keywords)
         conn = get_db_connection()
         try:
             results = conn.execute(
-                'SELECT id, title, abstract, ts_rank(to_tsvector('english', title || ' ' || abstract), to_tsquery(%s)) AS rank '
-                'FROM articles WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(%s) '
-                'ORDER BY rank DESC LIMIT 10',
+                "SELECT id, title, abstract, ts_rank(to_tsvector('english', title || ' ' || abstract), to_tsquery(?)) AS rank "
+                "FROM articles WHERE to_tsvector('english', title || ' ' || abstract) @@ to_tsquery(?) "
+                "ORDER BY rank DESC LIMIT 5",
                 (ts_query, ts_query)
             ).fetchall()
             summaries = []
             for r in results:
-                summary = summarize_article(r[2], nlp)[:500]  # Limit summary length
+                summary = summarize_article(r[2], nlp)[:200]
                 summaries.append(summary)
         except Exception as e:
             conn.close()
