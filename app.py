@@ -147,26 +147,32 @@ def search():
 @login_required
 def prompt():
     if request.method == 'POST':
+        prompt_name = request.form.get('prompt_name')
         prompt_text = request.form.get('prompt_text')
-        if not prompt_text:
-            flash('Prompt cannot be empty.', 'error')
+        if not prompt_name or not prompt_text:
+            flash('Prompt name and text cannot be empty.', 'error')
         else:
             conn = get_db_connection()
             cur = conn.cursor()
-            cur.execute('INSERT INTO prompts (user_id, prompt_text) VALUES (%s, %s)', 
-                        (current_user.id, prompt_text))
-            conn.commit()
-            cur.close()
-            conn.close()
-            flash('Prompt saved successfully.', 'success')
+            try:
+                cur.execute('INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)', 
+                            (current_user.id, prompt_name, prompt_text))
+                conn.commit()
+                flash('Prompt saved successfully.', 'success')
+            except Exception as e:
+                conn.rollback()
+                flash(f'Failed to save prompt: {str(e)}', 'error')
+            finally:
+                cur.close()
+                conn.close()
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT id, prompt_text, created_at FROM prompts WHERE user_id = %s', 
+    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s', 
                 (current_user.id,))
     prompts = cur.fetchall()
     cur.close()
     conn.close()
-    prompts = [{'id': p[0], 'prompt_text': p[1], 'created_at': p[2]} for p in prompts]
+    prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in prompts]
     return render_template('prompt.html', prompts=prompts)
 
 @app.route('/notifications', methods=['GET', 'POST'])
