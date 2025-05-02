@@ -188,8 +188,9 @@ def search():
                 'keywords': None  # Add if available in articles table
             } for r in results
         ]
-        summaries = [generate_summary(r[2], query, selected_prompt['prompt_text'] if selected_prompt else None) for r in results]
+        # Define selected_prompt before summaries
         selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
+        summaries = [generate_summary(r[2], query, selected_prompt['prompt_text'] if selected_prompt else None) for r in results]
         prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
         cur.close()
         conn.close()
