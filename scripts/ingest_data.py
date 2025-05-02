@@ -1,4 +1,3 @@
-```python
 import ftplib
 import os
 from urllib.request import urlopen
@@ -34,7 +33,15 @@ def parse_article(file_path):
             pmid = article.find('.//PMID').text if article.find('.//PMID') is not None else ''
             title = article.find('.//ArticleTitle').text if article.find('.//ArticleTitle') is not None else ''
             abstract = ''.join(article.find('.//AbstractText').itertext()) if article.find('.//AbstractText') is not None else ''
-            pub_date = article.find('.//PubDate/Year').text if article.find('.//PubDate/Year') is not None else None
+            # Handle publication date
+            pub_date = None
+            year = article.find('.//PubDate/Year')
+            if year is not None and year.text:
+                try:
+                    # Try to convert year to YYYY-01-01
+                    pub_date = f"{int(year.text):04d}-01-01"
+                except (ValueError, TypeError):
+                    pub_date = None  # Invalid year, set to NULL
             authors = ', '.join([au.find('LastName').text for au in article.findall('.//Author') if au.find('LastName') is not None])
             journal = article.find('.//Journal/Title').text if article.find('.//Journal/Title') is not None else ''
             articles.append((pmid, title, abstract, pub_date, authors, journal))
