@@ -62,7 +62,7 @@ def ingest_to_db(articles):
 
 def main():
     files = download_baseline()
-    for file in files[:1]:  # Process one file for testing
+    for file in files[:5]:  # Process one file for testing
         url = f"ftp://ftp.ncbi.nlm.nih.gov/pubmed/baseline/{file}"
         local_file = file
         with urlopen(url) as response, open(local_file, 'wb') as out_file:
