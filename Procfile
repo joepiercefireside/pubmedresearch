@@ -1,1 +1,1 @@
-web: gunicorn app:app
+web: python heroku_postinstall.py && gunicorn app:app
