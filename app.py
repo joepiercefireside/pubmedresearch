@@ -142,7 +142,8 @@ def search():
         try:
             # Use precomputed tsvector column
             cur.execute(
-                "SELECT id, title, abstract, ts_rank(tsv, to_tsquery(%s)) AS rank "
+                "SELECT id, title, abstract, ts_rank(tsv, to_tsquery(%s)) AS rank, "
+                "authors, journal, publication_date "
                 "FROM articles WHERE tsv @@ to_tsquery(%s) "
                 "ORDER BY rank DESC LIMIT 3",
                 (ts_query, ts_query)
@@ -159,7 +160,7 @@ def search():
                 like_conditions = ' OR '.join([f"title ILIKE %s OR abstract ILIKE %s" for _ in keywords])
                 like_params = [f"%{kw}%" for kw in keywords for _ in (1, 2)]
                 cur.execute(
-                    f"SELECT id, title, abstract, 0 AS rank "
+                    f"SELECT id, title, abstract, 0 AS rank, authors, journal, publication_date "
                     f"FROM articles WHERE {like_conditions} "
                     "LIMIT 3",
                     like_params
@@ -181,10 +182,10 @@ def search():
                 'title': r[1],
                 'abstract': r[2],
                 'score': r[3],
-                'authors': None,  # Fetch or set as needed
-                'journal': None,
-                'publication_date': None,
-                'keywords': None
+                'authors': r[4],
+                'journal': r[5],
+                'publication_date': r[6],
+                'keywords': None  # Add if available in articles table
             } for r in results
         ]
         summaries = [generate_summary(r[2], query, selected_prompt['prompt_text'] if selected_prompt else None) for r in results]
@@ -233,3 +234,17 @@ def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
+        keywords = request.form.get('keywords')
+        cur.execute("INSERT INTO notifications (user_id, keywords) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET keywords = %s", 
+                    (current_user.id, keywords, keywords))
+        conn.commit()
+        flash('Notification settings updated.', 'success')
+        return redirect(url_for('notifications'))
+    cur.execute("SELECT keywords FROM notifications WHERE user_id = %s", (current_user.id,))
+    notifications = cur.fetchone()
+    cur.close()
+    conn.close()
+    return render_template('notifications.html', notifications=notifications)
+
+if __name__ == '__main__':
+    app.run(debug=True)
