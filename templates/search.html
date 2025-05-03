@@ -8,6 +8,7 @@
     <style>
         select { color: black !important; }
         .error { color: red; }
+        .prompt-output { max-height: none; overflow-y: auto; }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -48,6 +49,13 @@
                 <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">Search</button>
             </div>
         </form>
+
+        {% if prompt_output %}
+            <div class="mt-6 bg-white p-6 rounded-lg shadow prompt-output">
+                <h2 class="text-xl font-semibold text-gray-900">Prompt Output</h2>
+                <p class="mt-2 text-gray-600 whitespace-pre-wrap">{{ prompt_output }}</p>
+            </div>
+        {% endif %}
 
         {% if high_relevance %}
             <div class="mt-6">

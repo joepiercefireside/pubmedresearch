@@ -10,6 +10,7 @@ import json
 from transformers import AutoTokenizer, AutoModel
 import torch
 import numpy as np
+from scipy.spatial.distance import cosine
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key')
@@ -117,22 +118,69 @@ def extract_keywords(query):
         logger.info(f"Fallback keywords: {keywords}")
     return keywords[:3], intent
 
+def parse_prompt(prompt_text):
+    """Parse prompt for result count and output type."""
+    if not prompt_text:
+        return 20, "summary"
+    prompt_text = prompt_text.lower()
+    # Extract result count
+    match = re.search(r'return\s+(\d+)\s+results', prompt_text)
+    result_count = int(match.group(1)) if match else 20
+    # Determine output type
+    if "summary article" in prompt_text:
+        output_type = "article"
+    elif "letter" in prompt_text:
+        output_type = "letter"
+    elif "answer" in prompt_text:
+        output_type = "answer"
+    else:
+        output_type = "summary"
+    logger.info(f"Parsed prompt: result_count={result_count}, output_type={output_type}")
+    return result_count, output_type
+
+def generate_embedding(text):
+    """Generate embedding for a single text."""
+    tokenizer, model = load_mobilebert_model()
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    return outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+
+def mock_llm_ranking(query, results, embeddings):
+    """Mock LLM ranking using cosine similarity of embeddings."""
+    query_embedding = generate_embedding(query)
+    scores = []
+    for i, emb in enumerate(embeddings):
+        if emb is not None:
+            similarity = 1 - cosine(query_embedding, emb)
+            scores.append((i, similarity))
+        else:
+            scores.append((i, 0.0))
+    scores.sort(key=lambda x: x[1], reverse=True)
+    ranked_indices = [i for i, _ in scores]
+    ranked_results = [results[i] for i in ranked_indices]
+    ranked_embeddings = [embeddings[i] for i in ranked_indices]
+    return ranked_results, ranked_embeddings
+
 def generate_summary(abstract, query, prompt_text=None, title=None, authors=None, journal=None, publication_date=None):
     if not abstract and not title:
         return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
-    # Load MobileBERT model
-    tokenizer, model = load_mobilebert_model()
     # Generate embedding
     text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
-    embedding = None
-    if text:
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-        with torch.no_grad():
-            outputs = model(**inputs)
-        embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy().tolist()
-    # Structured output for LLM
+    embedding = generate_embedding(text) if text else None
+    # Generate summary based on prompt
+    summary_text = abstract[:200] if abstract else f"Title: {title}"
+    if prompt_text:
+        logger.info(f"Processing prompt: {prompt_text}")
+        prompt_text_lower = prompt_text.lower()
+        if "insights" in prompt_text_lower:
+            summary_text = abstract[:300] if abstract else f"Title: {title} (Insights mode)"
+        elif "google" in prompt_text_lower:
+            summary_text = abstract[:100] if abstract else f"Title: {title} (Google mode)"
+        elif "expert" in prompt_text_lower:
+            summary_text = f"Expert Summary: {abstract[:250] if abstract else title}" if abstract else f"Title: {title} (Expert mode)"
     summary = {
-        "text": abstract[:200] if abstract else f"Title: {title}",
+        "text": summary_text,
         "metadata": {
             "authors": authors or "Unknown",
             "journal": journal or "Unknown",
@@ -140,11 +188,24 @@ def generate_summary(abstract, query, prompt_text=None, title=None, authors=None
         },
         "embedding": embedding
     }
-    if prompt_text and "insights" in prompt_text.lower():
-        summary["text"] = abstract[:300] if abstract else f"Title: {title}"
-    elif prompt_text and "google" in prompt_text.lower():
-        summary["text"] = abstract[:100] if abstract else f"Title: {title}"
     return summary
+
+def generate_prompt_output(query, results, prompt_text, output_type):
+    """Generate flexible prompt-driven output (summary, article, letter, answer)."""
+    if not results:
+        return f"No results found for '{query}'."
+    # Mock LLM output (replace with xAI API later)
+    combined_text = "\n".join([f"{r[1]}: {r[2] or 'No abstract'}" for r in results])
+    if output_type == "article":
+        output = f"Summary Article for '{query}':\n\nBased on recent PubMed data, the following insights were found:\n{combined_text[:1000]}\n\nThis article summarizes key findings."
+    elif output_type == "letter":
+        output = f"Dear Researcher,\n\nRegarding '{query}', PubMed data suggests:\n{combined_text[:500]}\n\nSincerely,\nPubMed Research Team"
+    elif output_type == "answer":
+        output = f"Answer to '{query}':\n\n{combined_text[:200]}"
+    else:
+        output = f"Summary for '{query}':\n\n{combined_text[:300]}"
+    logger.info(f"Generated prompt output: type={output_type}, length={len(output)}")
+    return output
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
@@ -168,9 +229,15 @@ def search():
         keywords, intent = extract_keywords(query)
         if not keywords:
             return render_template('search.html', error="No valid keywords found", prompts=prompts)
+        
+        # Parse prompt for result count and output type
+        selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
+        logger.info(f"Selected prompt: {selected_prompt}")
+        result_count, output_type = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
+        
         # Use OR and prefix matching
         ts_query = ' | '.join([f"{kw}:*" for kw in keywords])
-        logger.info(f"TS query: {ts_query}, Intent: {intent}")
+        logger.info(f"TS query: {ts_query}, Intent: {intent}, Result count: {result_count}")
         conn = get_db_connection()
         cur = conn.cursor()
         results = []
@@ -184,7 +251,7 @@ def search():
             params = [ts_query, ts_query]
             if intent.get('recent'):
                 sql += "AND publication_date > NOW() - INTERVAL '5 years' "
-            sql += "ORDER BY rank DESC LIMIT 3"
+            sql += f"ORDER BY rank DESC LIMIT {result_count}"
             cur.execute(sql, params)
             results = cur.fetchall()
             logger.info(f"Full-text search results count: {len(results)}")
@@ -202,7 +269,7 @@ def search():
                 )
                 if intent.get('recent'):
                     sql += "AND publication_date > NOW() - INTERVAL '5 years' "
-                sql += "LIMIT 3"
+                sql += f"LIMIT {result_count}"
                 cur.execute(sql, like_params)
                 results = cur.fetchall()
                 logger.info(f"LIKE search results count: {len(results)}")
@@ -214,7 +281,7 @@ def search():
             conn.close()
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
         
-        # Convert results to objects and generate embeddings sequentially
+        # Convert results to objects and generate embeddings
         high_relevance = [
             {
                 'id': r[0],
@@ -227,7 +294,7 @@ def search():
                 'keywords': None
             } for r in results
         ]
-        selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
+        embeddings = []
         summaries = []
         for r in results:
             summary = generate_summary(
@@ -236,10 +303,18 @@ def search():
                 title=r[1], authors=r[4], journal=r[5], publication_date=r[6]
             )
             summaries.append(summary)
+            embeddings.append(summary['embedding'])
+        
+        # Mock LLM ranking
+        high_relevance, embeddings = mock_llm_ranking(query, high_relevance, embeddings)
+        
+        # Generate prompt-driven output
+        prompt_output = generate_prompt_output(query, results, selected_prompt['prompt_text'] if selected_prompt else None, output_type)
+        
         prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
         cur.close()
         conn.close()
-        return render_template('search.html', high_relevance=high_relevance, query=query, summaries=summaries, prompts=prompts, prompt_text=prompt_text)
+        return render_template('search.html', high_relevance=high_relevance, query=query, summaries=summaries, prompts=prompts, prompt_text=prompt_text, prompt_output=prompt_output)
     return render_template('search.html', prompts=prompts)
 
 @app.route('/prompt', methods=['GET', 'POST'])
