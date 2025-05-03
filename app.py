@@ -7,7 +7,8 @@ import re
 import os
 import logging
 import json
-from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModel
+import torch
 import numpy as np
 
 app = Flask(__name__)
@@ -23,8 +24,9 @@ logger = logging.getLogger(__name__)
 # Load spaCy model globally with minimal pipeline
 nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
 
-# Load sentence transformer model
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Load DistilBERT model and tokenizer
+tokenizer = AutoTokenizer.from_pretrained('distilbert-base-nli-mean-tokens')
+model = AutoModel.from_pretrained('distilbert-base-nli-mean-tokens')
 
 # Database connection function
 def get_db_connection():
@@ -109,9 +111,14 @@ def extract_keywords(query):
 def generate_summary(abstract, query, prompt_text=None, title=None, authors=None, journal=None, publication_date=None):
     if not abstract and not title:
         return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
-    # Generate embedding
+    # Generate embedding with DistilBERT
     text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
-    embedding = model.encode(text, convert_to_numpy=True).tolist() if text else None
+    embedding = None
+    if text:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy().tolist()
     # Structured output for LLM
     summary = {
         "text": abstract[:200] if abstract else f"Title: {title}",
