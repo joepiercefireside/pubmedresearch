@@ -6,6 +6,6 @@ transformers==4.41.2
 numpy==1.26.4
 gunicorn==21.2.0
 torch==2.3.0 -f https://download.pytorch.org/whl/cpu/torch_stable.html
-hf_xet==0.2.0
+hf_xet==1.1.0
 scipy==1.13.0
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
