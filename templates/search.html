@@ -38,7 +38,7 @@
         {% endif %}
         <form method="POST" action="{{ url_for('search') }}" class="mt-4">
             <div class="flex space-x-4">
-                <input type="text" name="query" placeholder="Enter search terms (e.g., weight loss and diabetes)" class="flex-1 px-4 py-2 border rounded-md" value="{{ query | default('') }}">
+                <input type="text" name="query" placeholder="Enter search terms (e.g., recent diabetes studies)" class="flex-1 px-4 py-2 border rounded-md" value="{{ query | default('') }}">
                 <select name="prompt_id" class="px-4 py-2 border rounded-md">
                     <option value="">Select a prompt (optional)</option>
                     {% for prompt in prompts %}
@@ -53,13 +53,13 @@
             <div class="mt-6">
                 <h2 class="text-xl font-semibold text-gray-900">Relevant Articles</h2>
                 <div class="mt-4 space-y-4">
-                    {% for result in high_relevance %}
+                    {% for result, summary in high_relevance|zip(summaries) %}
                         <div class="bg-white p-6 rounded-lg shadow">
                             <h3 class="text-lg font-medium text-gray-900">{{ result.title }}</h3>
-                            <p class="mt-2 text-gray-600">{{ result.abstract | truncate(300) }}</p>
-                            <p class="mt-2 text-gray-500 text-sm"><strong>Authors:</strong> {{ result.authors | default('Unknown') }}</p>
-                            <p class="text-gray-500 text-sm"><strong>Journal:</strong> {{ result.journal | default('Unknown') }}</p>
-                            <p class="text-gray-500 text-sm"><strong>Publication Date:</strong> {{ result.publication_date | default('Unknown') }}</p>
+                            <p class="mt-2 text-gray-600">{{ summary.text }}</p>
+                            <p class="mt-2 text-gray-500 text-sm"><strong>Authors:</strong> {{ summary.metadata.authors }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Journal:</strong> {{ summary.metadata.journal }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Publication Date:</strong> {{ summary.metadata.publication_date }}</p>
                             <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ result.keywords | default('None') }}</p>
                             <p class="text-gray-500 text-sm"><strong>Relevance Score:</strong> {{ '%.2f' % result.score }}</p>
                         </div>

@@ -6,6 +6,9 @@ import spacy
 import re
 import os
 import logging
+import json
+from sentence_transformers import SentenceTransformer
+import numpy as np
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key')
@@ -19,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # Load spaCy model globally with minimal pipeline
 nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
+
+# Load sentence transformer model
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Database connection function
 def get_db_connection():
@@ -93,23 +99,34 @@ def extract_keywords(query):
     doc = nlp(query.lower())
     stop_words = nlp.Defaults.stop_words
     keywords = [token.text for token in doc if token.is_alpha and token.text not in stop_words and len(token.text) > 1]
-    logger.info(f"Extracted keywords: {keywords}")
+    intent = {'recent': 'recent' in query.lower()}
+    logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
     if not keywords:
-        # Fallback: use query terms split by spaces, removing stop words
         keywords = [word for word in query.lower().split() if word not in stop_words and len(word) > 1]
         logger.info(f"Fallback keywords: {keywords}")
-    return keywords[:3]  # Limit to 3 keywords
+    return keywords[:3], intent
 
-def generate_summary(abstract, query, prompt_text=None):
-    if not abstract:
-        return "No abstract available to summarize."
-    # Check prompt for output style
+def generate_summary(abstract, query, prompt_text=None, title=None, authors=None, journal=None, publication_date=None):
+    if not abstract and not title:
+        return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
+    # Generate embedding
+    text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
+    embedding = model.encode(text, convert_to_numpy=True).tolist() if text else None
+    # Structured output for LLM
+    summary = {
+        "text": abstract[:200] if abstract else f"Title: {title}",
+        "metadata": {
+            "authors": authors or "Unknown",
+            "journal": journal or "Unknown",
+            "publication_date": str(publication_date) if publication_date else "Unknown"
+        },
+        "embedding": embedding
+    }
     if prompt_text and "insights" in prompt_text.lower():
-        return abstract[:300]
+        summary["text"] = abstract[:300] if abstract else f"Title: {title}"
     elif prompt_text and "google" in prompt_text.lower():
-        return abstract[:100]
-    else:
-        return abstract[:200]
+        summary["text"] = abstract[:100] if abstract else f"Title: {title}"
+    return summary
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
@@ -130,41 +147,45 @@ def search():
         logger.info(f"Search query: {query}, selected prompt ID: {selected_prompt_id}")
         if not query:
             return render_template('search.html', error="Query cannot be empty", prompts=prompts)
-        keywords = extract_keywords(query)
+        keywords, intent = extract_keywords(query)
         if not keywords:
             return render_template('search.html', error="No valid keywords found", prompts=prompts)
         # Use OR and prefix matching
         ts_query = ' | '.join([f"{kw}:*" for kw in keywords])
-        logger.info(f"TS query: {ts_query}")
+        logger.info(f"TS query: {ts_query}, Intent: {intent}")
         conn = get_db_connection()
         cur = conn.cursor()
         results = []
         try:
-            # Use precomputed tsvector column
-            cur.execute(
+            # Keyword-based search
+            sql = (
                 "SELECT id, title, abstract, ts_rank(tsv, to_tsquery(%s)) AS rank, "
                 "authors, journal, publication_date "
                 "FROM articles WHERE tsv @@ to_tsquery(%s) "
-                "ORDER BY rank DESC LIMIT 3",
-                (ts_query, ts_query)
             )
+            params = [ts_query, ts_query]
+            if intent.get('recent'):
+                sql += "AND publication_date > NOW() - INTERVAL '5 years' "
+            sql += "ORDER BY rank DESC LIMIT 3"
+            cur.execute(sql, params)
             results = cur.fetchall()
             logger.info(f"Full-text search results count: {len(results)}")
-            # Log sample title for debugging
             if results:
                 logger.info(f"Sample title: {results[0][1][:50]}")
             
-            # Fallback to LIKE search if no results
+            # Fallback to LIKE search
             if not results:
                 logger.info("Falling back to LIKE search")
                 like_conditions = ' OR '.join([f"title ILIKE %s OR abstract ILIKE %s" for _ in keywords])
                 like_params = [f"%{kw}%" for kw in keywords for _ in (1, 2)]
-                cur.execute(
+                sql = (
                     f"SELECT id, title, abstract, 0 AS rank, authors, journal, publication_date "
                     f"FROM articles WHERE {like_conditions} "
-                    "LIMIT 3",
-                    like_params
                 )
+                if intent.get('recent'):
+                    sql += "AND publication_date > NOW() - INTERVAL '5 years' "
+                sql += "LIMIT 3"
+                cur.execute(sql, like_params)
                 results = cur.fetchall()
                 logger.info(f"LIKE search results count: {len(results)}")
                 if results:
@@ -175,7 +196,7 @@ def search():
             conn.close()
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
         
-        # Convert results to objects for search.html
+        # Convert results to objects and generate embeddings
         high_relevance = [
             {
                 'id': r[0],
@@ -185,12 +206,17 @@ def search():
                 'authors': r[4],
                 'journal': r[5],
                 'publication_date': r[6],
-                'keywords': None  # Add if available in articles table
+                'keywords': None
             } for r in results
         ]
-        # Define selected_prompt before summaries
         selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
-        summaries = [generate_summary(r[2], query, selected_prompt['prompt_text'] if selected_prompt else None) for r in results]
+        summaries = [
+            generate_summary(
+                r[2], query, 
+                selected_prompt['prompt_text'] if selected_prompt else None,
+                title=r[1], authors=r[4], journal=r[5], publication_date=r[6]
+            ) for r in results
+        ]
         prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
         cur.close()
         conn.close()
