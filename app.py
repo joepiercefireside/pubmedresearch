@@ -214,4 +214,71 @@ def search():
                 'journal': r[5],
                 'publication_date': r[6],
                 'keywords': None
-            } for r in
+            } for r in results
+        ]
+        selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
+        summaries = [
+            generate_summary(
+                r[2], query, 
+                selected_prompt['prompt_text'] if selected_prompt else None,
+                title=r[1], authors=r[4], journal=r[5], publication_date=r[6]
+            ) for r in results
+        ]
+        prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
+        cur.close()
+        conn.close()
+        return render_template('search.html', high_relevance=high_relevance, query=query, summaries=summaries, prompts=prompts, prompt_text=prompt_text)
+    return render_template('search.html', prompts=prompts)
+
+@app.route('/prompt', methods=['GET', 'POST'])
+@login_required
+def prompt():
+    if request.method == 'POST':
+        prompt_name = request.form.get('prompt_name')
+        prompt_text = request.form.get('prompt_text')
+        if not prompt_name or not prompt_text:
+            flash('Prompt name and text cannot be empty.', 'error')
+        else:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute('INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)', 
+                            (current_user.id, prompt_name, prompt_text))
+                conn.commit()
+                flash('Prompt saved successfully.', 'success')
+            except Exception as e:
+                conn.rollback()
+                flash(f'Failed to save prompt: {str(e)}', 'error')
+            finally:
+                cur.close()
+                conn.close()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s', 
+                (current_user.id,))
+    prompts = cur.fetchall()
+    cur.close()
+    conn.close()
+    prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in prompts]
+    return render_template('prompt.html', prompts=prompts)
+
+@app.route('/notifications', methods=['GET', 'POST'])
+@login_required
+def notifications():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    if request.method == 'POST':
+        keywords = request.form.get('keywords')
+        cur.execute("INSERT INTO notifications (user_id, keywords) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET keywords = %s", 
+                    (current_user.id, keywords, keywords))
+        conn.commit()
+        flash('Notification settings updated.', 'success')
+        return redirect(url_for('notifications'))
+    cur.execute("SELECT keywords FROM notifications WHERE user_id = %s", (current_user.id,))
+    notifications = cur.fetchone()
+    cur.close()
+    conn.close()
+    return render_template('notifications.html', notifications=notifications)
+
+if __name__ == '__main__':
+    app.run(debug=True)
