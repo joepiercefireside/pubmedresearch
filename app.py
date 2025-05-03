@@ -24,9 +24,18 @@ logger = logging.getLogger(__name__)
 # Load spaCy model globally with minimal pipeline
 nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
 
-# Load DistilBERT model and tokenizer
-tokenizer = AutoTokenizer.from_pretrained('distilbert-base-uncased')
-model = AutoModel.from_pretrained('distilbert-base-uncased')
+# Initialize MobileBERT model and tokenizer lazily
+tokenizer = None
+model = None
+
+def load_mobilebert_model():
+    global tokenizer, model
+    if tokenizer is None or model is None:
+        logger.info("Loading MobileBERT model...")
+        tokenizer = AutoTokenizer.from_pretrained('google/mobilebert-uncased')
+        model = AutoModel.from_pretrained('google/mobilebert-uncased')
+        logger.info("MobileBERT model loaded.")
+    return tokenizer, model
 
 # Database connection function
 def get_db_connection():
@@ -111,7 +120,9 @@ def extract_keywords(query):
 def generate_summary(abstract, query, prompt_text=None, title=None, authors=None, journal=None, publication_date=None):
     if not abstract and not title:
         return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
-    # Generate embedding with DistilBERT
+    # Load MobileBERT model
+    tokenizer, model = load_mobilebert_model()
+    # Generate embedding
     text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
     embedding = None
     if text:
@@ -203,7 +214,7 @@ def search():
             conn.close()
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
         
-        # Convert results to objects and generate embeddings
+        # Convert results to objects and generate embeddings sequentially
         high_relevance = [
             {
                 'id': r[0],
@@ -217,13 +228,14 @@ def search():
             } for r in results
         ]
         selected_prompt = next((p for p in prompts if str(p['id']) == selected_prompt_id), None)
-        summaries = [
-            generate_summary(
+        summaries = []
+        for r in results:
+            summary = generate_summary(
                 r[2], query, 
                 selected_prompt['prompt_text'] if selected_prompt else None,
                 title=r[1], authors=r[4], journal=r[5], publication_date=r[6]
-            ) for r in results
-        ]
+            )
+            summaries.append(summary)
         prompt_text = selected_prompt['prompt_text'] if selected_prompt else None
         cur.close()
         conn.close()
