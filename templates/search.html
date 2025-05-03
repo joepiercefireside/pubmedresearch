@@ -53,15 +53,15 @@
             <div class="mt-6">
                 <h2 class="text-xl font-semibold text-gray-900">Relevant Articles</h2>
                 <div class="mt-4 space-y-4">
-                    {% for result, summary in high_relevance|zip(summaries) %}
+                    {% for i in range(high_relevance|length) %}
                         <div class="bg-white p-6 rounded-lg shadow">
-                            <h3 class="text-lg font-medium text-gray-900">{{ result.title }}</h3>
-                            <p class="mt-2 text-gray-600">{{ summary.text }}</p>
-                            <p class="mt-2 text-gray-500 text-sm"><strong>Authors:</strong> {{ summary.metadata.authors }}</p>
-                            <p class="text-gray-500 text-sm"><strong>Journal:</strong> {{ summary.metadata.journal }}</p>
-                            <p class="text-gray-500 text-sm"><strong>Publication Date:</strong> {{ summary.metadata.publication_date }}</p>
-                            <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ result.keywords | default('None') }}</p>
-                            <p class="text-gray-500 text-sm"><strong>Relevance Score:</strong> {{ '%.2f' % result.score }}</p>
+                            <h3 class="text-lg font-medium text-gray-900">{{ high_relevance[i].title }}</h3>
+                            <p class="mt-2 text-gray-600">{{ summaries[i].text }}</p>
+                            <p class="mt-2 text-gray-500 text-sm"><strong>Authors:</strong> {{ summaries[i].metadata.authors }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Journal:</strong> {{ summaries[i].metadata.journal }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Publication Date:</strong> {{ summaries[i].metadata.publication_date }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Keywords:</strong> {{ high_relevance[i].keywords | default('None') }}</p>
+                            <p class="text-gray-500 text-sm"><strong>Relevance Score:</strong> {{ '%.2f' % high_relevance[i].score }}</p>
                         </div>
                     {% endfor %}
                 </div>
