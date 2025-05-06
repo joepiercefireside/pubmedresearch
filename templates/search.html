@@ -52,10 +52,8 @@
         {% if result_summaries %}
             <h3 class="mt-4">
                 Search Results for "{{ query }}"
-                {% if query|lower|regex_search('\\b(20\\d{2})\\b') %}
-                    (Filtered for {{ query|lower|regex_search('\\b(20\\d{2})\\b')|first }})
-                {% elif query|lower|search('this year') %}
-                    (Filtered for {{ '2025' }})
+                {% if target_year %}
+                    (Filtered for {{ target_year }})
                 {% endif %}
             </h3>
             {% for result, summary in result_summaries %}

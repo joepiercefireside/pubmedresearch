@@ -117,7 +117,7 @@ def logout():
 
 def extract_keywords(query):
     doc = nlp(query.lower())
-    stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on'}
+    stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on', 'this', 'year', 'provide', 'summary'}
     
     # Extract noun phrases
     keywords = []
@@ -135,12 +135,17 @@ def extract_keywords(query):
             not any(token.text in phrase for phrase in keywords)):
             keywords.append(token.text)
     
+    # Special handling for CIDP
+    query_lower = query.lower()
+    if 'cidp' in query_lower or 'chronic inflammatory demyelinating polyneuropathy' in query_lower:
+        if 'chronic inflammatory demyelinating polyneuropathy' not in keywords:
+            keywords = ['chronic inflammatory demyelinating polyneuropathy'] + [k for k in keywords if k != 'cidp']
+    
     keywords = keywords[:3]
     
     # Detect date intent
     intent = {}
-    query_lower = query.lower()
-    current_year = str(datetime.now().year)  # Get current year (2025)
+    current_year = str(datetime.now().year)  # 2025
     if 'this year' in query_lower:
         intent['date'] = f"{current_year}[dp]"
     elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
@@ -163,7 +168,12 @@ def extract_keywords(query):
     return keywords, intent
 
 def build_pubmed_query(keywords, intent):
-    query_parts = [f"({kw.replace(' ', '+')})" for kw in keywords]
+    query_parts = []
+    for kw in keywords:
+        if kw == 'chronic inflammatory demyelinating polyneuropathy':
+            query_parts.append('(cidp OR chronic+inflammatory+demyelinating+polyneuropathy)')
+        else:
+            query_parts.append(f"({kw.replace(' ', '+')})")
     query = " AND ".join(query_parts)
     if intent.get('date'):
         query += f" {intent['date']}"
@@ -178,7 +188,7 @@ def esearch(query, retmax=20, api_key=None):
         "term": query,
         "retmax": retmax,
         "retmode": "json",
-        "sort": "date",  # Sort by date (most recent first)
+        "sort": "date",
         "api_key": api_key
     }
     logger.info(f"PubMed ESearch query: {query}")
@@ -232,8 +242,8 @@ def parse_prompt(prompt_text):
     prompt_text = prompt_text.lower()
     match = re.search(r'return\s+(\d+)\s+results', prompt_text)
     result_count = int(match.group(1)) if match else 20
-    is_multi_paragraph = "multi-paragraph" in prompt_text or "multiparagraph" in prompt_text
-    if "summary article" in prompt_text or "summary" in prompt_text:
+    is_multi_paragraph = "multi-paragraph" in prompt_text or "multiparagraph" in prompt_text or "two or three paragraph" in prompt_text
+    if "summary" in prompt_text:
         output_type = "summary"
     elif "letter" in prompt_text:
         output_type = "letter"
@@ -250,9 +260,8 @@ def mock_llm_ranking(query, results, embeddings):
     scores = []
     for i, (emb, result) in enumerate(zip(embeddings, results)):
         similarity = 1 - cosine(query_embedding, emb) if emb is not None else 0.0
-        # Weight recency: add bonus for newer articles
         pub_year = int(result['publication_date']) if result['publication_date'].isdigit() else 2000
-        recency_bonus = (pub_year - 2000) / (current_year - 2000)  # Normalize to 0-1
+        recency_bonus = (pub_year - 2000) / (current_year - 2000)
         weighted_score = 0.7 * similarity + 0.3 * recency_bonus
         scores.append((i, weighted_score))
     scores.sort(key=lambda x: x[1], reverse=True)
@@ -291,13 +300,14 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
     if not results:
         return f"No results found for '{query}'."
     
-    # Filter results by year if specified in query
-    year_match = re.search(r'\b(20\d{2})\b', query.lower()) or ('this year' in query.lower() and str(datetime.now().year))
-    target_year = year_match.group(1) if isinstance(year_match, re.Match) else str(datetime.now().year)
+    # Detect target year
+    query_lower = query.lower()
+    year_match = re.search(r'\b(20\d{2})\b', query_lower)
+    target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
     if target_year:
         filtered_results = [r for r in results if r['publication_date'] == target_year]
         if not filtered_results:
-            return f"No results found for '{query}' in {target_year}. Try broadening the search."
+            return f"No results found for '{query}' in {target_year}. Try broadening the search to recent years."
         results = filtered_results
     
     # Combine results for context
@@ -312,7 +322,7 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
                 abstract = result['abstract'] or "No abstract available."
                 output += f"Paragraph {i}: Research on {query} from \"{title}\" (published {result['publication_date']}) highlights advancements. "
                 output += f"{abstract[:300]}... This study advances our understanding of {query}.\n\n"
-            output += f"This summary synthesizes {len(results)} PubMed findings, focusing on recent developments."
+            output += f"This summary synthesizes {len(results)} PubMed findings, focusing on recent developments in {query}."
         else:
             output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n{combined_text}\n\nThis summarizes key findings."
     elif output_type == "letter":
@@ -349,40 +359,32 @@ def search():
         selected_prompt = next((p for p in prompts if str(p['id']) == prompt_id), None)
         result_count, output_type, is_multi_paragraph = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
         
+        # Detect target year for template
+        query_lower = query.lower()
+        year_match = re.search(r'\b(20\d{2})\b', query_lower)
+        target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
+        
         # Bypass cache for testing
         results = None
-        # Check cache (commented out for testing)
-        # conn = get_db_connection()
-        # cur = conn.cursor()
-        # cur.execute("SELECT results FROM search_cache WHERE query = %s AND created_at > NOW() - INTERVAL '1 day'", (query,))
-        # cached = cur.fetchone()
-        # if cached:
-        #     logger.info("Using cached results")
-        #     results = json.loads(cached[0])
-        #     cur.close()
-        #     conn.close()
-        
         if not results:
-            # PubMed API search
             api_key = os.environ.get('PUBMED_API_KEY')
             search_query = build_pubmed_query(keywords, intent)
             try:
                 esearch_result = esearch(search_query, retmax=result_count, api_key=api_key)
                 pmids = esearch_result['esearchresult']['idlist']
-                # Fallback if no results
                 if not pmids:
                     logger.info("No results with initial query, trying broader query")
-                    search_query = build_pubmed_query(keywords, {})
+                    intent.pop('date', None)
+                    search_query = build_pubmed_query(keywords, intent)
                     esearch_result = esearch(search_query, retmax=result_count, api_key=api_key)
                     pmids = esearch_result['esearchresult']['idlist']
                 
                 if not pmids:
-                    return render_template('search.html', error="No results found", prompts=prompts)
+                    return render_template('search.html', error="No results found", prompts=prompts, target_year=target_year)
                 
                 efetch_xml = efetch(pmids, api_key=api_key)
                 results = parse_efetch_xml(efetch_xml)
                 
-                # Cache results
                 conn = get_db_connection()
                 cur = conn.cursor()
                 cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
@@ -392,7 +394,7 @@ def search():
                 conn.close()
             except Exception as e:
                 logger.error(f"PubMed API error: {str(e)}")
-                return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts)
+                return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, target_year=target_year)
         
         # Generate embeddings and summaries
         high_relevance = []
@@ -439,7 +441,8 @@ def search():
             query=query, 
             prompts=prompts, 
             prompt_text=selected_prompt['prompt_text'] if selected_prompt else None, 
-            prompt_output=prompt_output
+            prompt_output=prompt_output,
+            target_year=target_year
         )
     
     return render_template('search.html', prompts=prompts)
