@@ -1,62 +1,101 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Prompts - PubMed Research Hub</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <title>Prompts - PubMed Researcher</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        .modal-content { border-radius: 0.5rem; }
+        .modal-header { background-color: #dc3545; color: white; }
+    </style>
 </head>
-<body class="bg-gray-50 font-sans">
-    <header class="bg-blue-700 text-white shadow-md">
-        <nav class="container mx-auto p-4 flex justify-between items-center">
-            <a href="{{ url_for('index') }}" class="text-2xl font-semibold">PubMed Research Hub</a>
-            <div class="space-x-4">
-                <a href="{{ url_for('search') }}" class="hover:underline">Search</a>
-                <a href="{{ url_for('prompt') }}" class="hover:underline">Prompts</a>
-                <a href="{{ url_for('notifications') }}" class="hover:underline">Notifications</a>
-                <a href="{{ url_for('logout') }}" class="hover:underline">Logout</a>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <a class="navbar-brand" href="{{ url_for('index') }}">PubMed Researcher</a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav ml-auto">
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('search') }}">Search</a></li>
+                <li class="nav-item active"><a class="nav-link" href="{{ url_for('prompt') }}">Prompts</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('notifications') }}">Notifications</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
+            </ul>
+        </div>
+    </nav>
+    <div class="container mt-4">
+        <h2>Manage Prompts</h2>
+        <form method="POST">
+            <div class="form-group">
+                <label for="prompt_name">Prompt Name</label>
+                <input type="text" class="form-control" id="prompt_name" name="prompt_name" placeholder="Enter prompt name">
             </div>
-        </nav>
-    </header>
-    <main class="container mx-auto p-6">
-        {% for message in get_flashed_messages(with_categories=true) %}
-            <div class="bg-{{ 'green' if message[0] == 'success' else 'red' }}-100 border-l-4 border-{{ 'green' if message[0] == 'success' else 'red' }}-500 text-{{ 'green' if message[0] == 'success' else 'red' }}-700 p-4 mb-6 rounded-r">
-                {{ message[1] }}
+            <div class="form-group">
+                <label for="prompt_text">Prompt Text</label>
+                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter prompt text"></textarea>
             </div>
-        {% endfor %}
-        <section class="bg-white p-8 rounded-lg shadow-md mb-6">
-            <h1 class="text-2xl font-bold text-gray-800 mb-4">Manage LLM Prompts</h1>
-            <form method="POST" class="space-y-4">
-                <div>
-                    <label for="prompt_name" class="block text-gray-700 font-medium">Prompt Name</label>
-                    <input type="text" name="prompt_name" id="prompt_name" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Diabetes Summary" required>
-                </div>
-                <div>
-                    <label for="prompt_text" class="block text-gray-700 font-medium">Prompt Text</label>
-                    <textarea name="prompt_text" id="prompt_text" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows="6" placeholder="e.g., Summarize key findings on diabetes treatments, include PubMed links" required></textarea>
-                </div>
-                <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Create Prompt</button>
-            </form>
-        </section>
-        <section class="bg-white p-8 rounded-lg shadow-md">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">Your Prompts</h2>
-            {% if prompts %}
-                <div class="space-y-4">
-                    {% for prompt in prompts %}
-                        <div class="border-b pb-4">
-                            <p class="font-semibold text-gray-800">{{ prompt.prompt_name }}</p>
-                            <p class="text-gray-600">{{ prompt.prompt_text }}</p>
-                            <p class="text-gray-500 text-sm">Created: {{ prompt.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
-                        </div>
-                    {% endfor %}
-                </div>
-            {% else %}
-                <p class="text-gray-600">No prompts created yet.</p>
+            <button type="submit" class="btn btn-primary">Add Prompt</button>
+        </form>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
+                        {{ message }}
+                    </div>
+                {% endfor %}
             {% endif %}
-        </section>
-    </main>
-    <footer class="bg-gray-200 p-4 text-center text-gray-600">
-        <p>&copy; 2025 PubMed Research Hub. All rights reserved.</p>
-    </footer>
+        {% endwith %}
+        {% if prompts %}
+            <h3 class="mt-4">Your Prompts</h3>
+            <table class="table table-bordered mt-2">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Text</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for prompt in prompts %}
+                        <tr>
+                            <td>{{ prompt.prompt_name }}</td>
+                            <td>{{ prompt.prompt_text|truncate(100) }}</td>
+                            <td>{{ prompt.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td>
+                                <a href="{{ url_for('edit_prompt', id=prompt.id) }}" class="btn btn-sm btn-warning">Edit</a>
+                                <button type="button" class="btn btn-sm btn-danger" data-toggle="modal" data-target="#deleteModal-{{ prompt.id }}">Delete</button>
+                                <!-- Delete Confirmation Modal -->
+                                <div class="modal fade" id="deleteModal-{{ prompt.id }}" tabindex="-1" role="dialog">
+                                    <div class="modal-dialog" role="document">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">Confirm Delete</h5>
+                                                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                                    <span aria-hidden="true">&times;</span>
+                                                </button>
+                                            </div>
+                                            <div class="modal-body">
+                                                Are you sure you want to delete the prompt "{{ prompt.prompt_name }}"?
+                                            </div>
+                                            <div class="modal-footer">
+                                                <form action="{{ url_for('delete_prompt', id=prompt.id) }}" method="POST">
+                                                    <button type="submit" class="btn btn-danger">Delete</button>
+                                                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </div>
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

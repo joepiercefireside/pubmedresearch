@@ -300,7 +300,6 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
     if not results:
         return f"No results found for '{query}'."
     
-    # Detect target year
     query_lower = query.lower()
     year_match = re.search(r'\b(20\d{2})\b', query_lower)
     target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
@@ -310,10 +309,8 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
             return f"No results found for '{query}' in {target_year}. Try broadening the search to recent years."
         results = filtered_results
     
-    # Combine results for context
     combined_text = "\n".join([f"{r['title']}: {r['abstract'] or 'No abstract'}" for r in results])
     
-    # Generate output based on type
     if output_type == "summary":
         if is_multi_paragraph:
             output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
@@ -359,12 +356,10 @@ def search():
         selected_prompt = next((p for p in prompts if str(p['id']) == prompt_id), None)
         result_count, output_type, is_multi_paragraph = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
         
-        # Detect target year for template
         query_lower = query.lower()
         year_match = re.search(r'\b(20\d{2})\b', query_lower)
         target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
         
-        # Bypass cache for testing
         results = None
         if not results:
             api_key = os.environ.get('PUBMED_API_KEY')
@@ -396,7 +391,6 @@ def search():
                 logger.error(f"PubMed API error: {str(e)}")
                 return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, target_year=target_year)
         
-        # Generate embeddings and summaries
         high_relevance = []
         embeddings = []
         summaries = []
@@ -422,17 +416,14 @@ def search():
             summaries.append(summary)
             embeddings.append(embedding)
         
-        # Rank results
         high_relevance, embeddings = mock_llm_ranking(query, high_relevance, embeddings)
         
-        # Generate prompt output
         prompt_output = generate_prompt_output(
             query, high_relevance, 
             selected_prompt['prompt_text'] if selected_prompt else None, 
             output_type, is_multi_paragraph
         )
         
-        # Zip results and summaries
         result_summaries = list(zip(high_relevance, summaries))
         
         return render_template(
@@ -469,14 +460,79 @@ def prompt():
             finally:
                 cur.close()
                 conn.close()
+    
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s', 
+    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
                 (current_user.id,))
     prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
     conn.close()
     return render_template('prompt.html', prompts=prompts)
+
+@app.route('/prompt/edit/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_prompt(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, prompt_name, prompt_text FROM prompts WHERE id = %s AND user_id = %s', 
+                (id, current_user.id))
+    prompt = cur.fetchone()
+    
+    if not prompt:
+        cur.close()
+        conn.close()
+        flash('Prompt not found or you do not have permission to edit it.', 'error')
+        return redirect(url_for('prompt'))
+    
+    if request.method == 'POST':
+        prompt_name = request.form.get('prompt_name')
+        prompt_text = request.form.get('prompt_text')
+        if not prompt_name or not prompt_text:
+            flash('Prompt name and text cannot be empty.', 'error')
+        else:
+            try:
+                cur.execute('UPDATE prompts SET prompt_name = %s, prompt_text = %s WHERE id = %s AND user_id = %s', 
+                            (prompt_name, prompt_text, id, current_user.id))
+                conn.commit()
+                flash('Prompt updated successfully.', 'success')
+                cur.close()
+                conn.close()
+                return redirect(url_for('prompt'))
+            except Exception as e:
+                conn.rollback()
+                flash(f'Failed to update prompt: {str(e)}', 'error')
+    
+    cur.close()
+    conn.close()
+    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]})
+
+@app.route('/prompt/delete/<int:id>', methods=['POST'])
+@login_required
+def delete_prompt(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
+    prompt = cur.fetchone()
+    
+    if not prompt:
+        cur.close()
+        conn.close()
+        flash('Prompt not found or you do not have permission to delete it.', 'error')
+        return redirect(url_for('prompt'))
+    
+    try:
+        cur.execute('DELETE FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
+        conn.commit()
+        flash('Prompt deleted successfully.', 'success')
+    except Exception as e:
+        conn.rollback()
+        flash(f'Failed to delete prompt: {str(e)}', 'error')
+    finally:
+        cur.close()
+        conn.close()
+    
+    return redirect(url_for('prompt'))
 
 @app.route('/notifications', methods=['GET', 'POST'])
 @login_required
