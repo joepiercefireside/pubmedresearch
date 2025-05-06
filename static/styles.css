@@ -1,0 +1,6 @@
+.card { margin-bottom: 1em; }
+.btn-link { padding: 0; }
+@media (max-width: 600px) {
+    .card { padding: 0.5em; }
+    .form-group { margin-bottom: 1em; }
+}
