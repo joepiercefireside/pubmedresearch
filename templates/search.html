@@ -41,9 +41,9 @@
         {% if error %}
             <div class="alert alert-danger mt-3">{{ error }}</div>
         {% endif %}
-        {% if high_relevance %}
+        {% if result_summaries %}
             <h3 class="mt-4">Results for "{{ query }}"</h3>
-            {% for result, summary in high_relevance|zip(summaries) %}
+            {% for result, summary in result_summaries %}
                 <div class="card mt-3">
                     <div class="card-body">
                         <h5 class="card-title">{{ result.title }}</h5>

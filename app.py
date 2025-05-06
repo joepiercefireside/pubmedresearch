@@ -116,18 +116,21 @@ def logout():
 
 def extract_keywords(query):
     doc = nlp(query.lower())
-    stop_words = nlp.Defaults.stop_words
+    stop_words = nlp.Defaults.stop_words | {'about', 'articles'}
     
     # Extract noun phrases
     keywords = []
     for chunk in doc.noun_chunks:
-        phrase = chunk.text
-        if all(token.text not in stop_words and token.is_alpha for token in nlp(phrase)):
+        phrase = chunk.text.strip()
+        if (len(phrase) > 1 and 
+            all(token.text not in stop_words and token.is_alpha for token in nlp(phrase))):
             keywords.append(phrase)
     
-    # Add single keywords
+    # Add single keywords not in phrases
     for token in doc:
-        if (token.is_alpha and token.text not in stop_words and len(token.text) > 1 and 
+        if (token.is_alpha and 
+            token.text not in stop_words and 
+            len(token.text) > 1 and 
             not any(token.text in phrase for phrase in keywords)):
             keywords.append(token.text)
     
@@ -147,13 +150,14 @@ def extract_keywords(query):
     
     logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
     if not keywords:
-        keywords = [word for word in query_lower.split() if word not in stop_words and len(word) > 1][:3]
+        keywords = [word for word in query_lower.split() 
+                    if word not in stop_words and len(word) > 1][:3]
         logger.info(f"Fallback keywords: {keywords}")
     
     return keywords, intent
 
 def build_pubmed_query(keywords, intent):
-    query_parts = [kw.replace(" ", "+") for kw in keywords]
+    query_parts = [f"({kw.replace(' ', '+')})" for kw in keywords]
     query = " AND ".join(query_parts)
     if intent.get('date'):
         query += f" {intent['date']}"
@@ -170,9 +174,12 @@ def esearch(query, retmax=20, api_key=None):
         "retmode": "json",
         "api_key": api_key
     }
+    logger.info(f"PubMed ESearch query: {query}")
     response = requests.get(url, params=params)
     response.raise_for_status()
-    return response.json()
+    result = response.json()
+    logger.info(f"ESearch result: {len(result['esearchresult']['idlist'])} PMIDs")
+    return result
 
 @sleep_and_retry
 @limits(calls=10, period=1)
@@ -325,6 +332,13 @@ def search():
             try:
                 esearch_result = esearch(search_query, retmax=result_count, api_key=api_key)
                 pmids = esearch_result['esearchresult']['idlist']
+                # Fallback if no results
+                if not pmids and intent.get('date'):
+                    logger.info("No results with date filter, retrying without date")
+                    search_query = build_pubmed_query(keywords, {})
+                    esearch_result = esearch(search_query, retmax=result_count, api_key=api_key)
+                    pmids = esearch_result['esearchresult']['idlist']
+                
                 if not pmids:
                     cur.close()
                     conn.close()
@@ -381,11 +395,13 @@ def search():
             selected_prompt['prompt_text'] if selected_prompt else None, output_type
         )
         
+        # Zip results and summaries
+        result_summaries = list(zip(high_relevance, summaries))
+        
         return render_template(
             'search.html', 
-            high_relevance=high_relevance, 
+            result_summaries=result_summaries,
             query=query, 
-            summaries=summaries, 
             prompts=prompts, 
             prompt_text=selected_prompt['prompt_text'] if selected_prompt else None, 
             prompt_output=prompt_output
@@ -419,7 +435,7 @@ def prompt():
     cur = conn.cursor()
     cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s', 
                 (current_user.id,))
-    prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in prompts]
+    prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
     conn.close()
     return render_template('prompt.html', prompts=prompts)
