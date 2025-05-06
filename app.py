@@ -15,6 +15,7 @@ import numpy as np
 from scipy.spatial.distance import cosine
 from dotenv import load_dotenv
 from datetime import datetime
+from collections import Counter
 
 load_dotenv()
 
@@ -119,7 +120,6 @@ def extract_keywords(query):
     doc = nlp(query.lower())
     stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on', 'this', 'year', 'provide', 'summary'}
     
-    # Extract noun phrases
     keywords = []
     for chunk in doc.noun_chunks:
         phrase = chunk.text.strip()
@@ -127,7 +127,6 @@ def extract_keywords(query):
             all(token.text not in stop_words and token.is_alpha for token in nlp(phrase))):
             keywords.append(phrase)
     
-    # Add single keywords not in phrases
     for token in doc:
         if (token.is_alpha and 
             token.text not in stop_words and 
@@ -135,7 +134,6 @@ def extract_keywords(query):
             not any(token.text in phrase for phrase in keywords)):
             keywords.append(token.text)
     
-    # Special handling for CIDP
     query_lower = query.lower()
     if 'cidp' in query_lower or 'chronic inflammatory demyelinating polyneuropathy' in query_lower:
         if 'chronic inflammatory demyelinating polyneuropathy' not in keywords:
@@ -143,9 +141,8 @@ def extract_keywords(query):
     
     keywords = keywords[:3]
     
-    # Detect date intent
     intent = {}
-    current_year = str(datetime.now().year)  # 2025
+    current_year = str(datetime.now().year)
     if 'this year' in query_lower:
         intent['date'] = f"{current_year}[dp]"
     elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
@@ -238,21 +235,24 @@ def parse_efetch_xml(xml_content):
 
 def parse_prompt(prompt_text):
     if not prompt_text:
-        return 20, "summary", False
+        return 20, "summary", False, True  # Default to cumulative summary
     prompt_text = prompt_text.lower()
     match = re.search(r'return\s+(\d+)\s+results', prompt_text)
     result_count = int(match.group(1)) if match else 20
-    is_multi_paragraph = "multi-paragraph" in prompt_text or "multiparagraph" in prompt_text or "two or three paragraph" in prompt_text
+    is_multi_paragraph = ("multi-paragraph" in prompt_text or 
+                         "multiparagraph" in prompt_text or 
+                         "two or three paragraph" in prompt_text)
+    is_cumulative = not ("each result" in prompt_text or "per result" in prompt_text)
     if "summary" in prompt_text:
         output_type = "summary"
     elif "letter" in prompt_text:
         output_type = "letter"
-    elif "answer" in prompt_text or "question" in prompt_text:
+    elif "answer" in prompt_text or "question" in prompt_text or prompt_text.strip().endswith("?"):
         output_type = "answer"
     else:
         output_type = "summary"
-    logger.info(f"Parsed prompt: result_count={result_count}, output_type={output_type}, multi_paragraph={is_multi_paragraph}")
-    return result_count, output_type, is_multi_paragraph
+    logger.info(f"Parsed prompt: result_count={result_count}, output_type={output_type}, multi_paragraph={is_multi_paragraph}, cumulative={is_cumulative}")
+    return result_count, output_type, is_multi_paragraph, is_cumulative
 
 def mock_llm_ranking(query, results, embeddings):
     query_embedding = generate_embedding(query)
@@ -296,7 +296,7 @@ def generate_summary(abstract, query, prompt_text=None, title=None, authors=None
     }
     return summary
 
-def generate_prompt_output(query, results, prompt_text, output_type, is_multi_paragraph):
+def generate_prompt_output(query, results, prompt_text, output_type, is_multi_paragraph, is_cumulative):
     if not results:
         return f"No results found for '{query}'."
     
@@ -309,28 +309,60 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
             return f"No results found for '{query}' in {target_year}. Try broadening the search to recent years."
         results = filtered_results
     
-    combined_text = "\n".join([f"{r['title']}: {r['abstract'] or 'No abstract'}" for r in results])
+    # Extract key concepts from abstracts
+    all_abstracts = " ".join(r['abstract'] or "" for r in results)
+    doc = nlp(all_abstracts)
+    key_concepts = []
+    for chunk in doc.noun_chunks:
+        if chunk.text.lower() not in nlp.Defaults.stop_words and len(chunk.text) > 3:
+            key_concepts.append(chunk.text)
+    concept_counts = Counter(key_concepts).most_common(5)
+    key_concepts_str = ", ".join([concept for concept, _ in concept_counts]) if concept_counts else "no key concepts identified"
+    logger.info(f"Key concepts extracted: {key_concepts_str}")
     
+    # Generate output based on type
     if output_type == "summary":
-        if is_multi_paragraph:
-            output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-            for i, result in enumerate(results, 1):
-                title = result['title']
-                abstract = result['abstract'] or "No abstract available."
-                output += f"Paragraph {i}: Research on {query} from \"{title}\" (published {result['publication_date']}) highlights advancements. "
-                output += f"{abstract[:300]}... This study advances our understanding of {query}.\n\n"
-            output += f"This summary synthesizes {len(results)} PubMed findings, focusing on recent developments in {query}."
+        if is_cumulative:
+            # Cumulative summary
+            combined_text = " ".join([r['abstract'] or r['title'] for r in results])
+            if is_multi_paragraph:
+                output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
+                output += f"Paragraph 1: Research on {query} reveals a focus on {key_concepts_str}. Studies collectively indicate that {combined_text[:300]}... These findings highlight advancements in {query}.\n\n"
+                output += f"Paragraph 2: Further insights from the literature emphasize {key_concepts_str.split(', ')[-1] if concept_counts else 'ongoing research'}. The combined evidence suggests {combined_text[300:600]}... This underscores the importance of continued investigation.\n\n"
+                output += f"This summary synthesizes {len(results)} PubMed findings, integrating key themes from recent research."
+            else:
+                output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
+                output += f"Research on {query} centers on {key_concepts_str}. The collective findings indicate {combined_text[:300]}... This summary integrates {len(results)} PubMed articles to highlight key advancements."
         else:
-            output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n{combined_text}\n\nThis summarizes key findings."
+            # Per-result summary
+            combined_text = "\n".join([f"{r['title']}: {r['abstract'] or 'No abstract'}" for r in results])
+            if is_multi_paragraph:
+                output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
+                for i, result in enumerate(results, 1):
+                    title = result['title']
+                    abstract = result['abstract'] or "No abstract available."
+                    output += f"Paragraph {i}: Research on {query} from \"{title}\" (published {result['publication_date']}) highlights advancements. "
+                    output += f"{abstract[:300]}... This study advances our understanding of {query}.\n\n"
+                output += f"This summary covers {len(results)} PubMed findings."
+            else:
+                output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n{combined_text}\n\nThis summarizes key findings."
     elif output_type == "letter":
+        combined_text = "\n".join([f"{r['title']}: {r['abstract'] or 'No abstract'}" for r in results])
         output = f"Dear Researcher,\n\nRegarding '{query}', PubMed data suggests:\n{combined_text}\n\nSincerely,\nPubMed Research Team"
     elif output_type == "answer":
         question = prompt_text if prompt_text and ("question" in prompt_text.lower() or prompt_text.strip().endswith("?")) else query
-        output = f"Answer to '{question}':\n\nBased on recent PubMed data:\n{combined_text}\n\nThis addresses the latest findings."
-    else:
-        output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n{combined_text}"
+        combined_text = " ".join([r['abstract'] or r['title'] for r in results])
+        relevant_articles = [r['title'] for r in results if any(kc.lower() in r['abstract'].lower() for kc in key_concepts)]
+        output = f"Answer to '{question}' (Year: {target_year or 'Recent'}):\n\n"
+        output += f"Based on {len(results)} PubMed articles, the response to '{question}' centers on {key_concepts_str}. "
+        output += f"The collective findings indicate {combined_text[:300]}... "
+        if relevant_articles:
+            output += f"Key articles addressing this include: {', '.join(relevant_articles[:2])}."
+        else:
+            output += "No specific articles directly address this question, but the literature provides relevant context."
+        output += f"\n\nThis answer synthesizes the latest PubMed findings."
     
-    logger.info(f"Generated prompt output: type={output_type}, multi_paragraph={is_multi_paragraph}, length={len(output)}")
+    logger.info(f"Generated prompt output: type={output_type}, multi_paragraph={is_multi_paragraph}, cumulative={is_cumulative}, length={len(output)}")
     return output
 
 @app.route('/search', methods=['GET', 'POST'])
@@ -354,7 +386,7 @@ def search():
             return render_template('search.html', error="No valid keywords found", prompts=prompts)
         
         selected_prompt = next((p for p in prompts if str(p['id']) == prompt_id), None)
-        result_count, output_type, is_multi_paragraph = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
+        result_count, output_type, is_multi_paragraph, is_cumulative = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
         
         query_lower = query.lower()
         year_match = re.search(r'\b(20\d{2})\b', query_lower)
@@ -421,7 +453,7 @@ def search():
         prompt_output = generate_prompt_output(
             query, high_relevance, 
             selected_prompt['prompt_text'] if selected_prompt else None, 
-            output_type, is_multi_paragraph
+            output_type, is_multi_paragraph, is_cumulative
         )
         
         result_summaries = list(zip(high_relevance, summaries))
