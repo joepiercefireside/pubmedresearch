@@ -27,8 +27,8 @@ login_manager.login_view = 'login'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load spaCy model
-nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
+# Load spaCy model with parser enabled
+nlp = spacy.load('en_core_web_sm', disable=['ner'])
 
 # Initialize embedding model
 embedding_model = None
