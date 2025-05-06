@@ -25,7 +25,7 @@
         <form method="POST">
             <div class="form-group">
                 <label for="query">Search Query</label>
-                <input type="text" class="form-control" id="query" name="query" placeholder="Enter search query (e.g., weight loss diabetes recent)" value="{{ query or '' }}">
+                <input type="text" class="form-control" id="query" name="query" placeholder="Enter search query (e.g., CIDP this year)" value="{{ query or '' }}">
             </div>
             <div class="form-group">
                 <label for="prompt_id">Select Prompt</label>
@@ -50,7 +50,14 @@
             </div>
         {% endif %}
         {% if result_summaries %}
-            <h3 class="mt-4">Search Results for "{{ query }}"</h3>
+            <h3 class="mt-4">
+                Search Results for "{{ query }}"
+                {% if query|lower|regex_search('\\b(20\\d{2})\\b') %}
+                    (Filtered for {{ query|lower|regex_search('\\b(20\\d{2})\\b')|first }})
+                {% elif query|lower|search('this year') %}
+                    (Filtered for {{ '2025' }})
+                {% endif %}
+            </h3>
             {% for result, summary in result_summaries %}
                 <div class="card mt-3">
                     <div class="card-body">
