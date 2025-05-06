@@ -221,20 +221,23 @@ def parse_efetch_xml(xml_content):
 
 def parse_prompt(prompt_text):
     if not prompt_text:
-        return 20, "summary"
+        return 20, "summary", False
     prompt_text = prompt_text.lower()
+    # Extract result count
     match = re.search(r'return\s+(\d+)\s+results', prompt_text)
     result_count = int(match.group(1)) if match else 20
-    if "summary article" in prompt_text:
-        output_type = "article"
+    # Determine output type and multi-paragraph flag
+    is_multi_paragraph = "multi-paragraph" in prompt_text or "multiparagraph" in prompt_text
+    if "summary article" in prompt_text or "summary" in prompt_text:
+        output_type = "summary"
     elif "letter" in prompt_text:
         output_type = "letter"
-    elif "answer" in prompt_text:
+    elif "answer" in prompt_text or "question" in prompt_text:
         output_type = "answer"
     else:
         output_type = "summary"
-    logger.info(f"Parsed prompt: result_count={result_count}, output_type={output_type}")
-    return result_count, output_type
+    logger.info(f"Parsed prompt: result_count={result_count}, output_type={output_type}, multi_paragraph={is_multi_paragraph}")
+    return result_count, output_type, is_multi_paragraph
 
 def mock_llm_ranking(query, results, embeddings):
     query_embedding = generate_embedding(query)
@@ -277,19 +280,35 @@ def generate_summary(abstract, query, prompt_text=None, title=None, authors=None
     }
     return summary
 
-def generate_prompt_output(query, results, prompt_text, output_type):
+def generate_prompt_output(query, results, prompt_text, output_type, is_multi_paragraph):
     if not results:
         return f"No results found for '{query}'."
-    combined_text = "\n".join([f"{r[1]}: {r[2] or 'No abstract'}" for r in results])
-    if output_type == "article":
-        output = f"Summary Article for '{query}':\n\nBased on recent PubMed data, the following insights were found:\n{combined_text[:1000]}\n\nThis article summarizes key findings."
+    
+    # Combine top results for context
+    top_results = results[:3]  # Use top 3 for brevity
+    combined_text = "\n".join([f"{r[1]}: {r[2] or 'No abstract'}" for r in top_results])
+    
+    # Generate output based on type
+    if output_type == "summary":
+        if is_multi_paragraph:
+            output = f"Multi-Paragraph Summary for '{query}':\n\n"
+            for i, result in enumerate(top_results, 1):
+                output += f"Paragraph {i}: Recent research on {query} highlights key findings from \"{result[1]}\". "
+                abstract = result[2] or "No abstract available."
+                output += f"{abstract[:200]}... These insights contribute to understanding {query}.\n\n"
+            output += "This summary synthesizes the latest PubMed findings."
+        else:
+            output = f"Summary for '{query}':\n\nBased on recent PubMed data:\n{combined_text[:300]}\n\nThis summarizes key findings."
     elif output_type == "letter":
         output = f"Dear Researcher,\n\nRegarding '{query}', PubMed data suggests:\n{combined_text[:500]}\n\nSincerely,\nPubMed Research Team"
     elif output_type == "answer":
-        output = f"Answer to '{query}':\n\n{combined_text[:200]}"
+        # Extract question if present
+        question = prompt_text if prompt_text and ("question" in prompt_text.lower() or prompt_text.strip().endswith("?")) else query
+        output = f"Answer to '{question}':\n\nBased on recent PubMed data:\n{combined_text[:300]}\n\nThis addresses the latest findings."
     else:
         output = f"Summary for '{query}':\n\n{combined_text[:300]}"
-    logger.info(f"Generated prompt output: type={output_type}, length={len(output)}")
+    
+    logger.info(f"Generated prompt output: type={output_type}, multi_paragraph={is_multi_paragraph}, length={len(output)}")
     return output
 
 @app.route('/search', methods=['GET', 'POST'])
@@ -313,7 +332,7 @@ def search():
             return render_template('search.html', error="No valid keywords found", prompts=prompts)
         
         selected_prompt = next((p for p in prompts if str(p['id']) == prompt_id), None)
-        result_count, output_type = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
+        result_count, output_type, is_multi_paragraph = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
         
         # Check cache
         conn = get_db_connection()
@@ -392,7 +411,8 @@ def search():
         # Generate prompt output
         prompt_output = generate_prompt_output(
             query, [(r['id'], r['title'], r['abstract']) for r in results], 
-            selected_prompt['prompt_text'] if selected_prompt else None, output_type
+            selected_prompt['prompt_text'] if selected_prompt else None, 
+            output_type, is_multi_paragraph
         )
         
         # Zip results and summaries

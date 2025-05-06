@@ -41,8 +41,16 @@
         {% if error %}
             <div class="alert alert-danger mt-3">{{ error }}</div>
         {% endif %}
+        {% if prompt_output %}
+            <div class="card mt-3">
+                <div class="card-body">
+                    <h4>Prompt Output</h4>
+                    <p style="white-space: pre-wrap;">{{ prompt_output }}</p>
+                </div>
+            </div>
+        {% endif %}
         {% if result_summaries %}
-            <h3 class="mt-4">Results for "{{ query }}"</h3>
+            <h3 class="mt-4">Search Results for "{{ query }}"</h3>
             {% for result, summary in result_summaries %}
                 <div class="card mt-3">
                     <div class="card-body">
@@ -55,14 +63,6 @@
                     </div>
                 </div>
             {% endfor %}
-            {% if prompt_output %}
-                <div class="card mt-3">
-                    <div class="card-body">
-                        <h5>Prompt Output</h5>
-                        <p>{{ prompt_output }}</p>
-                    </div>
-                </div>
-            {% endif %}
         {% endif %}
     </div>
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
