@@ -366,9 +366,8 @@ def search():
                 'score': 0,
                 'authors': r['authors'],
                 'journal': r['journal'],
-                'publication_date': r['publication_date']
-            })
-             'keywords': None
+                'publication_date': r['publication_date'],
+                'keywords': None
             })
             summaries.append(summary)
             embeddings.append(embedding)
