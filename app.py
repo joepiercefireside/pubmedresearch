@@ -16,6 +16,10 @@ from scipy.spatial.distance import cosine
 from dotenv import load_dotenv
 from datetime import datetime
 from collections import Counter
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import sendgrid
+from sendgrid.helpers.mail import Mail, Email, To, Content
 
 load_dotenv()
 
@@ -29,11 +33,18 @@ login_manager.login_view = 'login'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load spaCy model with parser enabled
+# Load spaCy model
 nlp = spacy.load('en_core_web_sm', disable=['ner'])
 
 # Initialize embedding model
 embedding_model = None
+
+# Initialize scheduler
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+# SendGrid client
+sg = sendgrid.SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
 
 def load_embedding_model():
     global embedding_model
@@ -68,6 +79,66 @@ def load_user(user_id):
     if user:
         return User(user[0], user[1])
     return None
+
+def run_notification_rule(rule_id, user_id, keywords, prompt_text, email_format, user_email):
+    logger.info(f"Running notification rule {rule_id} for user {user_id}, keywords: {keywords}")
+    keywords_list = [k.strip() for k in keywords.split(',')]
+    intent = {'date': 'last+1+day[dp]'}  # Adjust based on timeframe
+    search_query = build_pubmed_query(keywords_list, intent)
+    try:
+        api_key = os.environ.get('PUBMED_API_KEY')
+        esearch_result = esearch(search_query, retmax=20, api_key=api_key)
+        pmids = esearch_result['esearchresult']['idlist']
+        if not pmids:
+            logger.info(f"No new results for rule {rule_id}")
+            return
+        
+        efetch_xml = efetch(pmids, api_key=api_key)
+        results = parse_efetch_xml(efetch_xml)
+        
+        # Generate output
+        output_type = "summary" if prompt_text and "summary" in prompt_text.lower() else "list"
+        is_multi_paragraph = "multi-paragraph" in (prompt_text or "").lower()
+        is_cumulative = True
+        prompt_output = generate_prompt_output(keywords, results, prompt_text, output_type, is_multi_paragraph, is_cumulative)
+        
+        # Send email
+        message = Mail(
+            from_email=Email("notifications@pubmedresearcher.com"),
+            to_emails=To(user_email),
+            subject=f"PubMedResearcher Notification: {keywords}",
+            plain_text_content=prompt_output
+        )
+        response = sg.send(message)
+        logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error running notification rule {rule_id}: {str(e)}")
+
+def schedule_notification_rules():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT n.id, n.user_id, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
+                "FROM notifications n JOIN users u ON n.user_id = u.id")
+    rules = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    for rule in rules:
+        rule_id, user_id, keywords, timeframe, prompt_text, email_format, user_email = rule
+        cron_trigger = {
+            'daily': CronTrigger(hour=8, minute=0),
+            'weekly': CronTrigger(day_of_week='mon', hour=8, minute=0),
+            'monthly': CronTrigger(day=1, hour=8, minute=0),
+            'annually': CronTrigger(month=1, day=1, hour=8, minute=0)
+        }[timeframe]
+        scheduler.add_job(
+            run_notification_rule,
+            trigger=cron_trigger,
+            args=[rule_id, user_id, keywords, prompt_text, email_format, user_email],
+            id=f"notification_{rule_id}",
+            replace_existing=True
+        )
+    logger.info("Scheduled notification rules")
 
 @app.route('/')
 def index():
@@ -235,7 +306,7 @@ def parse_efetch_xml(xml_content):
 
 def parse_prompt(prompt_text):
     if not prompt_text:
-        return 20, "summary", False, True  # Default to cumulative summary
+        return 20, "summary", False, True
     prompt_text = prompt_text.lower()
     match = re.search(r'return\s+(\d+)\s+results', prompt_text)
     result_count = int(match.group(1)) if match else 20
@@ -309,7 +380,6 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
             return f"No results found for '{query}' in {target_year}. Try broadening the search to recent years."
         results = filtered_results
     
-    # Extract key concepts from abstracts
     all_abstracts = " ".join(r['abstract'] or "" for r in results)
     doc = nlp(all_abstracts)
     key_concepts = []
@@ -320,10 +390,8 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
     key_concepts_str = ", ".join([concept for concept, _ in concept_counts]) if concept_counts else "no key concepts identified"
     logger.info(f"Key concepts extracted: {key_concepts_str}")
     
-    # Generate output based on type
     if output_type == "summary":
         if is_cumulative:
-            # Cumulative summary
             combined_text = " ".join([r['abstract'] or r['title'] for r in results])
             if is_multi_paragraph:
                 output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
@@ -334,7 +402,6 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
                 output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
                 output += f"Research on {query} centers on {key_concepts_str}. The collective findings indicate {combined_text[:300]}... This summary integrates {len(results)} PubMed articles to highlight key advancements."
         else:
-            # Per-result summary
             combined_text = "\n".join([f"{r['title']}: {r['abstract'] or 'No abstract'}" for r in results])
             if is_multi_paragraph:
                 output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
@@ -572,17 +639,145 @@ def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
+        rule_name = request.form.get('rule_name')
         keywords = request.form.get('keywords')
-        cur.execute("INSERT INTO notifications (user_id, keywords) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET keywords = %s", 
-                    (current_user.id, keywords, keywords))
-        conn.commit()
-        flash('Notification settings updated.', 'success')
-        return redirect(url_for('notifications'))
-    cur.execute("SELECT keywords FROM notifications WHERE user_id = %s", (current_user.id,))
-    notifications = cur.fetchone()
+        timeframe = request.form.get('timeframe')
+        prompt_text = request.form.get('prompt_text')
+        email_format = request.form.get('email_format')
+        
+        if not all([rule_name, keywords, timeframe, email_format]):
+            flash('All fields except prompt text are required.', 'error')
+        elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
+            flash('Invalid timeframe selected.', 'error')
+        elif email_format not in ['summary', 'list', 'detailed']:
+            flash('Invalid email format selected.', 'error')
+        else:
+            try:
+                cur.execute(
+                    "INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format)
+                )
+                conn.commit()
+                flash('Notification rule created successfully.', 'success')
+                # Reschedule jobs
+                schedule_notification_rules()
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error creating notification: {str(e)}")
+                flash(f'Failed to create notification rule: {str(e)}', 'error')
+    
+    cur.execute(
+        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, created_at "
+        "FROM notifications WHERE user_id = %s ORDER BY created_at DESC",
+        (current_user.id,)
+    )
+    notifications = [
+        {
+            'id': n[0],
+            'rule_name': n[1],
+            'keywords': n[2],
+            'timeframe': n[3],
+            'prompt_text': n[4],
+            'email_format': n[5],
+            'created_at': n[6]
+        } for n in cur.fetchall()
+    ]
     cur.close()
     conn.close()
     return render_template('notifications.html', notifications=notifications)
+
+@app.route('/notifications/edit/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format "
+        "FROM notifications WHERE id = %s AND user_id = %s",
+        (id, current_user.id)
+    )
+    notification = cur.fetchone()
+    
+    if not notification:
+        cur.close()
+        conn.close()
+        flash('Notification rule not found or you do not have permission to edit it.', 'error')
+        return redirect(url_for('notifications'))
+    
+    if request.method == 'POST':
+        rule_name = request.form.get('rule_name')
+        keywords = request.form.get('keywords')
+        timeframe = request.form.get('timeframe')
+        prompt_text = request.form.get('prompt_text')
+        email_format = request.form.get('email_format')
+        
+        if not all([rule_name, keywords, timeframe, email_format]):
+            flash('All fields except prompt text are required.', 'error')
+        elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
+            flash('Invalid timeframe selected.', 'error')
+        elif email_format not in ['summary', 'list', 'detailed']:
+            flash('Invalid email format selected.', 'error')
+        else:
+            try:
+                cur.execute(
+                    "UPDATE notifications SET rule_name = %s, keywords = %s, timeframe = %s, prompt_text = %s, email_format = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (rule_name, keywords, timeframe, prompt_text, email_format, id, current_user.id)
+                )
+                conn.commit()
+                flash('Notification rule updated successfully.', 'success')
+                schedule_notification_rules()
+                cur.close()
+                conn.close()
+                return redirect(url_for('notifications'))
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error updating notification: {str(e)}")
+                flash(f'Failed to update notification rule: {str(e)}', 'error')
+    
+    cur.close()
+    conn.close()
+    return render_template('notification_edit.html', notification={
+        'id': notification[0],
+        'rule_name': notification[1],
+        'keywords': notification[2],
+        'timeframe': notification[3],
+        'prompt_text': notification[4],
+        'email_format': notification[5]
+    })
+
+@app.route('/notifications/delete/<int:id>', methods=['POST'])
+@login_required
+def delete_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
+    notification = cur.fetchone()
+    
+    if not notification:
+        cur.close()
+        conn.close()
+        flash('Notification rule not found or you do not have permission to delete it.', 'error')
+        return redirect(url_for('notifications'))
+    
+    try:
+        cur.execute('DELETE FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
+        conn.commit()
+        flash('Notification rule deleted successfully.', 'success')
+        schedule_notification_rules()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error deleting notification: {str(e)}")
+        flash(f'Failed to delete notification rule: {str(e)}', 'error')
+    finally:
+        cur.close()
+        conn.close()
+    
+    return redirect(url_for('notifications'))
+
+# Schedule notifications on startup
+schedule_notification_rules()
 
 if __name__ == '__main__':
     app.run(debug=True)
