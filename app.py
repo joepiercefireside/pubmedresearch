@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Load spaCy model
 nlp = spacy.load('en_core_web_sm')
 
-# Initialize embedding model
+# Initialize embedding model for ranking
 embedding_model = None
 
 # Initialize scheduler
@@ -57,6 +57,27 @@ def load_embedding_model():
 def generate_embedding(text):
     model = load_embedding_model()
     return model.encode(text, convert_to_numpy=True)
+
+# xAI API call (placeholder; replace with actual xAI Grok API endpoint and parameters)
+def call_xai_api(prompt, context, api_key):
+    try:
+        url = "https://api.x.ai/v1/completions"  # Hypothetical endpoint
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "grok-3",  # Adjust based on xAI's model name
+            "prompt": f"Context: {context}\n\nPrompt: {prompt}",
+            "max_tokens": 1000,
+            "temperature": 0.7
+        }
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()['choices'][0]['text'].strip()
+    except Exception as e:
+        logger.error(f"xAI API error: {str(e)}")
+        return f"Error generating response: {str(e)}"
 
 # Database connection
 def get_db_connection():
@@ -102,17 +123,16 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         efetch_xml = efetch(pmids, api_key=api_key)
         results = parse_efetch_xml(efetch_xml)
         
-        output_type = "summary" if prompt_text and "summary" in prompt_text.lower() else email_format
-        is_multi_paragraph = "multi-paragraph" in (prompt_text or "").lower() or "two or three paragraph" in (prompt_text or "").lower()
-        is_cumulative = True
-        prompt_output = generate_prompt_output(keywords, results, prompt_text, output_type, is_multi_paragraph, is_cumulative)
+        # Use xAI API for prompt processing
+        context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
+        output = call_xai_api(prompt_text or "Summarize the provided research articles.", context, os.environ.get('XAI_API_KEY'))
         
         if email_format == "list":
             content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100]}..." for r in results])
         elif email_format == "detailed":
             content = "\n".join([f"Title: {r['title']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}\nAbstract: {r['abstract']}\n" for r in results])
         else:
-            content = prompt_output
+            content = output
         
         message = Mail(
             from_email=Email("notifications@pubmedresearcher.com"),
@@ -207,14 +227,15 @@ def logout():
 
 def extract_keywords_and_intent(query):
     doc = nlp(query.lower())
-    stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on', 'this', 'year', 'provide', 'summary'}
+    stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on', 'this', 'year', 'provide', 'summary', 'recent', 'months', 'treatments'}
     
     # Extract keywords
     keywords = []
     for chunk in doc.noun_chunks:
         phrase = chunk.text.strip()
         if (len(phrase) > 1 and 
-            all(token.text not in stop_words and token.is_alpha for token in nlp(phrase))):
+            all(token.text not in stop_words and token.is_alpha for token in nlp(phrase)) and
+            not any(word in phrase for word in ['recent', 'latest', 'new'])):
             keywords.append(phrase)
     
     for token in doc:
@@ -264,7 +285,7 @@ def extract_keywords_and_intent(query):
         intent['date'] = 'last+7+days[dp]'
     elif 'past day' in query_lower or 'last day' in query_lower or 'yesterday' in query_lower:
         intent['date'] = 'last+1+day[dp]'
-    elif since_match := re.search(r'since\s+(january|february|march|april|may|june|july|august|septemb er|october|november|december)\s+(\d{4})', query_lower):
+    elif since_match := re.search(r'since\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})', query_lower):
         month = {'january': '01', 'february': '02', 'march': '03', 'april': '04', 'may': '05', 'june': '06',
                  'july': '07', 'august': '08', 'september': '09', 'october': '10', 'november': '11', 'december': '12'}[since_match.group(1)]
         year = since_match.group(2)
@@ -328,7 +349,7 @@ def build_pubmed_query(keywords, intent):
             query_parts.append('(cidp OR chronic+inflammatory+demyelinating+polyneuropathy)')
         else:
             query_parts.append(f"({kw.replace(' ', '+')})")
-    query = " AND ".join(query_parts)
+    query = " OR ".join(query_parts)  # Use OR to broaden search
     if intent.get('focus'):
         focus_terms = {
             'treatment': '(treatment OR therapy OR therapeutic)',
@@ -404,16 +425,10 @@ def parse_prompt(prompt_text):
     if not prompt_text:
         return {
             'result_count': 20,
-            'output_type': 'summary',
-            'is_multi_paragraph': False,
-            'is_cumulative': True,
-            'specific_instructions': None,
-            'task': None,
             'limit_presentation': False
         }
     
     prompt_text_lower = prompt_text.lower()
-    doc = nlp(prompt_text_lower)
     
     # Extract number of results
     result_count = 20
@@ -422,69 +437,15 @@ def parse_prompt(prompt_text):
     elif 'top' in prompt_text_lower:
         result_count = 3  # Default for "top"
     
-    # Determine output type and task
-    output_type = 'summary'
-    task = None
-    if 'summarize' in prompt_text_lower or 'summary' in prompt_text_lower:
-        output_type = 'summary'
-        task = 'summarize'
-    elif 'blog post' in prompt_text_lower or 'write a blog' in prompt_text_lower:
-        output_type = 'blog_post'
-        task = 'blog_post'
-    elif 'answer' in prompt_text_lower or 'question' in prompt_text_lower or prompt_text_lower.strip().endswith('?'):
-        output_type = 'answer'
-        task = 'answer'
-    elif 'letter' in prompt_text_lower:
-        output_type = 'letter'
-        task = 'letter'
-    elif 'novel' in prompt_text_lower or 'write a novel' in prompt_text_lower:
-        output_type = 'novel'
-        task = 'novel'
-    elif 'rank' in prompt_text_lower or 'order by relevance' in prompt_text_lower:
-        output_type = 'rank'
-        task = 'rank'
-    
-    # Check for structural instructions
-    is_multi_paragraph = ('multi-paragraph' in prompt_text_lower or 
-                         'multiparagraph' in prompt_text_lower or 
-                         'two or three paragraph' in prompt_text_lower or
-                         'one paragraph each' in prompt_text_lower or
-                         'paragraph per' in prompt_text_lower)
-    is_cumulative = not ('each result' in prompt_text_lower or 
-                        'per result' in prompt_text_lower or 
-                        'per article' in prompt_text_lower or
-                        'one paragraph each' in prompt_text_lower)
-    
     # Check for limiting presentation
     limit_presentation = ('limit to' in prompt_text_lower or 
                          'show only' in prompt_text_lower or 
                          'present only' in prompt_text_lower)
     
-    # Extract specific instructions
-    specific_instructions = {
-        'per_article': ('one paragraph each' in prompt_text_lower or 
-                       'paragraph per article' in prompt_text_lower or
-                       'each article' in prompt_text_lower),
-        'top_n': 'top' in prompt_text_lower,
-        'summary_length': ('brief' in prompt_text_lower and 'brief') or 
-                         ('detailed' in prompt_text_lower and 'detailed') or 
-                         'standard',
-        'tone': ('formal' in prompt_text_lower and 'formal') or 
-                ('informal' in prompt_text_lower and 'informal') or 
-                'neutral'
-    }
-    
-    logger.info(f"Parsed prompt: result_count={result_count}, output_type={output_type}, "
-                f"task={task}, multi_paragraph={is_multi_paragraph}, cumulative={is_cumulative}, "
-                f"limit_presentation={limit_presentation}, instructions={specific_instructions}")
+    logger.info(f"Parsed prompt: result_count={result_count}, limit_presentation={limit_presentation}")
     
     return {
         'result_count': result_count,
-        'output_type': output_type,
-        'task': task,
-        'is_multi_paragraph': is_multi_paragraph,
-        'is_cumulative': is_cumulative,
-        'specific_instructions': specific_instructions,
         'limit_presentation': limit_presentation
     }
 
@@ -528,7 +489,7 @@ def mock_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
     ranked_indices = [i for i, _ in scores]
     
     # Apply top_n from prompt if specified
-    top_n = prompt_params['result_count'] if prompt_params and prompt_params.get('specific_instructions', {}).get('top_n') else None
+    top_n = prompt_params['result_count'] if prompt_params and prompt_params.get('limit_presentation') else None
     if top_n:
         ranked_indices = ranked_indices[:top_n]
     
@@ -536,22 +497,12 @@ def mock_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
     ranked_embeddings = [embeddings[i] for i in ranked_indices]
     return ranked_results, ranked_embeddings
 
-def generate_summary(abstract, query, prompt_text=None, title=None, authors=None, journal=None, publication_date=None, summary_length='standard'):
+def generate_summary(abstract, query, title=None, authors=None, journal=None, publication_date=None):
     if not abstract and not title:
         return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
     text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
     embedding = generate_embedding(text) if text else None
-    max_length = {'brief': 100, 'standard': 200, 'detailed': 300}.get(summary_length, 200)
-    summary_text = abstract[:max_length] if abstract else f"Title: {title}"
-    if prompt_text:
-        logger.info(f"Processing prompt for summary: {prompt_text}")
-        prompt_text_lower = prompt_text.lower()
-        if "insights" in prompt_text_lower:
-            summary_text = abstract[:max_length+100] if abstract else f"Title: {title} (Insights mode)"
-        elif "google" in prompt_text_lower:
-            summary_text = abstract[:100] if abstract else f"Title: {title} (Google mode)"
-        elif "expert" in prompt_text_lower:
-            summary_text = f"Expert Summary: {abstract[:max_length+50] if abstract else title}" if abstract else f"Title: {title} (Expert mode)"
+    summary_text = abstract[:200] if abstract else f"Title: {title}"
     summary = {
         "text": summary_text,
         "metadata": {
@@ -563,7 +514,7 @@ def generate_summary(abstract, query, prompt_text=None, title=None, authors=None
     }
     return summary
 
-def generate_prompt_output(query, results, prompt_text, output_type, is_multi_paragraph, is_cumulative, task=None, specific_instructions=None):
+def generate_prompt_output(query, results, prompt_text, prompt_params):
     if not results:
         return f"No results found for '{query}'."
     
@@ -576,146 +527,13 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
             return f"No results found for '{query}' in {target_year}. Try broadening the search to recent years."
         results = filtered_results
     
-    all_abstracts = " ".join(r['abstract'] or "" for r in results)
-    doc = nlp(all_abstracts)
-    key_concepts = []
-    for chunk in doc.noun_chunks:
-        if chunk.text.lower() not in nlp.Defaults.stop_words and len(chunk.text) > 3:
-            key_concepts.append(chunk.text)
-    concept_counts = Counter(key_concepts).most_common(5)
-    key_concepts_str = ", ".join([concept for concept, _ in concept_counts]) if concept_counts else "no key concepts identified"
-    logger.info(f"Key concepts extracted: {key_concepts_str}")
+    # Prepare context from results
+    context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
     
-    # Handle task-specific outputs
-    if task == 'summarize' and specific_instructions:
-        if specific_instructions.get('per_article'):
-            output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-            summary_length = specific_instructions.get('summary_length', 'standard')
-            for i, result in enumerate(results, 1):
-                summary = generate_summary(
-                    result['abstract'], query, prompt_text, 
-                    title=result['title'], authors=result['authors'], 
-                    journal=result['journal'], publication_date=result['publication_date'],
-                    summary_length=summary_length
-                )
-                output += f"Article {i}: {result['title']}\n{summary['text']}\n\n"
-            return output
-        else:
-            combined_text = " ".join([r['abstract'] or r['title'] for r in results])
-            if is_multi_paragraph:
-                output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-                output += f"Paragraph 1: Research on {query} reveals a focus on {key_concepts_str}. Studies collectively indicate that {combined_text[:300]}... These findings highlight advancements in {query}.\n\n"
-                output += f"Paragraph 2: Further insights emphasize {key_concepts_str.split(', ')[-1] if concept_counts else 'ongoing research'}. The combined evidence suggests {combined_text[300:600]}... This underscores the importance of continued investigation.\n\n"
-                output += f"This summary synthesizes {len(results)} PubMed findings."
-            else:
-                output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-                output += f"Research on {query} centers on {key_concepts_str}. The collective findings indicate {combined_text[:300]}... This summary integrates {len(results)} articles."
-            return output
+    # Use xAI API to generate response
+    output = call_xai_api(prompt_text or "Summarize the provided research articles.", context, os.environ.get('XAI_API_KEY'))
     
-    if task == 'blog_post':
-        tone = specific_instructions.get('tone', 'neutral') if specific_instructions else 'neutral'
-        output = f"Blog Post: Latest Findings on '{query}' (Year: {target_year or 'Recent'})\n\n"
-        output += f"Introduction\n"
-        output += f"Research on {query} has advanced significantly, focusing on {key_concepts_str}. This blog post explores recent PubMed findings to highlight key developments.\n\n"
-        
-        for i, result in enumerate(results[:3], 1):  # Limit to 3 for blog post
-            summary = generate_summary(
-                result['abstract'], query, prompt_text, 
-                title=result['title'], authors=result['authors'], 
-                journal=result['journal'], publication_date=result['publication_date'],
-                summary_length='detailed'
-            )
-            output += f"Section {i}: {result['title']}\n"
-            output += f"{summary['text']}\n\n"
-        
-        output += "Conclusion\n"
-        output += f"The studies discussed demonstrate the ongoing progress in {query}. Continued research will further our understanding and improve outcomes.\n"
-        if tone == 'informal':
-            output = output.replace("demonstrate", "show").replace("ongoing progress", "cool advancements")
-        elif tone == 'formal':
-            output = output.replace("explores", "examines").replace("highlight", "elucidate")
-        return output
-    
-    if task == 'answer':
-        question = prompt_text if prompt_text and ('question' in prompt_text.lower() or prompt_text.strip().endswith('?')) else query
-        combined_text = " ".join([r['abstract'] or r['title'] for r in results])
-        relevant_articles = [r['title'] for r in results if any(kc.lower() in r['abstract'].lower() for kc in key_concepts)]
-        output = f"Answer to '{question}' (Year: {target_year or 'Recent'}):\n\n"
-        output += f"Based on {len(results)} PubMed articles, the response to '{question}' centers on {key_concepts_str}. "
-        output += f"{combined_text[:300]}... "
-        if relevant_articles:
-            output += f"Key articles include: {', '.join(relevant_articles[:2])}."
-        else:
-            output += "No articles directly address this, but related insights are provided."
-        output += f"\n\nThis answer synthesizes recent PubMed findings."
-        return output
-    
-    if task == 'novel':
-        tone = specific_instructions.get('tone', 'neutral') if specific_instructions else 'neutral'
-        output = f"A Novel Inspired by '{query}' Research (Year: {target_year or 'Recent'})\n\n"
-        output += f"Prologue\n"
-        output += f"In a world shaped by advances in {query}, scientists uncovered groundbreaking insights: {key_concepts_str}. This story weaves their discoveries into a narrative of hope and discovery.\n\n"
-        
-        for i, result in enumerate(results[:3], 1):  # Limit to 3 for novel
-            summary = generate_summary(
-                result['abstract'], query, prompt_text, 
-                title=result['title'], authors=result['authors'], 
-                journal=result['journal'], publication_date=result['publication_date'],
-                summary_length='detailed'
-            )
-            output += f"Chapter {i}: {result['title']}\n"
-            output += f"The researchers, led by {result['authors'].split(', ')[0]}, discovered {summary['text']}. Their findings sparked a new era in {query}.\n\n"
-        
-        output += "Epilogue\n"
-        output += f"The legacy of {query} research lived on, transforming lives through {key_concepts_str.split(', ')[0]}. The future holds endless possibilities.\n"
-        if tone == 'informal':
-            output = output.replace("discovered", "stumbled upon").replace("sparked", "kicked off")
-        elif tone == 'formal':
-            output = output.replace("weaves", "integrates").replace("sparked", "initiated")
-        return output
-    
-    if task == 'rank':
-        output = f"Ranked Results for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-        for i, result in enumerate(results, 1):
-            summary = generate_summary(
-                result['abstract'], query, prompt_text, 
-                title=result['title'], authors=result['authors'], 
-                journal=result['journal'], publication_date=result['publication_date'],
-                summary_length='brief'
-            )
-            output += f"Rank {i}: {result['title']}\n"
-            output += f"{summary['text']}\n\n"
-        output += f"These {len(results)} articles are ordered by relevance to '{query}' based on content similarity and recency."
-        return output
-    
-    if output_type == 'letter':
-        combined_text = "\n".join([f"{r['title']}: {r['abstract'] or 'No abstract'}" for r in results])
-        output = f"Dear Researcher,\n\nRegarding '{query}', PubMed data suggests:\n{combined_text}\n\nSincerely,\nPubMed Research Team"
-        return output
-    
-    # Default summary output
-    if is_cumulative:
-        combined_text = " ".join([r['abstract'] or r['title'] for r in results])
-        if is_multi_paragraph:
-            output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-            output += f"Paragraph 1: Research on {query} reveals a focus on {key_concepts_str}. Studies collectively indicate that {combined_text[:300]}... These findings highlight advancements in {query}.\n\n"
-            output += f"Paragraph 2: Further insights emphasize {key_concepts_str.split(', ')[-1] if concept_counts else 'ongoing research'}. The combined evidence suggests {combined_text[300:600]}... This underscores the importance of continued investigation.\n\n"
-            output += f"This summary synthesizes {len(results)} PubMed findings."
-        else:
-            output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-            output += f"Research on {query} centers on {key_concepts_str}. The collective findings indicate {combined_text[:300]}... This summary integrates {len(results)} articles."
-    else:
-        combined_text = "\n".join([f"{r['title']}: {r['abstract'] or 'No abstract'}" for r in results])
-        if is_multi_paragraph:
-            output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
-            for i, result in enumerate(results, 1):
-                output += f"Paragraph {i}: Research on {query} from \"{result['title']}\" (published {result['publication_date']}) highlights advancements. "
-                output += f"{result['abstract'][:300] if result['abstract'] else 'No abstract'}... This study advances our understanding of {query}.\n\n"
-            output += f"This summary covers {len(results)} PubMed findings."
-        else:
-            output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n{combined_text}\n\nThis summarizes key findings."
-    
-    logger.info(f"Generated prompt output: type={output_type}, task={task}, multi_paragraph={is_multi_paragraph}, cumulative={is_cumulative}, length={len(output)}")
+    logger.info(f"Generated prompt output: length={len(output)}")
     return output
 
 @app.route('/search', methods=['GET', 'POST'])
@@ -742,11 +560,6 @@ def search():
         selected_prompt_text = prompt_text if prompt_text else next((p['prompt_text'] for p in prompts if str(p['id']) == prompt_id), None)
         prompt_params = parse_prompt(selected_prompt_text)
         result_count = prompt_params['result_count']
-        output_type = prompt_params['output_type']
-        task = prompt_params['task']
-        is_multi_paragraph = prompt_params['is_multi_paragraph']
-        is_cumulative = prompt_params['is_cumulative']
-        specific_instructions = prompt_params['specific_instructions']
         limit_presentation = prompt_params['limit_presentation']
         
         query_lower = query.lower()
@@ -784,10 +597,9 @@ def search():
             text = f"{r['title']} {r['abstract'] or ''} {r['authors'] or ''} {r['journal'] or ''}".strip()
             embedding = generate_embedding(text) if text else None
             summary = generate_summary(
-                r['abstract'], query, selected_prompt_text, 
+                r['abstract'], query, 
                 title=r['title'], authors=r['authors'], 
-                journal=r['journal'], publication_date=r['publication_date'],
-                summary_length=specific_instructions.get('summary_length', 'standard') if specific_instructions else 'standard'
+                journal=r['journal'], publication_date=r['publication_date']
             )
             high_relevance.append({
                 'id': r['id'],
@@ -805,8 +617,7 @@ def search():
         high_relevance, embeddings = mock_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
         
         prompt_output = generate_prompt_output(
-            query, high_relevance, selected_prompt_text, 
-            output_type, is_multi_paragraph, is_cumulative, task, specific_instructions
+            query, high_relevance, selected_prompt_text, prompt_params
         )
         
         # Determine results to display
