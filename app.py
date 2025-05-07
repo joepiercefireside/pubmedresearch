@@ -156,7 +156,7 @@ def schedule_notification_rules():
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', username=current_user.email if current_user.is_authenticated else None)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -176,7 +176,7 @@ def register():
             return redirect(url_for('login'))
         cur.close()
         conn.close()
-    return render_template('register.html')
+    return render_template('register.html', username=None)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -193,7 +193,7 @@ def login():
             login_user(User(user[0], user[1]))
             return redirect(url_for('index'))
         flash('Invalid email or password.', 'error')
-    return render_template('login.html')
+    return render_template('login.html', username=None)
 
 @app.route('/logout')
 @login_required
@@ -468,11 +468,11 @@ def search():
         prompt_id = request.form.get('prompt_id')
         prompt_text = request.form.get('prompt_text')  # Get edited prompt text
         if not query:
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, username=current_user.email)
         
         keywords, intent = extract_keywords(query)
         if not keywords:
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, username=current_user.email)
         
         # Use submitted prompt_text if provided, else fall back to selected prompt
         selected_prompt_text = prompt_text if prompt_text else next((p['prompt_text'] for p in prompts if str(p['id']) == prompt_id), None)
@@ -497,7 +497,7 @@ def search():
                     pmids = esearch_result['esearchresult']['idlist']
                 
                 if not pmids:
-                    return render_template('search.html', error="No results found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year)
+                    return render_template('search.html', error="No results found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year, username=current_user.email)
                 
                 efetch_xml = efetch(pmids, api_key=api_key)
                 results = parse_efetch_xml(efetch_xml)
@@ -511,7 +511,7 @@ def search():
                 conn.close()
             except Exception as e:
                 logger.error(f"PubMed API error: {str(e)}")
-                return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year)
+                return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year, username=current_user.email)
         
         high_relevance = []
         embeddings = []
@@ -556,10 +556,11 @@ def search():
             prompt_id=prompt_id,
             prompt_text=prompt_text,
             prompt_output=prompt_output,
-            target_year=target_year
+            target_year=target_year,
+            username=current_user.email
         )
     
-    return render_template('search.html', prompts=prompts, prompt_id='', prompt_text='')
+    return render_template('search.html', prompts=prompts, prompt_id='', prompt_text='', username=current_user.email)
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
@@ -591,7 +592,7 @@ def prompt():
     prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
     conn.close()
-    return render_template('prompt.html', prompts=prompts)
+    return render_template('prompt.html', prompts=prompts, username=current_user.email)
 
 @app.route('/prompt/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -628,7 +629,7 @@ def edit_prompt(id):
     
     cur.close()
     conn.close()
-    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]})
+    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
 
 @app.route('/prompt/delete/<int:id>', methods=['POST'])
 @login_required
@@ -708,7 +709,7 @@ def notifications():
     ]
     cur.close()
     conn.close()
-    return render_template('notifications.html', notifications=notifications)
+    return render_template('notifications.html', notifications=notifications, username=current_user.email)
 
 @app.route('/notifications/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -768,7 +769,7 @@ def edit_notification(id):
         'timeframe': notification[3],
         'prompt_text': notification[4],
         'email_format': notification[5]
-    })
+    }, username=current_user.email)
 
 @app.route('/notifications/delete/<int:id>', methods=['POST'])
 @login_required
