@@ -38,128 +38,152 @@
         return gk_fileData[filename] || "";
         }
         </script><!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Notifications - PubMed Researcher</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/favicon.png') }}">
 </head>
 <body>
     <nav class="navbar navbar-expand-lg">
-        <a class="navbar-brand" href="{{ url_for('index') }}">
-            <img src="{{ url_for('static', filename='images/logo.png') }}" alt="PubMed Researcher Logo" height="40">
-        </a>
-        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navbarNav">
-            <ul class="navbar-nav ml-auto">
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('search') }}">Search</a></li>
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('prompt') }}">Prompts</a></li>
-                <li class="nav-item active"><a class="nav-link" href="{{ url_for('notifications') }}">Notifications</a></li>
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}">Logout</a></li>
-            </ul>
+        <div class="container-fluid">
+            <a class="navbar-brand d-flex align-items-center" href="{{ url_for('index') }}">
+                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="PubMed Researcher Logo" height="40">
+                <span class="ms-2 text-white">PubMed Research</span>
+            </a>
+            <a class="nav-link text-white ms-3" href="{{ url_for('index') }}"><i class="bi bi-house me-1"></i>Home</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <span class="navbar-text me-3">Hello, {{ current_user.email }}</span>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('search') }}">Search</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('prompt') }}">Prompts</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="{{ url_for('notifications') }}">Notifications</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                    </li>
+                </ul>
+            </div>
         </div>
     </nav>
-    <div class="container mt-4">
-        <h2>Manage Notification Rules</h2>
-        <form method="POST">
-            <div class="form-group">
-                <label for="rule_name">Rule Name</label>
-                <input type="text" class="form-control" id="rule_name" name="rule_name" placeholder="Enter rule name (e.g., Heart Disease Alerts)">
-            </div>
-            <div class="form-group">
-                <label for="keywords">Keywords</label>
-                <input type="text" class="form-control" id="keywords" name="keywords" placeholder="Enter keywords (e.g., heart disease, cardiovascular, hypertension)">
-            </div>
-            <div class="form-group">
-                <label for="timeframe">Timeframe</label>
-                <select class="form-control" id="timeframe" name="timeframe">
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="annually">Annually</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="prompt_text">Prompt Text (Optional)</label>
-                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter prompt (e.g., Provide a summary of results)"></textarea>
-            </div>
-            <div class="form-group">
-                <label for="email_format">Email Format</label>
-                <select class="form-control" id="email_format" name="email_format">
-                    <option value="summary">Summary</option>
-                    <option value="list">List</option>
-                    <option value="detailed">Detailed</option>
-                </select>
-            </div>
-            <button type="submit" class="btn btn-primary">Add Rule</button>
-        </form>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+    <div class="container">
+        <div class="card">
+            <h2>Manage Notification Rules</h2>
+            <form method="POST">
+                <div class="mb-3">
+                    <label for="rule_name" class="form-label">Rule Name</label>
+                    <input type="text" class="form-control" id="rule_name" name="rule_name" placeholder="Enter rule name (e.g., Heart Disease Alerts)">
+                </div>
+                <div class="mb-3">
+                    <label for="keywords" class="form-label">Keywords</label>
+                    <input type="text" class="form-control" id="keywords" name="keywords" placeholder="Enter keywords (e.g., heart disease, cardiovascular, hypertension)">
+                </div>
+                <div class="mb-3">
+                    <label for="timeframe" class="form-label">Timeframe</label>
+                    <select class="form-control" id="timeframe" name="timeframe">
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="annually">Annually</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
+                    <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter prompt (e.g., Provide a summary of results)"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label for="email_format" class="form-label">Email Format</label>
+                    <select class="form-control" id="email_format" name="email_format">
+                        <option value="summary">Summary</option>
+                        <option value="list">List</option>
+                        <option value="detailed">Detailed</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Add Rule</button>
+            </form>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+        </div>
         {% if notifications %}
-            <h3 class="mt-4">Your Notification Rules</h3>
-            <table class="table table-bordered mt-2">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Keywords</th>
-                        <th>Timeframe</th>
-                        <th>Prompt</th>
-                        <th>Format</th>
-                        <th>Created</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for notification in notifications %}
-                        <tr>
-                            <td>{{ notification.rule_name }}</td>
-                            <td>{{ notification.keywords }}</td>
-                            <td>{{ notification.timeframe.capitalize() }}</td>
-                            <td>{{ notification.prompt_text|truncate(50) or 'None' }}</td>
-                            <td>{{ notification.email_format.capitalize() }}</td>
-                            <td>{{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                            <td>
-                                <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning">Edit</a>
-                                <button type="button" class="btn btn-sm btn-danger" data-toggle="modal" data-target="#deleteModal-{{ notification.id }}">Delete</button>
-                                <div class="modal fade" id="deleteModal-{{ notification.id }}" tabindex="-1" role="dialog">
-                                    <div class="modal-dialog" role="document">
-                                        <div class="modal-content">
-                                            <div class="modal-header">
-                                                <h5 class="modal-title">Confirm Delete</h5>
-                                                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                                                    <span aria-hidden="true">×</span>
-                                                </button>
-                                            </div>
-                                            <div class="modal-body">
-                                                Are you sure you want to delete the notification rule "{{ notification.rule_name }}"?
-                                            </div>
-                                            <div class="modal-footer">
-                                                <form action="{{ url_for('delete_notification', id=notification.id) }}" method="POST">
-                                                    <button type="submit" class="btn btn-danger">Delete</button>
-                                                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                                                </form>
+            <div class="card mt-3">
+                <h3>Your Notification Rules</h3>
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Keywords</th>
+                                <th>Timeframe</th>
+                                <th>Prompt</th>
+                                <th>Format</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for notification in notifications %}
+                                <tr>
+                                    <td>{{ notification.rule_name }}</td>
+                                    <td>{{ notification.keywords }}</td>
+                                    <td>{{ notification.timeframe.capitalize() }}</td>
+                                    <td>{{ notification.prompt_text|truncate(50) or 'None' }}</td>
+                                    <td>{{ notification.email_format.capitalize() }}</td>
+                                    <td>{{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                                    <td>
+                                        <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning">Edit</a>
+                                        <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}">Delete</button>
+                                        <div class="modal fade" id="deleteModal-{{ notification.id }}" tabindex="-1" aria-labelledby="deleteModalLabel-{{ notification.id }}" aria-hidden="true">
+                                            <div class="modal-dialog">
+                                                <div class="modal-content">
+                                                    <div class="modal-header">
+                                                        <h5 class="modal-title" id="deleteModalLabel-{{ notification.id }}">Confirm Delete</h5>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        Are you sure you want to delete the notification rule "{{ notification.rule_name }}"?
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <form action="{{ url_for('delete_notification', id=notification.id) }}" method="POST">
+                                                            <button type="submit" class="btn btn-danger">Delete</button>
+                                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                        </form>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                </div>
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         {% endif %}
     </div>
-    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+    <footer>
+        © 2025 PubMed Researcher. All rights reserved.
+    </footer>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

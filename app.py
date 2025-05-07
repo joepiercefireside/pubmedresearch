@@ -156,7 +156,9 @@ def schedule_notification_rules():
 
 @app.route('/')
 def index():
-    return render_template('index.html', username=current_user.email if current_user.is_authenticated else None)
+    if current_user.is_authenticated:
+        return redirect(url_for('search'))
+    return render_template('index.html', username=None)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -173,6 +175,8 @@ def register():
             cur.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s)", (email, password_hash))
             conn.commit()
             flash('Registration successful! Please log in.', 'success')
+            cur.close()
+            conn.close()
             return redirect(url_for('login'))
         cur.close()
         conn.close()
@@ -191,7 +195,7 @@ def login():
         conn.close()
         if user and check_password_hash(user[2], password):
             login_user(User(user[0], user[1]))
-            return redirect(url_for('index'))
+            return redirect(url_for('search'))
         flash('Invalid email or password.', 'error')
     return render_template('login.html', username=None)
 
@@ -227,8 +231,8 @@ def extract_keywords_and_intent(query):
     
     keywords = keywords[:3]
     
-    # Extract intent and timeframe
-    intent = {'focus': None, 'date': None}
+    # Extract intent, timeframe, and author
+    intent = {'focus': None, 'date': None, 'author': None}
     current_year = str(datetime.now().year)
     current_date = datetime.now().strftime('%Y/%m/%d')
     
@@ -241,6 +245,11 @@ def extract_keywords_and_intent(query):
         intent['focus'] = 'prevention'
     elif 'review' in query_lower or 'meta-analysis' in query_lower:
         intent['focus'] = 'review'
+    
+    # Author detection
+    author_match = re.search(r'(?:by|author:?)\s+([\w\s]+?)(?:\s+(?:in|from|since|\d{4}|$))', query_lower)
+    if author_match:
+        intent['author'] = author_match.group(1).strip()
     
     # Timeframe detection
     if 'this year' in query_lower or 'current year' in query_lower:
@@ -255,7 +264,7 @@ def extract_keywords_and_intent(query):
         intent['date'] = 'last+7+days[dp]'
     elif 'past day' in query_lower or 'last day' in query_lower or 'yesterday' in query_lower:
         intent['date'] = 'last+1+day[dp]'
-    elif since_match := re.search(r'since\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})', query_lower):
+    elif since_match := re.search(r'since\s+(january|february|march|april|may|june|july|august|septemb er|october|november|december)\s+(\d{4})', query_lower):
         month = {'january': '01', 'february': '02', 'march': '03', 'april': '04', 'may': '05', 'june': '06',
                  'july': '07', 'august': '08', 'september': '09', 'october': '10', 'november': '11', 'december': '12'}[since_match.group(1)]
         year = since_match.group(2)
@@ -264,10 +273,10 @@ def extract_keywords_and_intent(query):
         quarter = quarter_match.group(1).replace('quarter', 'q').lower()
         year = quarter_match.group(2) or current_year
         quarter_ranges = {
-            'q1': (f"{year}/01/01:{year}/03/31[dp]"),
-            'q2': (f"{year}/04/01:{year}/06/30[dp]"),
-            'q3': (f"{year}/07/01:{year}/09/30[dp]"),
-            'q4': (f"{year}/10/01:{year}/12/31[dp]")
+            'q1': f"{year}/01/01:{year}/03/31[dp]",
+            'q2': f"{year}/04/01:{year}/06/30[dp]",
+            'q3': f"{year}/07/01:{year}/09/30[dp]",
+            'q4': f"{year}/10/01:{year}/12/31[dp]"
         }
         intent['date'] = quarter_ranges[quarter]
     elif half_match := re.search(r'(?:first|second)\s+half\s+of\s+(\d{4})', query_lower):
@@ -328,6 +337,8 @@ def build_pubmed_query(keywords, intent):
             'review': '(review OR meta-analysis)'
         }
         query += f" AND {focus_terms[intent['focus']]}"
+    if intent.get('author'):
+        query += f" AND {intent['author']}[au]"
     if intent.get('date'):
         query += f" {intent['date']}"
     return query
@@ -396,7 +407,9 @@ def parse_prompt(prompt_text):
             'output_type': 'summary',
             'is_multi_paragraph': False,
             'is_cumulative': True,
-            'specific_instructions': None
+            'specific_instructions': None,
+            'task': None,
+            'limit_presentation': False
         }
     
     prompt_text_lower = prompt_text.lower()
@@ -404,7 +417,7 @@ def parse_prompt(prompt_text):
     
     # Extract number of results
     result_count = 20
-    if match := re.search(r'(?:top|return|summarize|include)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
+    if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
         result_count = min(int(match.group(1)), 20)  # Cap at 20 due to PubMed API
     elif 'top' in prompt_text_lower:
         result_count = 3  # Default for "top"
@@ -424,6 +437,12 @@ def parse_prompt(prompt_text):
     elif 'letter' in prompt_text_lower:
         output_type = 'letter'
         task = 'letter'
+    elif 'novel' in prompt_text_lower or 'write a novel' in prompt_text_lower:
+        output_type = 'novel'
+        task = 'novel'
+    elif 'rank' in prompt_text_lower or 'order by relevance' in prompt_text_lower:
+        output_type = 'rank'
+        task = 'rank'
     
     # Check for structural instructions
     is_multi_paragraph = ('multi-paragraph' in prompt_text_lower or 
@@ -435,6 +454,11 @@ def parse_prompt(prompt_text):
                         'per result' in prompt_text_lower or 
                         'per article' in prompt_text_lower or
                         'one paragraph each' in prompt_text_lower)
+    
+    # Check for limiting presentation
+    limit_presentation = ('limit to' in prompt_text_lower or 
+                         'show only' in prompt_text_lower or 
+                         'present only' in prompt_text_lower)
     
     # Extract specific instructions
     specific_instructions = {
@@ -452,7 +476,7 @@ def parse_prompt(prompt_text):
     
     logger.info(f"Parsed prompt: result_count={result_count}, output_type={output_type}, "
                 f"task={task}, multi_paragraph={is_multi_paragraph}, cumulative={is_cumulative}, "
-                f"instructions={specific_instructions}")
+                f"limit_presentation={limit_presentation}, instructions={specific_instructions}")
     
     return {
         'result_count': result_count,
@@ -460,7 +484,8 @@ def parse_prompt(prompt_text):
         'task': task,
         'is_multi_paragraph': is_multi_paragraph,
         'is_cumulative': is_cumulative,
-        'specific_instructions': specific_instructions
+        'specific_instructions': specific_instructions,
+        'limit_presentation': limit_presentation
     }
 
 def mock_llm_ranking(query, results, embeddings, intent=None, prompt_params=None):
@@ -489,7 +514,14 @@ def mock_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
             abstract_lower = result['abstract'].lower()
             focus_score = sum(1 for term in focus_terms if term in abstract_lower) / len(focus_terms)
         
-        weighted_score = (0.7 * similarity) + (0.2 * recency_bonus) + (focus_weight * focus_score)
+        # Boost score if author matches
+        author_score = 0
+        if intent and intent.get('author'):
+            author_lower = intent['author'].lower()
+            if author_lower in result['authors'].lower():
+                author_score = 0.3
+        
+        weighted_score = (0.7 * similarity) + (0.2 * recency_bonus) + (focus_weight * focus_score) + author_score
         scores.append((i, weighted_score))
     
     scores.sort(key=lambda x: x[1], reverse=True)
@@ -568,6 +600,17 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
                 )
                 output += f"Article {i}: {result['title']}\n{summary['text']}\n\n"
             return output
+        else:
+            combined_text = " ".join([r['abstract'] or r['title'] for r in results])
+            if is_multi_paragraph:
+                output = f"Multi-Paragraph Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
+                output += f"Paragraph 1: Research on {query} reveals a focus on {key_concepts_str}. Studies collectively indicate that {combined_text[:300]}... These findings highlight advancements in {query}.\n\n"
+                output += f"Paragraph 2: Further insights emphasize {key_concepts_str.split(', ')[-1] if concept_counts else 'ongoing research'}. The combined evidence suggests {combined_text[300:600]}... This underscores the importance of continued investigation.\n\n"
+                output += f"This summary synthesizes {len(results)} PubMed findings."
+            else:
+                output = f"Summary for '{query}' (Year: {target_year or 'Recent'}):\n\n"
+                output += f"Research on {query} centers on {key_concepts_str}. The collective findings indicate {combined_text[:300]}... This summary integrates {len(results)} articles."
+            return output
     
     if task == 'blog_post':
         tone = specific_instructions.get('tone', 'neutral') if specific_instructions else 'neutral'
@@ -605,6 +648,44 @@ def generate_prompt_output(query, results, prompt_text, output_type, is_multi_pa
         else:
             output += "No articles directly address this, but related insights are provided."
         output += f"\n\nThis answer synthesizes recent PubMed findings."
+        return output
+    
+    if task == 'novel':
+        tone = specific_instructions.get('tone', 'neutral') if specific_instructions else 'neutral'
+        output = f"A Novel Inspired by '{query}' Research (Year: {target_year or 'Recent'})\n\n"
+        output += f"Prologue\n"
+        output += f"In a world shaped by advances in {query}, scientists uncovered groundbreaking insights: {key_concepts_str}. This story weaves their discoveries into a narrative of hope and discovery.\n\n"
+        
+        for i, result in enumerate(results[:3], 1):  # Limit to 3 for novel
+            summary = generate_summary(
+                result['abstract'], query, prompt_text, 
+                title=result['title'], authors=result['authors'], 
+                journal=result['journal'], publication_date=result['publication_date'],
+                summary_length='detailed'
+            )
+            output += f"Chapter {i}: {result['title']}\n"
+            output += f"The researchers, led by {result['authors'].split(', ')[0]}, discovered {summary['text']}. Their findings sparked a new era in {query}.\n\n"
+        
+        output += "Epilogue\n"
+        output += f"The legacy of {query} research lived on, transforming lives through {key_concepts_str.split(', ')[0]}. The future holds endless possibilities.\n"
+        if tone == 'informal':
+            output = output.replace("discovered", "stumbled upon").replace("sparked", "kicked off")
+        elif tone == 'formal':
+            output = output.replace("weaves", "integrates").replace("sparked", "initiated")
+        return output
+    
+    if task == 'rank':
+        output = f"Ranked Results for '{query}' (Year: {target_year or 'Recent'}):\n\n"
+        for i, result in enumerate(results, 1):
+            summary = generate_summary(
+                result['abstract'], query, prompt_text, 
+                title=result['title'], authors=result['authors'], 
+                journal=result['journal'], publication_date=result['publication_date'],
+                summary_length='brief'
+            )
+            output += f"Rank {i}: {result['title']}\n"
+            output += f"{summary['text']}\n\n"
+        output += f"These {len(results)} articles are ordered by relevance to '{query}' based on content similarity and recency."
         return output
     
     if output_type == 'letter':
@@ -666,6 +747,7 @@ def search():
         is_multi_paragraph = prompt_params['is_multi_paragraph']
         is_cumulative = prompt_params['is_cumulative']
         specific_instructions = prompt_params['specific_instructions']
+        limit_presentation = prompt_params['limit_presentation']
         
         query_lower = query.lower()
         year_match = re.search(r'\b(20\d{2})\b', query_lower)
@@ -675,7 +757,7 @@ def search():
         api_key = os.environ.get('PUBMED_API_KEY')
         search_query = build_pubmed_query(keywords, intent)
         try:
-            esearch_result = esearch(search_query, retmax=result_count, api_key=api_key)
+            esearch_result = esearch(search_query, retmax=20, api_key=api_key)
             pmids = esearch_result['esearchresult']['idlist']
             if not pmids:
                 logger.info("No results with initial query")
@@ -727,7 +809,9 @@ def search():
             output_type, is_multi_paragraph, is_cumulative, task, specific_instructions
         )
         
-        result_summaries = list(zip(high_relevance, summaries))
+        # Determine results to display
+        display_results = high_relevance if limit_presentation else results
+        result_summaries = list(zip(display_results, summaries[:len(display_results)]))
         
         return render_template(
             'search.html', 
