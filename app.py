@@ -232,14 +232,21 @@ def extract_keywords(query):
         intent['date'] = f"{current_year}[dp]"
     elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
         intent['date'] = f"{year_match.group(1)}[dp]"
+    elif 'past month' in query_lower or 'last month' in query_lower:
+        intent['date'] = 'last+30+days[dp]'
+    elif 'past week' in query_lower or 'last week' in query_lower:
+        intent['date'] = 'last+7+days[dp]'
     elif 'recent' in query_lower:
         intent['date'] = 'last+5+years[dp]'
-    elif re.search(r'last\s+(\d+)\s+years?', query_lower):
-        years = re.search(r'last\s+(\d+)\s+years?', query_lower).group(1)
+    elif re.search(r'(?:last|past)\s+(\d+)\s+years?', query_lower):
+        years = re.search(r'(?:last|past)\s+(\d+)\s+years?', query_lower).group(1)
         intent['date'] = f"last+{years}+years[dp]"
-    elif re.search(r'past\s+(\d+)\s+years?', query_lower):
-        years = re.search(r'past\s+(\d+)\s+years?', query_lower).group(1)
-        intent['date'] = f"last+{years}+years[dp]"
+    elif re.search(r'(?:last|past)\s+(\d+)\s+months?', query_lower):
+        months = re.search(r'(?:last|past)\s+(\d+)\s+months?', query_lower).group(1)
+        intent['date'] = f"last+{int(months)*30}+days[dp]"
+    elif re.search(r'(?:last|past)\s+(\d+)\s+weeks?', query_lower):
+        weeks = re.search(r'(?:last|past)\s+(\d+)\s+weeks?', query_lower).group(1)
+        intent['date'] = f"last+{int(weeks)*7}+days[dp]"
     
     logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
     if not keywords:
@@ -294,6 +301,7 @@ def efetch(pmids, api_key=None):
     response.raise_for_status()
     return response.content
 
+def : 1.0
 def parse_efetch_xml(xml_content):
     root = ElementTree.fromstring(xml_content)
     articles = []
@@ -459,15 +467,17 @@ def search():
     if request.method == 'POST':
         query = request.form.get('query')
         prompt_id = request.form.get('prompt_id')
+        prompt_text = request.form.get('prompt_text')  # Get edited prompt text
         if not query:
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text)
         
         keywords, intent = extract_keywords(query)
         if not keywords:
-            return render_template('search.html', error="No valid keywords found", prompts=prompts)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text)
         
-        selected_prompt = next((p for p in prompts if str(p['id']) == prompt_id), None)
-        result_count, output_type, is_multi_paragraph, is_cumulative = parse_prompt(selected_prompt['prompt_text'] if selected_prompt else None)
+        # Use submitted prompt_text if provided, else fall back to selected prompt
+        selected_prompt_text = prompt_text if prompt_text else next((p['prompt_text'] for p in prompts if str(p['id']) == prompt_id), None)
+        result_count, output_type, is_multi_paragraph, is_cumulative = parse_prompt(selected_prompt_text)
         
         query_lower = query.lower()
         year_match = re.search(r'\b(20\d{2})\b', query_lower)
@@ -488,7 +498,7 @@ def search():
                     pmids = esearch_result['esearchresult']['idlist']
                 
                 if not pmids:
-                    return render_template('search.html', error="No results found", prompts=prompts, target_year=target_year)
+                    return render_template('search.html', error="No results found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year)
                 
                 efetch_xml = efetch(pmids, api_key=api_key)
                 results = parse_efetch_xml(efetch_xml)
@@ -502,7 +512,7 @@ def search():
                 conn.close()
             except Exception as e:
                 logger.error(f"PubMed API error: {str(e)}")
-                return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, target_year=target_year)
+                return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year)
         
         high_relevance = []
         embeddings = []
@@ -512,7 +522,7 @@ def search():
             embedding = generate_embedding(text) if text else None
             summary = generate_summary(
                 r['abstract'], query, 
-                selected_prompt['prompt_text'] if selected_prompt else None,
+                selected_prompt_text,
                 title=r['title'], authors=r['authors'], 
                 journal=r['journal'], publication_date=r['publication_date']
             )
@@ -533,7 +543,7 @@ def search():
         
         prompt_output = generate_prompt_output(
             query, high_relevance, 
-            selected_prompt['prompt_text'] if selected_prompt else None, 
+            selected_prompt_text, 
             output_type, is_multi_paragraph, is_cumulative
         )
         
@@ -544,12 +554,13 @@ def search():
             result_summaries=result_summaries,
             query=query, 
             prompts=prompts, 
-            prompt_text=selected_prompt['prompt_text'] if selected_prompt else None, 
+            prompt_id=prompt_id,
+            prompt_text=prompt_text,
             prompt_output=prompt_output,
             target_year=target_year
         )
     
-    return render_template('search.html', prompts=prompts)
+    return render_template('search.html', prompts=prompts, prompt_id='', prompt_text='')
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
