@@ -20,6 +20,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
+from openai import OpenAI
+import traceback
 
 load_dotenv()
 
@@ -58,26 +60,27 @@ def generate_embedding(text):
     model = load_embedding_model()
     return model.encode(text, convert_to_numpy=True)
 
-# xAI API call (placeholder; replace with actual xAI Grok API endpoint and parameters)
-def call_xai_api(prompt, context, api_key):
+# xAI Grok API call (adapted from your example)
+def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
-        url = "https://api.x.ai/v1/completions"  # Hypothetical endpoint
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": "grok-3",  # Adjust based on xAI's model name
-            "prompt": f"Context: {context}\n\nPrompt: {prompt}",
-            "max_tokens": 1000,
-            "temperature": 0.7
-        }
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        return response.json()['choices'][0]['text'].strip()
+        api_key = os.environ.get('XAI_API_KEY')
+        if not api_key:
+            logger.error("XAI_API_KEY not set")
+            return "Error: xAI API key not configured"
+        
+        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+        completion = client.chat.completions.create(
+            model="grok-3-latest",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
+            ],
+            max_tokens=1000  # Increased for flexibility
+        )
+        return completion.choices[0].message.content
     except Exception as e:
-        logger.error(f"xAI API error: {str(e)}")
-        return f"Error generating response: {str(e)}"
+        logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
+        return f"Fallback: Unable to generate AI summary. Please check API key or endpoint."
 
 # Database connection
 def get_db_connection():
@@ -123,9 +126,9 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         efetch_xml = efetch(pmids, api_key=api_key)
         results = parse_efetch_xml(efetch_xml)
         
-        # Use xAI API for prompt processing
+        # Use xAI Grok API for prompt processing
         context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
-        output = call_xai_api(prompt_text or "Summarize the provided research articles.", context, os.environ.get('XAI_API_KEY'))
+        output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
         
         if email_format == "list":
             content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100]}..." for r in results])
@@ -349,7 +352,7 @@ def build_pubmed_query(keywords, intent):
             query_parts.append('(cidp OR chronic+inflammatory+demyelinating+polyneuropathy)')
         else:
             query_parts.append(f"({kw.replace(' ', '+')})")
-    query = " OR ".join(query_parts)  # Use OR to broaden search
+    query = " OR ".join(query_parts)
     if intent.get('focus'):
         focus_terms = {
             'treatment': '(treatment OR therapy OR therapeutic)',
@@ -530,8 +533,8 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
     # Prepare context from results
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
     
-    # Use xAI API to generate response
-    output = call_xai_api(prompt_text or "Summarize the provided research articles.", context, os.environ.get('XAI_API_KEY'))
+    # Use xAI Grok API to generate response
+    output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
     
     logger.info(f"Generated prompt output: length={len(output)}")
     return output
