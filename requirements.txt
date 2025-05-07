@@ -14,6 +14,6 @@ python-dotenv==1.0.1
 transformers==4.41.2
 hf_xet==1.1.0
 jinja2==3.1.2
-python-apscheduler==3.10.4
+apscheduler==3.10.4
 python-sendgrid==6.11.0
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
