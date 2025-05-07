@@ -80,10 +80,16 @@ def load_user(user_id):
         return User(user[0], user[1])
     return None
 
-def run_notification_rule(rule_id, user_id, keywords, prompt_text, email_format, user_email):
-    logger.info(f"Running notification rule {rule_id} for user {user_id}, keywords: {keywords}")
+def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email):
+    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}")
     keywords_list = [k.strip() for k in keywords.split(',')]
-    intent = {'date': 'last+1+day[dp]'}  # Adjust based on timeframe
+    date_filters = {
+        'daily': 'last+1+day[dp]',
+        'weekly': 'last+7+days[dp]',
+        'monthly': 'last+30+days[dp]',
+        'annually': 'last+365+days[dp]'
+    }
+    intent = {'date': date_filters[timeframe]}
     search_query = build_pubmed_query(keywords_list, intent)
     try:
         api_key = os.environ.get('PUBMED_API_KEY')
@@ -96,18 +102,23 @@ def run_notification_rule(rule_id, user_id, keywords, prompt_text, email_format,
         efetch_xml = efetch(pmids, api_key=api_key)
         results = parse_efetch_xml(efetch_xml)
         
-        # Generate output
-        output_type = "summary" if prompt_text and "summary" in prompt_text.lower() else "list"
-        is_multi_paragraph = "multi-paragraph" in (prompt_text or "").lower()
+        output_type = "summary" if prompt_text and "summary" in prompt_text.lower() else email_format
+        is_multi_paragraph = "multi-paragraph" in (prompt_text or "").lower() or "two or three paragraph" in (prompt_text or "").lower()
         is_cumulative = True
         prompt_output = generate_prompt_output(keywords, results, prompt_text, output_type, is_multi_paragraph, is_cumulative)
         
-        # Send email
+        if email_format == "list":
+            content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100]}..." for r in results])
+        elif email_format == "detailed":
+            content = "\n".join([f"Title: {r['title']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}\nAbstract: {r['abstract']}\n" for r in results])
+        else:
+            content = prompt_output
+        
         message = Mail(
             from_email=Email("notifications@pubmedresearcher.com"),
             to_emails=To(user_email),
-            subject=f"PubMedResearcher Notification: {keywords}",
-            plain_text_content=prompt_output
+            subject=f"PubMedResearcher Notification: {rule_name}",
+            plain_text_content=content
         )
         response = sg.send(message)
         logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}")
@@ -115,16 +126,19 @@ def run_notification_rule(rule_id, user_id, keywords, prompt_text, email_format,
         logger.error(f"Error running notification rule {rule_id}: {str(e)}")
 
 def schedule_notification_rules():
+    scheduler.remove_all_jobs()
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT n.id, n.user_id, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
-                "FROM notifications n JOIN users u ON n.user_id = u.id")
+    cur.execute(
+        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
+        "FROM notifications n JOIN users u ON n.user_id = u.id"
+    )
     rules = cur.fetchall()
     cur.close()
     conn.close()
     
     for rule in rules:
-        rule_id, user_id, keywords, timeframe, prompt_text, email_format, user_email = rule
+        rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
         cron_trigger = {
             'daily': CronTrigger(hour=8, minute=0),
             'weekly': CronTrigger(day_of_week='mon', hour=8, minute=0),
@@ -134,11 +148,11 @@ def schedule_notification_rules():
         scheduler.add_job(
             run_notification_rule,
             trigger=cron_trigger,
-            args=[rule_id, user_id, keywords, prompt_text, email_format, user_email],
+            args=[rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email],
             id=f"notification_{rule_id}",
             replace_existing=True
         )
-    logger.info("Scheduled notification rules")
+    logger.info(f"Scheduled {len(rules)} notification rules")
 
 @app.route('/')
 def index():
@@ -660,7 +674,6 @@ def notifications():
                 )
                 conn.commit()
                 flash('Notification rule created successfully.', 'success')
-                # Reschedule jobs
                 schedule_notification_rules()
             except Exception as e:
                 conn.rollback()
