@@ -60,7 +60,7 @@ def generate_embedding(text):
     model = load_embedding_model()
     return model.encode(text, convert_to_numpy=True)
 
-# xAI Grok API call (adapted from your example)
+# xAI Grok API call (adapted from your example, adjusted for compatibility)
 def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
         api_key = os.environ.get('XAI_API_KEY')
@@ -68,16 +68,24 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
             logger.error("XAI_API_KEY not set")
             return "Error: xAI API key not configured"
         
-        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+        # Initialize OpenAI client with minimal arguments to avoid proxies issue
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.x.ai/v1"
+        )
+        logger.info(f"Sending Grok API request: prompt={query[:50]}..., context_length={len(context)}")
+        
         completion = client.chat.completions.create(
             model="grok-3-latest",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
             ],
-            max_tokens=1000  # Increased for flexibility
+            max_tokens=1000
         )
-        return completion.choices[0].message.content
+        response = completion.choices[0].message.content
+        logger.info(f"Grok API response received: length={len(response)}")
+        return response
     except Exception as e:
         logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
         return f"Fallback: Unable to generate AI summary. Please check API key or endpoint."

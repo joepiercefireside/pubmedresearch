@@ -16,5 +16,5 @@ hf_xet==1.1.0
 jinja2==3.1.2
 apscheduler==3.10.4
 sendgrid==6.11.0
-openai==1.30.1
+openai==1.50.0
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
