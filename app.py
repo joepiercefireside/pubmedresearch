@@ -301,7 +301,6 @@ def efetch(pmids, api_key=None):
     response.raise_for_status()
     return response.content
 
-def : 1.0
 def parse_efetch_xml(xml_content):
     root = ElementTree.fromstring(xml_content)
     articles = []
