@@ -198,13 +198,13 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         results = parse_efetch_xml(efetch_xml)
         
         # Use xAI Grok API for prompt processing
-        context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
+        context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
         output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
         
         if email_format == "list":
-            content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100]}..." for r in results])
+            content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100] or 'No abstract'}..." for r in results])
         elif email_format == "detailed":
-            content = "\n".join([f"Title: {r['title']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}\nAbstract: {r['abstract']}\n" for r in results])
+            content = "\n".join([f"Title: {r['title']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}\nAbstract: {r['abstract'] or 'No abstract'}\n" for r in results])
         else:
             content = output
         
@@ -301,7 +301,7 @@ def logout():
 
 def extract_keywords_and_intent(query):
     doc = nlp(query.lower())
-    stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on', 'this', 'year', 'provide', 'summary', 'recent', 'months', 'treatments'}
+    stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on', 'this', 'year', 'provide', 'summary', 'recent', 'months', 'treatments', 'tell', 'new', 'can', 'what', 'is'}
     
     # Extract keywords
     keywords = []
@@ -531,7 +531,7 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         # Prepare context for Grok
         articles_context = []
         for i, result in enumerate(results):
-            article_text = f"Title: {result['title']}\nAbstract: {result['abstract']}\nAuthors: {result['authors']}\nJournal: {result['journal']}\nDate: {result['publication_date']}"
+            article_text = f"Title: {result['title']}\nAbstract: {result['abstract'] or ''}\nAuthors: {result['authors']}\nJournal: {result['journal']}\nDate: {result['publication_date']}"
             articles_context.append(f"Article {i+1}: {article_text}")
         
         context = "\n\n".join(articles_context)
@@ -554,6 +554,9 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         # Parse Grok's JSON response
         try:
             ranking = json.loads(response)
+            # Handle case where response is {"articles": [...]}
+            if isinstance(ranking, dict) and 'articles' in ranking:
+                ranking = ranking['articles']
             if not isinstance(ranking, list):
                 raise ValueError("Grok response is not a list")
             
@@ -602,7 +605,7 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         recency_bonus = (pub_year - 2000) / (current_year - 2000)
         
         focus_score = 0
-        if focus_terms:
+        if focus_terms and result['abstract']:
             abstract_lower = result['abstract'].lower()
             focus_score = sum(1 for term in focus_terms if term in abstract_lower) / len(focus_terms)
         
@@ -670,7 +673,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
         return f"No results found for '{query}' matching criteria."
     
     # Prepare context from results
-    context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
+    context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
     
     # Use xAI Grok API to generate response
     output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)

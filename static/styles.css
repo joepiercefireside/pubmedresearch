@@ -94,6 +94,10 @@ footer {
     color: #4d5156;
     margin-bottom: 5px;
 }
+.result-snippet:empty:before {
+    content: "No abstract available";
+    color: #6c757d;
+}
 .result-meta {
     font-size: 0.85em;
     color: #6c757d;
