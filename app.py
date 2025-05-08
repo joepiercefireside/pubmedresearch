@@ -86,6 +86,18 @@ def get_search_progress(user_id, query):
     conn.close()
     return result if result else (None, None)
 
+def load_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        logger.info("Loading sentence-transformers model...")
+        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Model loaded.")
+    return embedding_model
+
+def generate_embedding(text):
+    model = load_embedding_model()
+    return model.encode(text, convert_to_numpy=True)
+
 # xAI Grok API call with enhanced retries
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(5),
@@ -678,10 +690,12 @@ def search_progress():
                 yield f"data: {{'status': 'error: User not authenticated'}}\n\n"
                 return
             query = request.args.get('query', '')
+            last_status = None
             while True:
                 status, timestamp = get_search_progress(current_user.id, query)
-                if status:
+                if status and status != last_status:
                     yield f"data: {{'status': '{status}'}}\n\n"
+                    last_status = status
                 if status in ["complete", "error"]:
                     break
                 time.sleep(1)
@@ -799,7 +813,6 @@ def search():
             prompts=prompts, 
             prompt_id=prompt_id,
             prompt_text=prompt_text,
-            prompt_output=prompt_output,
             target_year=target_year,
             username=current_user.email
         )

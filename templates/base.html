@@ -29,25 +29,16 @@
             color: #00689B;
             vertical-align: middle;
         }
-        .navbar {
-            background-color: #00689B;
-        }
-        .navbar-brand, .nav-link, .navbar-text {
-            color: white !important;
-        }
-        .navbar-brand:hover, .nav-link:hover {
-            color: #e0e0e0 !important;
-        }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg">
+    <nav class="navbar navbar-expand-lg" style="background-color: #00689B;">
         <div class="container-fluid">
             <a class="navbar-brand d-flex align-items-center" href="{{ url_for('index') }}">
                 <img src="{{ url_for('static', filename='images/logo.png') }}" alt="PubMed Researcher Logo" height="40">
-                <span class="ms-2">PubMed Research</span>
+                <span class="ms-2 text-white">PubMed Research</span>
             </a>
-            <a class="nav-link ms-3" href="{{ url_for('index') }}"><i class="bi bi-house me-1"></i>Home</a>
+            <a class="nav-link text-white ms-3" href="{{ url_for('index') }}"><i class="bi bi-house me-1"></i>Home</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
                 <span class="navbar-toggler-icon"></span>
             </button>
@@ -55,19 +46,19 @@
                 <ul class="navbar-nav ms-auto">
                     {% if current_user.is_authenticated %}
                         <li class="nav-item">
-                            <span class="navbar-text me-3">Hello, {{ current_user.email }}</span>
+                            <span class="navbar-text text-white me-3">Hello, {{ current_user.email }}</span>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('search') }}">Search</a>
+                            <a class="nav-link text-white" href="{{ url_for('search') }}">Search</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('prompt') }}">Prompts</a>
+                            <a class="nav-link text-white" href="{{ url_for('prompt') }}">Prompts</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('notifications') }}">Notifications</a>
+                            <a class="nav-link text-white" href="{{ url_for('notifications') }}">Notifications</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('logout') }}">Logout</a>
+                            <a class="nav-link text-white" href="{{ url_for('logout') }}">Logout</a>
                         </li>
                     {% endif %}
                 </ul>
