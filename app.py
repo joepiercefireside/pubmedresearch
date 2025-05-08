@@ -26,6 +26,7 @@ import traceback
 import openai
 import httpx.__version__
 import time
+import tenacity
 
 load_dotenv()
 
@@ -85,19 +86,13 @@ def get_search_progress(user_id, query):
     conn.close()
     return result if result else (None, None)
 
-def load_embedding_model():
-    global embedding_model
-    if embedding_model is None:
-        logger.info("Loading sentence-transformers model...")
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        logger.info("Model loaded.")
-    return embedding_model
-
-def generate_embedding(text):
-    model = load_embedding_model()
-    return model.encode(text, convert_to_numpy=True)
-
-# xAI Grok API call with increased retries
+# xAI Grok API call with enhanced retries
+@tenacity.retry(
+    stop=tenacity.stop_after_attempt(5),
+    wait=tenacity.wait_exponential(multiplier=1, min=2, max=10),
+    retry=tenacity.retry_if_exception_type((requests.exceptions.RequestException, Exception)),
+    before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
+)
 def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
         api_key = os.environ.get('XAI_API_KEY')
@@ -115,7 +110,7 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
                 {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
             ],
             max_tokens=1000,
-            timeout=30  # Increase timeout
+            timeout=30
         )
         response = completion.choices[0].message.content
         logger.info(f"Grok API response received: length={len(response)}")
@@ -538,6 +533,7 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
             {{"index": 1, "explanation": "Most relevant due to focus on query topic"}},
             {{"index": 2, "explanation": "Relevant but less specific"}}
         ]
+        If you cannot rank all articles, return as many as possible in valid JSON format.
         Articles:
         {context}
         """
@@ -710,6 +706,7 @@ def search():
         prompt_id = request.form.get('prompt_id')
         prompt_text = request.form.get('prompt_text')
         if not query:
+            update_search_progress(current_user.id, query, "error: Query cannot be empty")
             return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, username=current_user.email)
         
         # Update progress
@@ -789,15 +786,15 @@ def search():
             query, high_relevance, selected_prompt_text, prompt_params
         )
         
-        # Determine results to display
-        display_results = high_relevance if limit_presentation else results
-        result_summaries = list(zip(display_results, summaries[:len(display_results)]))
+        # Ensure partial results are displayed even if Grok fails
+        if prompt_output.startswith("Fallback:"):
+            flash("AI summarization failed, displaying raw results.", "warning")
         
         update_search_progress(current_user.id, query, "complete")
         
         return render_template(
             'search.html', 
-            result_summaries=result_summaries,
+            result_summaries=list(zip(high_relevance, summaries[:len(high_relevance)])),
             query=query, 
             prompts=prompts, 
             prompt_id=prompt_id,
