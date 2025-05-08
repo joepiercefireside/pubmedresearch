@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,6 +8,7 @@ import os
 import logging
 import json
 import requests
+import sqlite3
 from xml.etree import ElementTree
 from ratelimit import limits, sleep_and_retry
 from sentence_transformers import SentenceTransformer
@@ -24,6 +25,7 @@ from openai import OpenAI
 import traceback
 import openai
 import httpx.__version__
+import time
 
 load_dotenv()
 
@@ -54,6 +56,35 @@ scheduler.start()
 # SendGrid client
 sg = sendgrid.SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
 
+# Initialize SQLite database for search progress
+def init_progress_db():
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS search_progress
+                 (user_id TEXT, query TEXT, status TEXT, timestamp REAL)''')
+    conn.commit()
+    conn.close()
+
+init_progress_db()
+
+def update_search_progress(user_id, query, status):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO search_progress (user_id, query, status, timestamp) VALUES (?, ?, ?, ?)",
+              (user_id, query, status, time.time()))
+    conn.commit()
+    conn.close()
+    logger.info(f"Search progress updated: user={user_id}, query={query}, status={status}")
+
+def get_search_progress(user_id, query):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT status, timestamp FROM search_progress WHERE user_id = ? AND query = ? ORDER BY timestamp DESC LIMIT 1",
+              (user_id, query))
+    result = c.fetchone()
+    conn.close()
+    return result if result else (None, None)
+
 def load_embedding_model():
     global embedding_model
     if embedding_model is None:
@@ -66,7 +97,7 @@ def generate_embedding(text):
     model = load_embedding_model()
     return model.encode(text, convert_to_numpy=True)
 
-# xAI Grok API call (from LibraryBuilder)
+# xAI Grok API call with increased retries
 def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
         api_key = os.environ.get('XAI_API_KEY')
@@ -83,7 +114,8 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
             ],
-            max_tokens=1000
+            max_tokens=1000,
+            timeout=30  # Increase timeout
         )
         response = completion.choices[0].message.content
         logger.info(f"Grok API response received: length={len(response)}")
@@ -105,7 +137,7 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
                 ],
                 "max_tokens": 1000
             }
-            response = requests.post(url, headers=headers, json=data, proxies=None)
+            response = requests.post(url, headers=headers, json=data, proxies=None, timeout=30)
             response.raise_for_status()
             response_text = response.json()['choices'][0]['message']['content']
             logger.info(f"Fallback Grok API response received: length={len(response_text)}")
@@ -501,9 +533,10 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         ranking_prompt = f"""
         Given the query '{query}' and the following articles, rank the articles by relevance to the query from most to least relevant.
         Return a JSON list of article indices (1-based) in order of relevance, along with a brief explanation for each.
-        Example: [
-            {"index": 1, "explanation": "Most relevant due to focus on query topic"},
-            {"index": 2, "explanation": "Relevant but less specific"}
+        Ensure the response is valid JSON. Example:
+        [
+            {{"index": 1, "explanation": "Most relevant due to focus on query topic"}},
+            {{"index": 2, "explanation": "Relevant but less specific"}}
         ]
         Articles:
         {context}
@@ -519,10 +552,16 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
                 raise ValueError("Grok response is not a list")
             
             # Convert 1-based indices to 0-based
-            ranked_indices = [item['index'] - 1 for item in ranking if isinstance(item, dict) and 'index' in item]
-            # Ensure valid indices
-            ranked_indices = [i for i in ranked_indices if 0 <= i < len(results)]
-            # Add any missing indices (in case Grok doesn't rank all)
+            ranked_indices = []
+            for item in ranking:
+                if isinstance(item, dict) and 'index' in item:
+                    index = item['index']
+                    if isinstance(index, (int, str)) and str(index).isdigit():
+                        index = int(index) - 1
+                        if 0 <= index < len(results):
+                            ranked_indices.append(index)
+            
+            # Add missing indices
             missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
             ranked_indices.extend(missing_indices)
             
@@ -536,7 +575,7 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
     except Exception as e:
         logger.error(f"Grok ranking failed: {str(e)}")
     
-    # Fallback: Use embedding-based ranking (original mock_llm_ranking logic)
+    # Fallback: Use embedding-based ranking
     logger.info("Falling back to embedding-based ranking")
     query_embedding = generate_embedding(query)
     current_year = datetime.now().year
@@ -634,6 +673,28 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
     logger.info(f"Generated prompt output: length={len(output)}")
     return output
 
+@app.route('/search_progress', methods=['GET'])
+@login_required
+def search_progress():
+    def stream_progress():
+        try:
+            if not current_user or not hasattr(current_user, 'id'):
+                yield f"data: {{'status': 'error: User not authenticated'}}\n\n"
+                return
+            query = request.args.get('query', '')
+            while True:
+                status, timestamp = get_search_progress(current_user.id, query)
+                if status:
+                    yield f"data: {{'status': '{status}'}}\n\n"
+                if status in ["complete", "error"]:
+                    break
+                time.sleep(1)
+        except Exception as e:
+            logger.error(f"Error in search_progress: {str(e)}")
+            yield f"data: {{'status': 'error: {str(e)}'}}\n\n"
+    
+    return Response(stream_progress(), mimetype='text/event-stream')
+
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
 def search():
@@ -651,8 +712,12 @@ def search():
         if not query:
             return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, username=current_user.email)
         
+        # Update progress
+        update_search_progress(current_user.id, query, "contacting PubMed")
+        
         keywords, intent = extract_keywords_and_intent(query)
         if not keywords:
+            update_search_progress(current_user.id, query, "error: No valid keywords found")
             return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, username=current_user.email)
         
         selected_prompt_text = prompt_text if prompt_text else next((p['prompt_text'] for p in prompts if str(p['id']) == prompt_id), None)
@@ -668,12 +733,15 @@ def search():
         api_key = os.environ.get('PUBMED_API_KEY')
         search_query = build_pubmed_query(keywords, intent)
         try:
+            update_search_progress(current_user.id, query, "executing search")
             esearch_result = esearch(search_query, retmax=20, api_key=api_key)
             pmids = esearch_result['esearchresult']['idlist']
             if not pmids:
                 logger.info("No results with initial query")
+                update_search_progress(current_user.id, query, "error: No results found")
                 return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year, username=current_user.email)
             
+            update_search_progress(current_user.id, query, "fetching article details")
             efetch_xml = efetch(pmids, api_key=api_key)
             results = parse_efetch_xml(efetch_xml)
             
@@ -686,6 +754,7 @@ def search():
             conn.close()
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
+            update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year, username=current_user.email)
         
         high_relevance = []
@@ -712,8 +781,10 @@ def search():
             summaries.append(summary)
             embeddings.append(embedding)
         
+        update_search_progress(current_user.id, query, "ranking results")
         high_relevance, embeddings = grok_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
         
+        update_search_progress(current_user.id, query, "creating AI response")
         prompt_output = generate_prompt_output(
             query, high_relevance, selected_prompt_text, prompt_params
         )
@@ -721,6 +792,8 @@ def search():
         # Determine results to display
         display_results = high_relevance if limit_presentation else results
         result_summaries = list(zip(display_results, summaries[:len(display_results)]))
+        
+        update_search_progress(current_user.id, query, "complete")
         
         return render_template(
             'search.html', 
