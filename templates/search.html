@@ -1,41 +1,75 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="container">
-    <h1>Search PubMed</h1>
-    {% if error %}
-        <p class="error">{{ error }}</p>
-    {% endif %}
-    {% for message in get_flashed_messages(with_categories=true) %}
-        <p class="{{ message[0] }}">{{ message[1] }}</p>
-    {% endfor %}
-    <form id="search-form" method="POST">
-        <input type="text" name="query" placeholder="Enter search query" value="{{ query or '' }}" class="input-field">
-        <select name="prompt_id" class="input-field">
-            <option value="">Select a prompt</option>
-            {% for prompt in prompts %}
-                <option value="{{ prompt.id }}" {% if prompt_id == prompt.id|string %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-            {% endfor %}
-        </select>
-        <textarea name="prompt_text" placeholder="Enter custom prompt" class="input-field textarea">{{ prompt_text or '' }}</textarea>
-        <button type="submit" class="btn">Search</button>
-        <span id="search-spinner" class="spinner"></span>
-        <span id="search-status"></span>
-    </form>
-    {% if result_summaries %}
-        <h2>Search Results for "{{ query }}"</h2>
-        {% for result, summary in result_summaries %}
-            <div class="card">
-                <h3>{{ result.title }}</h3>
-                <p><strong>Authors:</strong> {{ result.authors }}</p>
-                <p><strong>Journal:</strong> {{ result.journal }}</p>
-                <p><strong>Date:</strong> {{ result.publication_date }}</p>
-                <p>{{ summary.text }}...</p>
-            </div>
-        {% endfor %}
-        {% if prompt_output %}
-            <h2>Prompt Output</h2>
-            <p>{{ prompt_output | replace('\n', '<br>') | safe }}</p>
+    <div class="card">
+        <h2>Search PubMed</h2>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else 'warning' if category == 'warning' else 'success' }} mt-3">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        {% if error %}
+            <div class="alert alert-danger mt-3">{{ error }}</div>
         {% endif %}
+        <form id="search-form" method="POST">
+            <div class="mb-3">
+                <label for="query" class="form-label">Search Query</label>
+                <input type="text" class="form-control" id="query" name="query" placeholder="Enter search query" value="{{ query or '' }}">
+            </div>
+            <div class="mb-3">
+                <label for="prompt_id" class="form-label">Select Prompt</label>
+                <select class="form-control" id="prompt_id" name="prompt_id">
+                    <option value="">Select a prompt</option>
+                    {% for prompt in prompts %}
+                        <option value="{{ prompt.id }}" {% if prompt_id == prompt.id|string %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="prompt_text" class="form-label">Custom Prompt (Optional)</label>
+                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter custom prompt">{{ prompt_text or '' }}</textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Search</button>
+            <span id="search-spinner" class="spinner"></span>
+            <span id="search-status" class="search-status"></span>
+        </form>
+    </div>
+    {% if result_summaries %}
+        <div class="card mt-3">
+            <h3>Search Results for "{{ query }}"</h3>
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Authors</th>
+                            <th>Journal</th>
+                            <th>Date</th>
+                            <th>Summary</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for result, summary in result_summaries %}
+                            <tr>
+                                <td>{{ result.title }}</td>
+                                <td>{{ result.authors }}</td>
+                                <td>{{ result.journal }}</td>
+                                <td>{{ result.publication_date }}</td>
+                                <td>{{ summary.text|truncate(200) }}...</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if prompt_output %}
+                <h4>Prompt Output</h4>
+                <p>{{ prompt_output | replace('\n', '<br>') | safe }}</p>
+            {% endif %}
+        </div>
     {% endif %}
 </div>
 <script>
