@@ -475,8 +475,8 @@ def parse_efetch_xml(xml_content):
     root = ElementTree.fromstring(xml_content)
     articles = []
     for article in root.findall(".//PubmedArticle"):
-        pmid = article.find(".//PMID").text
-        title = article.find(".//ArticleTitle").text
+        pmid = article.find(".//PMID").text if article.find(".//PMID") is not None else ""
+        title = article.find(".//ArticleTitle").text if article.find(".//ArticleTitle") is not None else ""
         abstract = article.find(".//AbstractText")
         abstract = abstract.text if abstract is not None else ""
         authors = [author.find("LastName").text for author in article.findall(".//Author") 
@@ -522,9 +522,6 @@ def parse_prompt(prompt_text):
     }
 
 def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None):
-    """
-    Rank results using Grok API for relevance scoring, with fallback to embedding-based ranking.
-    """
     result_count = prompt_params.get('result_count', 20) if prompt_params else 20
     ranked_results = []
     ranked_embeddings = []
@@ -538,14 +535,14 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         
         context = "\n\n".join(articles_context)
         ranking_prompt = f"""
-        Given the query '{query}' and the following articles, rank the articles by relevance to the query from most to least relevant.
-        Return a JSON list of article indices (1-based) in order of relevance, along with a brief explanation for each.
+        Given the query '{query}', rank the following articles by relevance to the specific topic and year in the query.
+        Focus on articles that directly address the query's topic (e.g., specific condition and treatment) and match the specified year.
+        Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
         Ensure the response is valid JSON. Example:
         [
-            {{"index": 1, "explanation": "Most relevant due to focus on query topic"}},
-            {{"index": 2, "explanation": "Relevant but less specific"}}
+            {{"index": 1, "explanation": "Directly addresses diabetic neuropathic pain treatments in 2024"}},
+            {{"index": 2, "explanation": "Discusses related treatments but less specific"}}
         ]
-        If you cannot rank all articles, return as many as possible in valid JSON format.
         Articles:
         {context}
         """
@@ -661,8 +658,8 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
         filtered_results = [r for r in results if r['publication_date'] == target_year]
         logger.info(f"After year filter ({target_year}): {len(filtered_results)} results")
         if len(filtered_results) < result_count:
-            # Relax filter to include more recent years
-            filtered_results = results[:result_count]  # Use top results regardless of year
+            # Relax filter to include more recent years, but prioritize target year
+            filtered_results = sorted(results, key=lambda x: abs(int(x['publication_date'] or 2000) - int(target_year)), reverse=True)[:result_count]
             logger.info(f"Relaxed year filter, using top {len(filtered_results)} results")
     
     # Ensure at least result_count results (or all available) are used
@@ -721,7 +718,7 @@ def search():
         prompt_text = request.form.get('prompt_text')
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, username=current_user.email)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], username=current_user.email)
         
         # Update progress
         update_search_progress(current_user.id, query, "contacting PubMed")
@@ -729,7 +726,7 @@ def search():
         keywords, intent = extract_keywords_and_intent(query)
         if not keywords:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, username=current_user.email)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], username=current_user.email)
         
         selected_prompt_text = prompt_text if prompt_text else next((p['prompt_text'] for p in prompts if str(p['id']) == prompt_id), None)
         prompt_params = parse_prompt(selected_prompt_text)
@@ -750,7 +747,7 @@ def search():
             if not pmids:
                 logger.info("No results with initial query")
                 update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year, username=current_user.email)
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
             
             update_search_progress(current_user.id, query, "fetching article details")
             efetch_xml = efetch(pmids, api_key=api_key)
@@ -766,7 +763,7 @@ def search():
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, target_year=target_year, username=current_user.email)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
         
         high_relevance = []
         embeddings = []
@@ -806,18 +803,21 @@ def search():
         
         update_search_progress(current_user.id, query, "complete")
         
+        # Pass both high_relevance (for summaries) and results (for full table)
         return render_template(
             'search.html', 
             result_summaries=list(zip(high_relevance, summaries[:len(high_relevance)])),
+            results=results,  # Full result set for table
             query=query, 
             prompts=prompts, 
             prompt_id=prompt_id,
             prompt_text=prompt_text,
+            prompt_output=prompt_output,
             target_year=target_year,
             username=current_user.email
         )
     
-    return render_template('search.html', prompts=prompts, prompt_id='', prompt_text='', username=current_user.email)
+    return render_template('search.html', prompts=prompts, prompt_id='', prompt_text='', results=[], result_summaries=[], username=current_user.email)
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
@@ -845,7 +845,7 @@ def prompt():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
-                (current_user.id,))
+                (current_user.id))
     prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
     conn.close()
