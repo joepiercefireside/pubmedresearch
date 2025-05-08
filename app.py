@@ -297,29 +297,29 @@ def logout():
 
 def extract_keywords_and_intent(query):
     # Use Grok to understand query intent and extract keywords
-    intent_prompt = f"""
-    Analyze the following medical research query and extract its intent and keywords for a PubMed API search.
-    - Identify the core topic (e.g., disease, condition).
-    - Identify the focus (e.g., treatment, diagnosis, prevention, review).
-    - Extract specific terms (e.g., 'new treatment', 'stem cell therapy').
-    - Identify the timeframe (e.g., specific year, recent).
-    - Identify any author names if present.
-    - Return a JSON object with:
-      - 'keywords': List of search terms (prioritize specific phrases, include MeSH terms if applicable).
-      - 'intent': Dictionary with 'topic', 'focus', 'date', 'author' (null if not specified).
-    Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax.
-    Query: {query}
-    Example output:
-    {
-      "keywords": ["diabetes", "new treatment", "insulin therapy"],
-      "intent": {
-        "topic": "diabetes",
-        "focus": "treatment",
-        "date": "2025[dp]",
-        "author": null
-      }
-    }
-    """
+    intent_prompt = """
+Analyze the following medical research query and extract its intent and keywords for a PubMed API search.
+- Identify the core topic (e.g., disease, condition).
+- Identify the focus (e.g., treatment, diagnosis, prevention, review).
+- Extract specific terms (e.g., 'new treatment', 'stem cell therapy').
+- Identify the timeframe (e.g., specific year, recent).
+- Identify any author names if present.
+- Return a JSON object with:
+  - 'keywords': List of search terms (prioritize specific phrases, include MeSH terms if applicable).
+  - 'intent': Dictionary with 'topic', 'focus', 'date', 'author' (null if not specified).
+Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax.
+Query: {query}
+Example output:
+{
+  "keywords": ["diabetes", "new treatment", "insulin therapy"],
+  "intent": {
+    "topic": "diabetes",
+    "focus": "treatment",
+    "date": "2025[dp]",
+    "author": null
+  }
+}
+""".format(query=query)
     try:
         response = query_grok_api(query, "", prompt=intent_prompt)
         result = json.loads(response)
@@ -328,7 +328,7 @@ def extract_keywords_and_intent(query):
         logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
         if not keywords:
             logger.warning("No keywords extracted, using fallback")
-            keywords = [word for word in query.lower().split() if len(word) > 1][:3]
+            keywords = [word for word in query.lower().split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for'} and len(word) > 1][:3]
         return keywords, intent
     except Exception as e:
         logger.error(f"Error extracting intent with Grok: {str(e)}")
@@ -467,18 +467,18 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         
         context = "\n\n".join(articles_context)
         ranking_prompt = f"""
-        Given the query '{query}', rank the following articles by relevance to new treatments for diabetes in 2025.
-        Focus on articles that directly address diabetes (type 1 or type 2) and describe novel treatments, therapies, or therapeutic advancements (e.g., medications, stem cell therapy, insulin delivery) published in the specified year.
-        Exclude articles that do not specifically discuss diabetes treatments, such as those about unrelated medical conditions, plants, or general health topics.
-        Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
-        Ensure the response is valid JSON. Example:
-        [
-            {{"index": 1, "explanation": "Describes a new insulin therapy for diabetes in 2025"}},
-            {{"index": 2, "explanation": "Discusses stem cell therapy for diabetes but less specific"}}
-        ]
-        Articles:
-        {context}
-        """
+Given the query '{query}', rank the following articles by relevance to new treatments for diabetes in 2025.
+Focus on articles that directly address diabetes (type 1 or type 2) and describe novel treatments, therapies, or therapeutic advancements (e.g., medications, stem cell therapy, insulin delivery) published in the specified year.
+Exclude articles that do not specifically discuss diabetes treatments, such as those about unrelated medical conditions, plants, or general health topics.
+Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
+Ensure the response is valid JSON. Example:
+[
+    {{"index": 1, "explanation": "Describes a new insulin therapy for diabetes in 2025"}},
+    {{"index": 2, "explanation": "Discusses stem cell therapy for diabetes but less specific"}}
+]
+Articles:
+{context}
+"""
         
         response = query_grok_api(query, context, prompt=ranking_prompt)
         logger.info(f"Grok ranking response: {response[:200]}...")
