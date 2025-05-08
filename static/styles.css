@@ -36,9 +36,6 @@ body {
 .alert {
     margin-top: 20px;
 }
-.table {
-    margin-top: 20px;
-}
 footer {
     text-align: center;
     padding: 20px;
@@ -72,4 +69,32 @@ footer {
     margin-left: 10px;
     color: #00689B;
     vertical-align: middle;
+}
+.search-results {
+    margin-top: 20px;
+}
+.search-result {
+    margin-bottom: 20px;
+}
+.result-title {
+    font-size: 1.2em;
+    color: #1a0dab;
+    text-decoration: none;
+}
+.result-title:hover {
+    text-decoration: underline;
+}
+.result-url {
+    color: #006621;
+    font-size: 0.9em;
+    margin-bottom: 5px;
+}
+.result-snippet {
+    font-size: 0.95em;
+    color: #4d5156;
+    margin-bottom: 5px;
+}
+.result-meta {
+    font-size: 0.85em;
+    color: #6c757d;
 }

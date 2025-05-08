@@ -41,38 +41,26 @@
     </div>
     {% if prompt_output %}
         <div class="card mt-3">
-            <h3>Prompt Output</h3>
+            <h3>AI Summary for "{{ query }}"</h3>
             <p>{{ prompt_output | replace('\n', '<br>') | safe }}</p>
         </div>
     {% endif %}
     {% if results %}
         <div class="card mt-3">
-            <h3>Search Results for "{{ query }}"</h3>
-            <div class="table-responsive">
-                <table class="table table-striped table-hover">
-                    <thead>
-                        <tr>
-                            <th>Title</th>
-                            <th>Authors</th>
-                            <th>Journal</th>
-                            <th>Date</th>
-                            <th>Summary</th>
-                            <th>Link</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for result, summary in result_summaries %}
-                            <tr>
-                                <td>{{ result.title }}</td>
-                                <td>{{ result.authors }}</td>
-                                <td>{{ result.journal }}</td>
-                                <td>{{ result.publication_date }}</td>
-                                <td>{{ summary.text|truncate(200) }}...</td>
-                                <td><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank">PubMed</a></td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+            <h3>All Search Results for "{{ query }}"</h3>
+            <div class="search-results">
+                {% for result in results %}
+                    <div class="search-result">
+                        <h4><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank" class="result-title">{{ result.title }}</a></h4>
+                        <div class="result-url">https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/</div>
+                        <p class="result-snippet">{{ result.abstract|truncate(300) }}...</p>
+                        <div class="result-meta">
+                            <span>{{ result.authors }}</span> | 
+                            <span>{{ result.journal }}</span> | 
+                            <span>{{ result.publication_date }}</span>
+                        </div>
+                    </div>
+                {% endfor %}
             </div>
         </div>
     {% endif %}
@@ -122,26 +110,4 @@
         updatePromptText();
     };
 </script>
-<style>
-    .spinner {
-        display: none;
-        border: 4px solid #f3f3f3;
-        border-top: 4px solid #00689B;
-        border-radius: 50%;
-        width: 24px;
-        height: 24px;
-        animation: spin 1s linear infinite;
-        margin-left: 10px;
-        vertical-align: middle;
-    }
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-    .search-status {
-        margin-left: 10px;
-        color: #00689B;
-        vertical-align: middle;
-    }
-</style>
 {% endblock %}

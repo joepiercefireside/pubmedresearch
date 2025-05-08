@@ -485,6 +485,7 @@ def parse_efetch_xml(xml_content):
         journal = journal.text if journal is not None else ""
         pub_date = article.find(".//PubDate/Year")
         pub_date = pub_date.text if pub_date is not None else ""
+        logger.info(f"Parsed article: PMID={pmid}, Date={pub_date}")
         articles.append({
             "id": pmid,
             "title": title,
@@ -647,7 +648,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
     # Log initial results
     logger.info(f"Initial results count: {len(results)}")
     
-    # Apply year filter if specified, but relax if too few results
+    # Apply year filter if specified
     query_lower = query.lower()
     year_match = re.search(r'\b(20\d{2})\b', query_lower)
     target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
@@ -657,10 +658,9 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
     if target_year:
         filtered_results = [r for r in results if r['publication_date'] == target_year]
         logger.info(f"After year filter ({target_year}): {len(filtered_results)} results")
-        if len(filtered_results) < result_count:
-            # Relax filter to include more recent years, but prioritize target year
-            filtered_results = sorted(results, key=lambda x: abs(int(x['publication_date'] or 2000) - int(target_year)), reverse=True)[:result_count]
-            logger.info(f"Relaxed year filter, using top {len(filtered_results)} results")
+        if not filtered_results:
+            flash(f"No results found for {target_year}. Displaying all available results.", "warning")
+            filtered_results = results  # Fall back to all results with warning
     
     # Ensure at least result_count results (or all available) are used
     context_results = filtered_results[:result_count]
@@ -803,11 +803,11 @@ def search():
         
         update_search_progress(current_user.id, query, "complete")
         
-        # Pass both high_relevance (for summaries) and results (for full table)
+        # Pass both high_relevance (for summaries) and results (for full list)
         return render_template(
             'search.html', 
             result_summaries=list(zip(high_relevance, summaries[:len(high_relevance)])),
-            results=results,  # Full result set for table
+            results=results,  # Full result set for Google-style list
             query=query, 
             prompts=prompts, 
             prompt_id=prompt_id,
@@ -845,7 +845,7 @@ def prompt():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
-                (current_user.id))
+                (current_user.id,))
     prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
     conn.close()
