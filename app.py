@@ -44,7 +44,7 @@ logger.info(f"httpx version: {httpx.__version__}")
 # Load spaCy model
 nlp = spacy.load('en_core_web_sm')
 
-# Initialize embedding model for ranking
+# Initialize embedding model for fallback ranking
 embedding_model = None
 
 # Initialize scheduler
@@ -472,10 +472,8 @@ def parse_prompt(prompt_text):
     elif 'top' in prompt_text_lower:
         result_count = 3  # Default for "top"
     
-    # Check for limiting presentation
-    limit_presentation = ('limit to' in prompt_text_lower or 
-                         'show only' in prompt_text_lower or 
-                         'present only' in prompt_text_lower)
+    # Check for limiting presentation (only for display, not context)
+    limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
     
     logger.info(f"Parsed prompt: result_count={result_count}, limit_presentation={limit_presentation}")
     
@@ -484,12 +482,66 @@ def parse_prompt(prompt_text):
         'limit_presentation': limit_presentation
     }
 
-def mock_llm_ranking(query, results, embeddings, intent=None, prompt_params=None):
+def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None):
+    """
+    Rank results using Grok API for relevance scoring, with fallback to embedding-based ranking.
+    """
+    result_count = prompt_params.get('result_count', 20) if prompt_params else 20
+    ranked_results = []
+    ranked_embeddings = []
+    
+    try:
+        # Prepare context for Grok
+        articles_context = []
+        for i, result in enumerate(results):
+            article_text = f"Title: {result['title']}\nAbstract: {result['abstract']}\nAuthors: {result['authors']}\nJournal: {result['journal']}\nDate: {result['publication_date']}"
+            articles_context.append(f"Article {i+1}: {article_text}")
+        
+        context = "\n\n".join(articles_context)
+        ranking_prompt = f"""
+        Given the query '{query}' and the following articles, rank the articles by relevance to the query from most to least relevant.
+        Return a JSON list of article indices (1-based) in order of relevance, along with a brief explanation for each.
+        Example: [
+            {"index": 1, "explanation": "Most relevant due to focus on query topic"},
+            {"index": 2, "explanation": "Relevant but less specific"}
+        ]
+        Articles:
+        {context}
+        """
+        
+        response = query_grok_api(query, context, prompt=ranking_prompt)
+        logger.info(f"Grok ranking response: {response[:200]}...")
+        
+        # Parse Grok's JSON response
+        try:
+            ranking = json.loads(response)
+            if not isinstance(ranking, list):
+                raise ValueError("Grok response is not a list")
+            
+            # Convert 1-based indices to 0-based
+            ranked_indices = [item['index'] - 1 for item in ranking if isinstance(item, dict) and 'index' in item]
+            # Ensure valid indices
+            ranked_indices = [i for i in ranked_indices if 0 <= i < len(results)]
+            # Add any missing indices (in case Grok doesn't rank all)
+            missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
+            ranked_indices.extend(missing_indices)
+            
+            ranked_results = [results[i] for i in ranked_indices]
+            ranked_embeddings = [embeddings[i] for i in ranked_indices]
+            logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices}")
+            return ranked_results[:result_count], ranked_embeddings[:result_count]
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Error parsing Grok ranking response: {str(e)}")
+            # Fall through to fallback ranking
+    except Exception as e:
+        logger.error(f"Grok ranking failed: {str(e)}")
+    
+    # Fallback: Use embedding-based ranking (original mock_llm_ranking logic)
+    logger.info("Falling back to embedding-based ranking")
     query_embedding = generate_embedding(query)
     current_year = datetime.now().year
     scores = []
     
-    # Adjust relevance based on intent
     focus_keywords = {
         'treatment': ['treatment', 'therapy', 'therapeutic', 'intervention'],
         'diagnosis': ['diagnosis', 'diagnostic', 'detection'],
@@ -504,13 +556,11 @@ def mock_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         pub_year = int(result['publication_date']) if result['publication_date'].isdigit() else 2000
         recency_bonus = (pub_year - 2000) / (current_year - 2000)
         
-        # Boost score if abstract contains focus terms
         focus_score = 0
         if focus_terms:
             abstract_lower = result['abstract'].lower()
             focus_score = sum(1 for term in focus_terms if term in abstract_lower) / len(focus_terms)
         
-        # Boost score if author matches
         author_score = 0
         if intent and intent.get('author'):
             author_lower = intent['author'].lower()
@@ -522,14 +572,11 @@ def mock_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
     
     scores.sort(key=lambda x: x[1], reverse=True)
     ranked_indices = [i for i, _ in scores]
-    
-    # Apply top_n from prompt if specified
-    top_n = prompt_params['result_count'] if prompt_params and prompt_params.get('limit_presentation') else None
-    if top_n:
-        ranked_indices = ranked_indices[:top_n]
+    ranked_indices = ranked_indices[:max(result_count, len(results))]
     
     ranked_results = [results[i] for i in ranked_indices]
     ranked_embeddings = [embeddings[i] for i in ranked_indices]
+    logger.info(f"Fallback ranked {len(ranked_results)} results")
     return ranked_results, ranked_embeddings
 
 def generate_summary(abstract, query, title=None, authors=None, journal=None, publication_date=None):
@@ -553,17 +600,33 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
     if not results:
         return f"No results found for '{query}'."
     
+    # Log initial results
+    logger.info(f"Initial results count: {len(results)}")
+    
+    # Apply year filter if specified, but relax if too few results
     query_lower = query.lower()
     year_match = re.search(r'\b(20\d{2})\b', query_lower)
     target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
+    result_count = prompt_params.get('result_count', 20) if prompt_params else 20
+    
+    filtered_results = results
     if target_year:
         filtered_results = [r for r in results if r['publication_date'] == target_year]
-        if not filtered_results:
-            return f"No results found for '{query}' in {target_year}. Try broadening the search to recent years."
-        results = filtered_results
+        logger.info(f"After year filter ({target_year}): {len(filtered_results)} results")
+        if len(filtered_results) < result_count:
+            # Relax filter to include more recent years
+            filtered_results = results[:result_count]  # Use top results regardless of year
+            logger.info(f"Relaxed year filter, using top {len(filtered_results)} results")
+    
+    # Ensure at least result_count results (or all available) are used
+    context_results = filtered_results[:result_count]
+    logger.info(f"Context results count: {len(context_results)}")
+    
+    if not context_results:
+        return f"No results found for '{query}' matching criteria."
     
     # Prepare context from results
-    context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
+    context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
     
     # Use xAI Grok API to generate response
     output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
@@ -649,7 +712,7 @@ def search():
             summaries.append(summary)
             embeddings.append(embedding)
         
-        high_relevance, embeddings = mock_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
+        high_relevance, embeddings = grok_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
         
         prompt_output = generate_prompt_output(
             query, high_relevance, selected_prompt_text, prompt_params
