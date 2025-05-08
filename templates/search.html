@@ -53,7 +53,7 @@
                     <div class="search-result">
                         <h4><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank" class="result-title">{{ result.title }}</a></h4>
                         <div class="result-url">https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/</div>
-                        <p class="result-snippet">{{ result.abstract|truncate(300) }}...</p>
+                        <p class="result-snippet">{{ result.abstract|default('')|truncate(300) }}...</p>
                         <div class="result-meta">
                             <span>{{ result.authors }}</span> | 
                             <span>{{ result.journal }}</span> | 

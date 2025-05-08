@@ -478,14 +478,14 @@ def parse_efetch_xml(xml_content):
         pmid = article.find(".//PMID").text if article.find(".//PMID") is not None else ""
         title = article.find(".//ArticleTitle").text if article.find(".//ArticleTitle") is not None else ""
         abstract = article.find(".//AbstractText")
-        abstract = abstract.text if abstract is not None else ""
+        abstract = abstract.text or "" if abstract is not None else ""
         authors = [author.find("LastName").text for author in article.findall(".//Author") 
                    if author.find("LastName") is not None]
         journal = article.find(".//Journal/Title")
         journal = journal.text if journal is not None else ""
         pub_date = article.find(".//PubDate/Year")
         pub_date = pub_date.text if pub_date is not None else ""
-        logger.info(f"Parsed article: PMID={pmid}, Date={pub_date}")
+        logger.info(f"Parsed article: PMID={pmid}, Date={pub_date}, Abstract={'Present' if abstract else 'Missing'}")
         articles.append({
             "id": pmid,
             "title": title,
