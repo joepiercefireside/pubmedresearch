@@ -22,6 +22,8 @@ import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
 from openai import OpenAI
 import traceback
+import openai
+import httpx.__version__
 
 load_dotenv()
 
@@ -34,6 +36,10 @@ login_manager.login_view = 'login'
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Log dependency versions
+logger.info(f"openai version: {openai.__version__}")
+logger.info(f"httpx version: {httpx.__version__}")
 
 # Load spaCy model
 nlp = spacy.load('en_core_web_sm')
@@ -60,7 +66,7 @@ def generate_embedding(text):
     model = load_embedding_model()
     return model.encode(text, convert_to_numpy=True)
 
-# xAI Grok API call (adapted from your example, adjusted for compatibility)
+# xAI Grok API call (from LibraryBuilder)
 def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
         api_key = os.environ.get('XAI_API_KEY')
@@ -68,11 +74,7 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
             logger.error("XAI_API_KEY not set")
             return "Error: xAI API key not configured"
         
-        # Initialize OpenAI client with minimal arguments to avoid proxies issue
-        client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.x.ai/v1"
-        )
+        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
         logger.info(f"Sending Grok API request: prompt={query[:50]}..., context_length={len(context)}")
         
         completion = client.chat.completions.create(
@@ -88,7 +90,29 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
         return response
     except Exception as e:
         logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
-        return f"Fallback: Unable to generate AI summary. Please check API key or endpoint."
+        # Fallback: Basic requests-based API call
+        try:
+            url = "https://api.x.ai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "model": "grok-3-latest",
+                "messages": [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
+                ],
+                "max_tokens": 1000
+            }
+            response = requests.post(url, headers=headers, json=data, proxies=None)
+            response.raise_for_status()
+            response_text = response.json()['choices'][0]['message']['content']
+            logger.info(f"Fallback Grok API response received: length={len(response_text)}")
+            return response_text
+        except Exception as fallback_e:
+            logger.error(f"Fallback API call failed: {str(fallback_e)}")
+            return f"Fallback: Unable to generate AI summary. Please check API key or endpoint."
 
 # Database connection
 def get_db_connection():
