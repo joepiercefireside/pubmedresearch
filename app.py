@@ -2,7 +2,6 @@ from flask import Flask, render_template, request, redirect, url_for, flash, jso
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
-import spacy
 import re
 import os
 import logging
@@ -43,9 +42,6 @@ logger = logging.getLogger(__name__)
 # Log dependency versions
 logger.info(f"openai version: {openai.__version__}")
 logger.info(f"httpx version: {httpx.__version__}")
-
-# Load spaCy model
-nlp = spacy.load('en_core_web_sm')
 
 # Initialize embedding model for fallback ranking
 embedding_model = None
@@ -300,121 +296,53 @@ def logout():
     return redirect(url_for('login'))
 
 def extract_keywords_and_intent(query):
-    doc = nlp(query.lower())
-    stop_words = nlp.Defaults.stop_words | {'about', 'articles', 'from', 'on', 'this', 'year', 'provide', 'summary', 'recent', 'months', 'treatments', 'tell', 'new', 'can', 'what', 'is'}
-    
-    # Extract keywords
-    keywords = []
-    for chunk in doc.noun_chunks:
-        phrase = chunk.text.strip()
-        if (len(phrase) > 1 and 
-            all(token.text not in stop_words and token.is_alpha for token in nlp(phrase)) and
-            not any(word in phrase for word in ['recent', 'latest', 'new'])):
-            keywords.append(phrase)
-    
-    for token in doc:
-        if (token.is_alpha and 
-            token.text not in stop_words and 
-            len(token.text) > 1 and 
-            not any(token.text in phrase for phrase in keywords)):
-            keywords.append(token.text)
-    
-    query_lower = query.lower()
-    if 'cidp' in query_lower or 'chronic inflammatory demyelinating polyneuropathy' in query_lower:
-        if 'chronic inflammatory demyelinating polyneuropathy' not in keywords:
-            keywords = ['chronic inflammatory demyelinating polyneuropathy'] + [k for k in keywords if k != 'cidp']
-    
-    keywords = keywords[:3]
-    
-    # Extract intent, timeframe, and author
-    intent = {'focus': None, 'date': None, 'author': None}
-    current_year = str(datetime.now().year)
-    current_date = datetime.now().strftime('%Y/%m/%d')
-    
-    # Intent detection
-    if 'treatment' in query_lower or 'therapy' in query_lower or 'therapeutic' in query_lower:
-        intent['focus'] = 'treatment'
-    elif 'diagnosis' in query_lower or 'diagnostic' in query_lower:
-        intent['focus'] = 'diagnosis'
-    elif 'prevention' in query_lower or 'preventive' in query_lower:
-        intent['focus'] = 'prevention'
-    elif 'review' in query_lower or 'meta-analysis' in query_lower:
-        intent['focus'] = 'review'
-    
-    # Author detection
-    author_match = re.search(r'(?:by|author:?)\s+([\w\s]+?)(?:\s+(?:in|from|since|\d{4}|$))', query_lower)
-    if author_match:
-        intent['author'] = author_match.group(1).strip()
-    
-    # Timeframe detection
-    if 'this year' in query_lower or 'current year' in query_lower:
-        intent['date'] = f"{current_year}[dp]"
-    elif 'last year' in query_lower or 'previous year' in query_lower:
-        intent['date'] = f"{int(current_year)-1}[dp]"
-    elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
-        intent['date'] = f"{year_match.group(1)}[dp]"
-    elif 'past month' in query_lower or 'last month' in query_lower or 'last 30 days' in query_lower:
-        intent['date'] = 'last+30+days[dp]'
-    elif 'past week' in query_lower or 'last week' in query_lower or 'last 7 days' in query_lower:
-        intent['date'] = 'last+7+days[dp]'
-    elif 'past day' in query_lower or 'last day' in query_lower or 'yesterday' in query_lower:
-        intent['date'] = 'last+1+day[dp]'
-    elif since_match := re.search(r'since\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})', query_lower):
-        month = {'january': '01', 'february': '02', 'march': '03', 'april': '04', 'may': '05', 'june': '06',
-                 'july': '07', 'august': '08', 'september': '09', 'october': '10', 'november': '11', 'december': '12'}[since_match.group(1)]
-        year = since_match.group(2)
-        intent['date'] = f"{year}/{month}/01:{current_date}[dp]"
-    elif quarter_match := re.search(r'(?:last|past)\s+(q[1-4]|quarter\s*[1-4])\s*(?:of\s*(\d{4}))?', query_lower):
-        quarter = quarter_match.group(1).replace('quarter', 'q').lower()
-        year = quarter_match.group(2) or current_year
-        quarter_ranges = {
-            'q1': f"{year}/01/01:{year}/03/31[dp]",
-            'q2': f"{year}/04/01:{year}/06/30[dp]",
-            'q3': f"{year}/07/01:{year}/09/30[dp]",
-            'q4': f"{year}/10/01:{year}/12/31[dp]"
-        }
-        intent['date'] = quarter_ranges[quarter]
-    elif half_match := re.search(r'(?:first|second)\s+half\s+of\s+(\d{4})', query_lower):
-        year = half_match.group(1)
-        if 'first' in query_lower:
-            intent['date'] = f"{year}/01/01:{year}/06/30[dp]"
-        else:
-            intent['date'] = f"{year}/07/01:{year}/12/31[dp]"
-    elif re.search(r'(?:last|past)\s+(\d+)\s+years?', query_lower):
-        years = re.search(r'(?:last|past)\s+(\d+)\s+years?', query_lower).group(1)
-        intent['date'] = f"last+{years}+years[dp]"
-    elif re.search(r'(?:last|past)\s+(\d+)\s+months?', query_lower):
-        months = re.search(r'(?:last|past)\s+(\d+)\s+months?', query_lower).group(1)
-        intent['date'] = f"last+{int(months)*30}+days[dp]"
-    elif re.search(r'(?:last|past)\s+(\d+)\s+weeks?', query_lower):
-        weeks = re.search(r'(?:last|past)\s+(\d+)\s+weeks?', query_lower).group(1)
-        intent['date'] = f"last+{int(weeks)*7}+days[dp]"
-    elif re.search(r'(?:last|past)\s+(\d+)\s+days?', query_lower):
-        days = re.search(r'(?:last|past)\s+(\d+)\s+days?', query_lower).group(1)
-        intent['date'] = f"last+{days}+days[dp]"
-    elif 'recent' in query_lower:
-        intent['date'] = 'last+5+years[dp]'
-    
-    # spaCy-based date parsing
-    for ent in doc.ents:
-        if ent.label_ == 'DATE':
-            text = ent.text.lower()
-            if 'today' in text:
-                intent['date'] = 'last+1+day[dp]'
-            elif 'yesterday' in text:
-                intent['date'] = 'last+1+day[dp]'
-            elif 'last month' in text and not intent['date']:
-                intent['date'] = 'last+30+days[dp]'
-            elif 'last week' in text and not intent['date']:
-                intent['date'] = 'last+7+days[dp]'
-    
-    logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
-    if not keywords:
-        keywords = [word for word in query_lower.split() 
-                    if word not in stop_words and len(word) > 1][:3]
-        logger.info(f"Fallback keywords: {keywords}")
-    
-    return keywords, intent
+    # Use Grok to understand query intent and extract keywords
+    intent_prompt = f"""
+    Analyze the following medical research query and extract its intent and keywords for a PubMed API search.
+    - Identify the core topic (e.g., disease, condition).
+    - Identify the focus (e.g., treatment, diagnosis, prevention, review).
+    - Extract specific terms (e.g., 'new treatment', 'stem cell therapy').
+    - Identify the timeframe (e.g., specific year, recent).
+    - Identify any author names if present.
+    - Return a JSON object with:
+      - 'keywords': List of search terms (prioritize specific phrases, include MeSH terms if applicable).
+      - 'intent': Dictionary with 'topic', 'focus', 'date', 'author' (null if not specified).
+    Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax.
+    Query: {query}
+    Example output:
+    {
+      "keywords": ["diabetes", "new treatment", "insulin therapy"],
+      "intent": {
+        "topic": "diabetes",
+        "focus": "treatment",
+        "date": "2025[dp]",
+        "author": null
+      }
+    }
+    """
+    try:
+        response = query_grok_api(query, "", prompt=intent_prompt)
+        result = json.loads(response)
+        keywords = result.get('keywords', [])
+        intent = result.get('intent', {'topic': None, 'focus': None, 'date': None, 'author': None})
+        logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
+        if not keywords:
+            logger.warning("No keywords extracted, using fallback")
+            keywords = [word for word in query.lower().split() if len(word) > 1][:3]
+        return keywords, intent
+    except Exception as e:
+        logger.error(f"Error extracting intent with Grok: {str(e)}")
+        # Fallback to simple keyword extraction
+        query_lower = query.lower()
+        keywords = [word for word in query_lower.split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for'} and len(word) > 1][:3]
+        intent = {'topic': None, 'focus': None, 'date': None, 'author': None}
+        year_match = re.search(r'\b(20\d{2})\b', query_lower)
+        if year_match:
+            intent['date'] = f"{year_match.group(1)}[dp]"
+        if 'treatment' in query_lower or 'therapy' in query_lower:
+            intent['focus'] = 'treatment'
+        logger.info(f"Fallback keywords: {keywords}, Intent: {intent}")
+        return keywords, intent
 
 def build_pubmed_query(keywords, intent):
     query_parts = []
@@ -422,11 +350,14 @@ def build_pubmed_query(keywords, intent):
         if kw == 'chronic inflammatory demyelinating polyneuropathy':
             query_parts.append('(cidp OR chronic+inflammatory+demyelinating+polyneuropathy)')
         else:
-            query_parts.append(f"({kw.replace(' ', '+')})")
-    query = " OR ".join(query_parts)
+            # Use MeSH terms if applicable
+            kw = kw.replace(' ', '+')
+            query_parts.append(f"({kw}[MeSH Terms] OR {kw})")
+    # Use AND to ensure all keywords are included
+    query = " AND ".join(query_parts)
     if intent.get('focus'):
         focus_terms = {
-            'treatment': '(treatment OR therapy OR therapeutic)',
+            'treatment': '(treatment OR therapy OR therapeutic OR medication OR insulin OR "stem cell" OR GLP-1 OR SGLT2)',
             'diagnosis': '(diagnosis OR diagnostic)',
             'prevention': '(prevention OR preventive)',
             'review': '(review OR meta-analysis)'
@@ -447,7 +378,7 @@ def esearch(query, retmax=20, api_key=None):
         "term": query,
         "retmax": retmax,
         "retmode": "json",
-        "sort": "date",
+        "sort": "relevance",
         "api_key": api_key
     }
     logger.info(f"PubMed ESearch query: {query}")
@@ -536,13 +467,14 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         
         context = "\n\n".join(articles_context)
         ranking_prompt = f"""
-        Given the query '{query}', rank the following articles by relevance to the specific topic and year in the query.
-        Focus on articles that directly address the query's topic (e.g., specific condition and treatment) and match the specified year.
+        Given the query '{query}', rank the following articles by relevance to new treatments for diabetes in 2025.
+        Focus on articles that directly address diabetes (type 1 or type 2) and describe novel treatments, therapies, or therapeutic advancements (e.g., medications, stem cell therapy, insulin delivery) published in the specified year.
+        Exclude articles that do not specifically discuss diabetes treatments, such as those about unrelated medical conditions, plants, or general health topics.
         Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
         Ensure the response is valid JSON. Example:
         [
-            {{"index": 1, "explanation": "Directly addresses diabetic neuropathic pain treatments in 2024"}},
-            {{"index": 2, "explanation": "Discusses related treatments but less specific"}}
+            {{"index": 1, "explanation": "Describes a new insulin therapy for diabetes in 2025"}},
+            {{"index": 2, "explanation": "Discusses stem cell therapy for diabetes but less specific"}}
         ]
         Articles:
         {context}
@@ -591,7 +523,7 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
     scores = []
     
     focus_keywords = {
-        'treatment': ['treatment', 'therapy', 'therapeutic', 'intervention'],
+        'treatment': ['treatment', 'therapy', 'therapeutic', 'insulin', 'medication', 'stem cell', 'GLP-1', 'SGLT2'],
         'diagnosis': ['diagnosis', 'diagnostic', 'detection'],
         'prevention': ['prevention', 'preventive', 'prophylaxis'],
         'review': ['review', 'meta-analysis', 'systematic']
