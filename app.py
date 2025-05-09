@@ -300,8 +300,9 @@ def extract_keywords_and_intent(query):
     intent_prompt = """
 Analyze the following medical research query and extract its intent and keywords for a PubMed API search.
 - Identify the core topic (e.g., disease, condition).
-- Identify the focus (e.g., treatment, diagnosis, prevention, review).
-- Extract only explicit terms from the query (e.g., 'diabetes', 'new treatment'), avoiding inferred terms unless directly mentioned.
+- Identify the focus, which must be one of: 'treatment', 'diagnosis', 'prevention', 'review', or 'relationship' (for queries about impact, association, or effect).
+- Extract only explicit terms from the query (e.g., 'weight loss', 'heart disease'), avoiding inferred terms unless directly mentioned.
+- Exclude terms like 'impact', 'relationship', or 'association' from keywords; map them to 'focus: relationship'.
 - Identify the timeframe (e.g., specific year, recent).
 - Identify any author names if present.
 - Return a JSON object with:
@@ -309,13 +310,13 @@ Analyze the following medical research query and extract its intent and keywords
   - 'intent': Dictionary with 'topic', 'focus', 'date', 'author' (null if not specified).
 Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax.
 Query: {0}
-Example output:
+Example output for "articles on the relationship between weight loss and heart disease":
 {{
-  "keywords": ["diabetes", "new treatment"],
+  "keywords": ["weight loss", "heart disease"],
   "intent": {{
-    "topic": "diabetes",
-    "focus": "treatment",
-    "date": "2025[dp]",
+    "topic": "heart disease",
+    "focus": "relationship",
+    "date": null,
     "author": null
   }}
 }}
@@ -328,18 +329,20 @@ Example output:
         logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
         if not keywords:
             logger.warning("No keywords extracted, using fallback")
-            keywords = [word for word in query.lower().split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for'} and len(word) > 1][:3]
+            keywords = [word for word in query.lower().split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between'} and len(word) > 1][:3]
         return keywords, intent
     except Exception as e:
         logger.error(f"Error extracting intent with Grok: {str(e)}")
         # Fallback to simple keyword extraction
         query_lower = query.lower()
-        keywords = [word for word in query_lower.split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for'} and len(word) > 1][:3]
+        keywords = [word for word in query_lower.split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between'} and len(word) > 1][:3]
         intent = {'topic': None, 'focus': None, 'date': None, 'author': None}
         year_match = re.search(r'\b(20\d{2})\b', query_lower)
         if year_match:
             intent['date'] = f"{year_match.group(1)}[dp]"
-        if 'treatment' in query_lower or 'therapy' in query_lower:
+        if 'relationship' in query_lower or 'impact' in query_lower or 'association' in query_lower:
+            intent['focus'] = 'relationship'
+        elif 'treatment' in query_lower or 'therapy' in query_lower:
             intent['focus'] = 'treatment'
         logger.info(f"Fallback keywords: {keywords}, Intent: {intent}")
         return keywords, intent
@@ -360,9 +363,13 @@ def build_pubmed_query(keywords, intent):
             'treatment': '(treatment OR therapy OR therapeutic)',
             'diagnosis': '(diagnosis OR diagnostic)',
             'prevention': '(prevention OR preventive)',
-            'review': '(review OR meta-analysis)'
+            'review': '(review OR meta-analysis)',
+            'relationship': '(relationship OR association OR impact OR effect)'
         }
-        query += f" AND {focus_terms[intent['focus']]}"
+        if intent['focus'] in focus_terms:
+            query += f" AND {focus_terms[intent['focus']]}"
+        else:
+            logger.warning(f"Invalid focus: {intent['focus']}, skipping focus terms")
     if intent.get('author'):
         query += f" AND {intent['author']}[au]"
     if intent.get('date'):
@@ -467,14 +474,14 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         
         context = "\n\n".join(articles_context)
         ranking_prompt = f"""
-Given the query '{query}', rank the following articles by relevance to new treatments for diabetes in 2025.
-Focus on articles that directly address diabetes (type 1 or type 2) and describe novel treatments, therapies, or therapeutic advancements (e.g., medications, stem cell therapy, insulin delivery) published in the specified year.
-Exclude articles that do not specifically discuss diabetes treatments, such as those about unrelated medical conditions, plants, or general health topics.
+Given the query '{query}', rank the following articles by relevance to the relationship between weight loss and heart disease.
+Focus on articles that discuss how weight loss impacts heart disease risk or outcomes (e.g., reduced blood pressure, improved lipid profiles, cardiac events).
+Exclude articles that do not specifically address this relationship.
 Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
 Ensure the response is valid JSON. Example:
 [
-    {{"index": 1, "explanation": "Describes a new insulin therapy for diabetes in 2025"}},
-    {{"index": 2, "explanation": "Discusses stem cell therapy for diabetes but less specific"}}
+    {{"index": 1, "explanation": "Discusses weight loss reducing cardiovascular risk factors"}},
+    {{"index": 2, "explanation": "Mentions unintentional weight loss in heart failure"}}
 ]
 Articles:
 {context}
@@ -526,7 +533,8 @@ Articles:
         'treatment': ['treatment', 'therapy', 'therapeutic'],
         'diagnosis': ['diagnosis', 'diagnostic', 'detection'],
         'prevention': ['prevention', 'preventive', 'prophylaxis'],
-        'review': ['review', 'meta-analysis', 'systematic']
+        'review': ['review', 'meta-analysis', 'systematic'],
+        'relationship': ['relationship', 'association', 'impact', 'effect']
     }
     focus_weight = 0.2 if intent and intent.get('focus') else 0
     focus_terms = focus_keywords.get(intent.get('focus'), []) if intent else []
@@ -821,7 +829,7 @@ def edit_prompt(id):
     
     cur.close()
     conn.close()
-    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
+    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name}: prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
 
 @app.route('/prompt/delete/<int:id>', methods=['POST'])
 @login_required
