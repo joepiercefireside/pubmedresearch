@@ -301,17 +301,17 @@ def extract_keywords_and_intent(query):
 Analyze the following medical research query and extract its intent and keywords for a PubMed API search.
 - Identify the core topic (e.g., disease, condition).
 - Identify the focus (e.g., treatment, diagnosis, prevention, review).
-- Extract specific terms (e.g., 'new treatment', 'stem cell therapy').
+- Extract only explicit terms from the query (e.g., 'diabetes', 'new treatment'), avoiding inferred terms unless directly mentioned.
 - Identify the timeframe (e.g., specific year, recent).
 - Identify any author names if present.
 - Return a JSON object with:
-  - 'keywords': List of search terms (prioritize specific phrases, include MeSH terms if applicable).
+  - 'keywords': List of search terms (prioritize explicit phrases, include MeSH terms if applicable).
   - 'intent': Dictionary with 'topic', 'focus', 'date', 'author' (null if not specified).
-Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax, focusing on diabetes treatments like GLP-1 agonists, stem cell therapies, or oral insulin.
+Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax.
 Query: {0}
 Example output:
 {{
-  "keywords": ["diabetes", "new treatment", "insulin therapy"],
+  "keywords": ["diabetes", "new treatment"],
   "intent": {{
     "topic": "diabetes",
     "focus": "treatment",
@@ -357,7 +357,7 @@ def build_pubmed_query(keywords, intent):
     query = " AND ".join(query_parts)
     if intent.get('focus'):
         focus_terms = {
-            'treatment': '(treatment OR therapy OR therapeutic OR medication OR insulin OR "stem cell" OR GLP-1 OR SGLT2)',
+            'treatment': '(treatment OR therapy OR therapeutic)',
             'diagnosis': '(diagnosis OR diagnostic)',
             'prevention': '(prevention OR preventive)',
             'review': '(review OR meta-analysis)'
@@ -523,7 +523,7 @@ Articles:
     scores = []
     
     focus_keywords = {
-        'treatment': ['treatment', 'therapy', 'therapeutic', 'insulin', 'medication', 'stem cell', 'GLP-1', 'SGLT2'],
+        'treatment': ['treatment', 'therapy', 'therapeutic'],
         'diagnosis': ['diagnosis', 'diagnostic', 'detection'],
         'prevention': ['prevention', 'preventive', 'prophylaxis'],
         'review': ['review', 'meta-analysis', 'systematic']
