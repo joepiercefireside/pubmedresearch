@@ -829,7 +829,7 @@ def edit_prompt(id):
     
     cur.close()
     conn.close()
-    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name}: prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
+    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
 
 @app.route('/prompt/delete/<int:id>', methods=['POST'])
 @login_required
