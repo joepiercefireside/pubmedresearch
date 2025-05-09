@@ -24,6 +24,7 @@ from openai import OpenAI
 import traceback
 import openai
 import httpx.__version__
+import time
 import tenacity
 
 load_dotenv()
