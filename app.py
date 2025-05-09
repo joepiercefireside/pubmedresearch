@@ -24,7 +24,6 @@ from openai import OpenAI
 import traceback
 import openai
 import httpx.__version__
-import time
 import tenacity
 
 load_dotenv()
@@ -35,7 +34,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Configure logging for app
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -307,19 +306,19 @@ Analyze the following medical research query and extract its intent and keywords
 - Return a JSON object with:
   - 'keywords': List of search terms (prioritize specific phrases, include MeSH terms if applicable).
   - 'intent': Dictionary with 'topic', 'focus', 'date', 'author' (null if not specified).
-Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax.
-Query: {query}
+Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax, focusing on diabetes treatments like GLP-1 agonists, stem cell therapies, or oral insulin.
+Query: {0}
 Example output:
-{
+{{
   "keywords": ["diabetes", "new treatment", "insulin therapy"],
-  "intent": {
+  "intent": {{
     "topic": "diabetes",
     "focus": "treatment",
     "date": "2025[dp]",
     "author": null
-  }
-}
-""".format(query=query)
+  }}
+}}
+""".format(query)
     try:
         response = query_grok_api(query, "", prompt=intent_prompt)
         result = json.loads(response)
