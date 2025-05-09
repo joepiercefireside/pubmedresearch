@@ -35,7 +35,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Configure logging
+# Configure logging for app
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
