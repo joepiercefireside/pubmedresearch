@@ -320,6 +320,16 @@ Example output for "articles on the relationship between weight loss and heart d
     "author": null
   }}
 }}
+Example output for "what can you tell me is new in the treatment of diabetes in 2025":
+{{
+  "keywords": ["diabetes", "new treatment"],
+  "intent": {{
+    "topic": "diabetes",
+    "focus": "treatment",
+    "date": "2025[dp]",
+    "author": null
+  }}
+}}
 """.format(query)
     try:
         response = query_grok_api(query, "", prompt=intent_prompt)
@@ -474,14 +484,14 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
         
         context = "\n\n".join(articles_context)
         ranking_prompt = f"""
-Given the query '{query}', rank the following articles by relevance to the relationship between weight loss and heart disease.
-Focus on articles that discuss how weight loss impacts heart disease risk or outcomes (e.g., reduced blood pressure, improved lipid profiles, cardiac events).
-Exclude articles that do not specifically address this relationship.
+Given the query '{query}', rank the following articles by relevance.
+Focus on articles that directly address the query's topic and intent (e.g., treatments for diabetes, relationships between weight loss and heart disease).
+Exclude articles that are unrelated to the query.
 Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
 Ensure the response is valid JSON. Example:
 [
-    {{"index": 1, "explanation": "Discusses weight loss reducing cardiovascular risk factors"}},
-    {{"index": 2, "explanation": "Mentions unintentional weight loss in heart failure"}}
+    {{"index": 1, "explanation": "Directly discusses the query topic with high relevance"}},
+    {{"index": 2, "explanation": "Relevant but less specific to the query"}}
 ]
 Articles:
 {context}
@@ -516,14 +526,14 @@ Articles:
             ranked_results = [results[i] for i in ranked_indices]
             ranked_embeddings = [embeddings[i] for i in ranked_indices]
             logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices}")
-            return ranked_results[:result_count], ranked_embeddings[:result_count]
+            return ranked_results[:result_count], ranked_embeddings[:result_count], ranked_indices[:result_count]
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Error parsing Grok ranking response: {str(e)}")
             # Fall through to fallback ranking
     except Exception as e:
         logger.error(f"Grok ranking failed: {str(e)}")
     
-    # Fallback: Use embedding-based ranking
+    # Fallback: Use embedding-based ranking with secondary date sorting
     logger.info("Falling back to embedding-based ranking")
     query_embedding = generate_embedding(query)
     current_year = datetime.now().year
@@ -555,17 +565,19 @@ Articles:
             if author_lower in result['authors'].lower():
                 author_score = 0.3
         
+        # Primary: relevance score; Secondary: publication year for tie-breaking
         weighted_score = (0.7 * similarity) + (0.2 * recency_bonus) + (focus_weight * focus_score) + author_score
-        scores.append((i, weighted_score))
+        scores.append((i, weighted_score, pub_year))
     
-    scores.sort(key=lambda x: x[1], reverse=True)
-    ranked_indices = [i for i, _ in scores]
+    # Sort by weighted_score (descending) and pub_year (descending) for ties
+    scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    ranked_indices = [i for i, _, _ in scores]
     ranked_indices = ranked_indices[:max(result_count, len(results))]
     
     ranked_results = [results[i] for i in ranked_indices]
     ranked_embeddings = [embeddings[i] for i in ranked_indices]
-    logger.info(f"Fallback ranked {len(ranked_results)} results")
-    return ranked_results, ranked_embeddings
+    logger.info(f"Fallback ranked {len(ranked_results)} results with indices {ranked_indices}")
+    return ranked_results, ranked_embeddings, ranked_indices
 
 def generate_summary(abstract, query, title=None, authors=None, journal=None, publication_date=None):
     if not abstract and not title:
@@ -733,7 +745,11 @@ def search():
             embeddings.append(embedding)
         
         update_search_progress(current_user.id, query, "ranking results")
-        high_relevance, embeddings = grok_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
+        high_relevance, embeddings, ranked_indices = grok_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
+        
+        # Sort the full results list using the ranked indices
+        results = [results[i] for i in ranked_indices]
+        logger.info(f"Full results list sorted by ranked indices: {len(results)} results")
         
         update_search_progress(current_user.id, query, "creating AI response")
         prompt_output = generate_prompt_output(
@@ -746,11 +762,11 @@ def search():
         
         update_search_progress(current_user.id, query, "complete")
         
-        # Pass both high_relevance (for summaries) and results (for full list)
+        # Pass both high_relevance (for summaries) and sorted results (for full list)
         return render_template(
             'search.html', 
             result_summaries=list(zip(high_relevance, summaries[:len(high_relevance)])),
-            results=results,  # Full result set for Google-style list
+            results=results,  # Full result set, now sorted
             query=query, 
             prompts=prompts, 
             prompt_id=prompt_id,
