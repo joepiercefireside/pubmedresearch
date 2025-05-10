@@ -1,104 +1,124 @@
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    background-color: #f8f9fa;
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f4f4f4;
 }
+
 .container {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
 }
-.card {
-    margin-top: 20px;
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    background-color: #fff;
+
+h1, h2, h3 {
+    color: #00689B;
 }
-.form-control {
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.form-group input, .form-group textarea, .form-group select {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
     border-radius: 4px;
 }
-.btn-primary {
+
+button {
     background-color: #00689B;
-    border-color: #00689B;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
 }
-.btn-primary:hover {
-    background-color: #00517a;
-    border-color: #00517a;
+
+button:hover {
+    background-color: #005f8a;
 }
-.btn-warning {
-    background-color: #ffc107;
-    border-color: #ffc107;
+
+.error {
+    color: red;
+    margin: 10px 0;
 }
-.btn-danger {
-    background-color: #dc3545;
-    border-color: #dc3545;
-}
-.alert {
+
+.ai-response, .summaries, .results {
     margin-top: 20px;
 }
-footer {
-    text-align: center;
-    padding: 20px;
-    color: #6c757d;
+
+.summary, .result-card {
+    background-color: white;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s;
 }
-.navbar.bg-primary {
-    background-color: #00689B !important;
+
+.summary:hover, .result-card:hover {
+    transform: translateY(-2px);
 }
-.navbar-brand, .nav-link, .navbar-text {
-    color: #fff !important;
+
+.result-card {
+    border-left: 4px solid #00689B;
 }
-.navbar-brand:hover, .nav-link:hover {
-    color: #e0e0e0 !important;
-}
-.spinner {
-    display: none;
-    border: 4px solid #f3f3f3;
-    border-top: 4px solid #00689B;
-    border-radius: 50%;
-    width: 24px;
-    height: 24px;
-    animation: spin 1s linear infinite;
-    margin-left: 10px;
-    vertical-align: middle;
-}
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-.search-status {
-    margin-left: 10px;
+
+.result-title a {
     color: #00689B;
-    vertical-align: middle;
-}
-.search-results {
-    margin-top: 20px;
-}
-.search-result {
-    margin-bottom: 20px;
-}
-.result-title {
-    font-size: 1.2em;
-    color: #1a0dab;
     text-decoration: none;
+    font-size: 1.2em;
 }
-.result-title:hover {
+
+.result-title a:hover {
     text-decoration: underline;
 }
-.result-url {
-    color: #006621;
-    font-size: 0.9em;
-    margin-bottom: 5px;
+
+.result-abstract {
+    color: #333;
+    margin: 10px 0;
+    line-height: 1.4;
 }
-.result-snippet {
-    font-size: 0.95em;
-    color: #4d5156;
-    margin-bottom: 5px;
-}
-.result-snippet:empty:before {
-    content: "No abstract available";
-    color: #6c757d;
-}
+
 .result-meta {
-    font-size: 0.85em;
-    color: #6c757d;
+    color: #666;
+    font-size: 0.9em;
+}
+
+.result-meta span {
+    margin-right: 15px;
+}
+
+nav {
+    background-color: #00689B;
+    padding: 10px 0;
+}
+
+nav ul {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+}
+
+nav ul li {
+    margin: 0 15px;
+}
+
+nav ul li a {
+    color: white;
+    text-decoration: none;
+    font-weight: bold;
+}
+
+nav ul li a:hover {
+    text-decoration: underline;
 }

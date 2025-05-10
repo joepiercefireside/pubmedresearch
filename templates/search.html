@@ -1,113 +1,97 @@
-{% extends "base.html" %}
-{% block title %}Search{% endblock %}
-{% block content %}
-<div class="container">
-    <div class="card">
-        <h2>Search PubMed</h2>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'warning' if category == 'warning' else 'success' }} mt-3">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        {% if error %}
-            <div class="alert alert-danger mt-3">{{ error }}</div>
-        {% endif %}
-        <form id="search-form" method="POST">
-            <div class="mb-3">
-                <label for="query" class="form-label">Search Query</label>
-                <input type="text" class="form-control" id="query" name="query" placeholder="Enter search query" value="{{ query or '' }}">
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PubMed Researcher - Search</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    {% extends "base.html" %}
+    {% block content %}
+    <div class="container">
+        <h1>Search PubMed</h1>
+        <form method="POST" action="{{ url_for('search') }}">
+            <div class="form-group">
+                <label for="query">Search Query:</label>
+                <input type="text" id="query" name="query" value="{{ query if query else '' }}" required>
             </div>
-            <div class="mb-3">
-                <label for="prompt_id" class="form-label">Select Prompt</label>
-                <select class="form-control" id="prompt_id" name="prompt_id" onchange="updatePromptText()">
-                    <option value="">Select a prompt</option>
+            <div class="form-group">
+                <label for="prompt_id">Select Prompt:</label>
+                <select id="prompt_id" name="prompt_id">
+                    <option value="">None</option>
                     {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" {% if prompt_id == prompt.id|string %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        <option value="{{ prompt.id }}" {% if prompt.id == prompt_id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div class="mb-3">
-                <label for="prompt_text" class="form-label">Custom Prompt (Optional)</label>
-                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter custom prompt">{{ prompt_text or '' }}</textarea>
+            <div class="form-group">
+                <label for="prompt_text">Custom Prompt:</label>
+                <textarea id="prompt_text" name="prompt_text" rows="4">{{ prompt_text if prompt_text else '' }}</textarea>
             </div>
-            <button type="submit" class="btn btn-primary">Search</button>
-            <span id="search-spinner" class="spinner"></span>
-            <span id="search-status" class="search-status"></span>
+            <button type="submit">Search</button>
         </form>
-    </div>
-    {% if prompt_output %}
-        <div class="card mt-3">
-            <h3>AI Summary for "{{ query }}"</h3>
-            <p>{{ prompt_output | replace('\n', '<br>') | safe }}</p>
+
+        {% if error %}
+        <div class="error">
+            <p>{{ error }}</p>
         </div>
-    {% endif %}
-    {% if results %}
-        <div class="card mt-3">
-            <h3>All Search Results for "{{ query }}"</h3>
-            <div class="search-results">
-                {% for result in results %}
-                    <div class="search-result">
-                        <h4><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank" class="result-title">{{ result.title }}</a></h4>
-                        <div class="result-url">https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/</div>
-                        <p class="result-snippet">{{ result.abstract|default('')|truncate(300) }}...</p>
-                        <div class="result-meta">
-                            <span>{{ result.authors }}</span> | 
-                            <span>{{ result.journal }}</span> | 
-                            <span>{{ result.publication_date }}</span>
-                        </div>
-                    </div>
-                {% endfor %}
+        {% endif %}
+
+        {% if prompt_output %}
+        <div class="ai-response">
+            <h2>AI Summary</h2>
+            <p>{{ prompt_output | safe }}</p>
+        </div>
+        {% endif %}
+
+        {% if result_summaries %}
+        <div class="summaries">
+            <h2>Top Summaries</h2>
+            {% for result, summary in result_summaries %}
+            <div class="summary">
+                <h3><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank">{{ result.title }}</a></h3>
+                <p>{{ summary.text }}...</p>
+                <p><strong>Authors:</strong> {{ summary.metadata.authors }} | <strong>Journal:</strong> {{ summary.metadata.journal }} | <strong>Date:</strong> {{ summary.metadata.publication_date }}</p>
             </div>
+            {% endfor %}
         </div>
-    {% endif %}
-</div>
-<script>
-    // Populate prompt text when a prompt is selected
-    function updatePromptText() {
-        const promptId = document.getElementById('prompt_id').value;
-        const promptTextArea = document.getElementById('prompt_text');
-        const prompts = {{ prompts | tojson }};
-        const selectedPrompt = prompts.find(p => p.id == promptId);
-        promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
-    }
+        {% endif %}
 
-    // Handle search progress
-    document.getElementById('search-form').addEventListener('submit', function() {
-        const query = document.querySelector('input[name="query"]').value;
-        const spinner = document.getElementById('search-spinner');
-        const status = document.getElementById('search-status');
-        spinner.style.display = 'inline-block';
-        status.textContent = 'Starting search...';
-        
-        const eventSource = new EventSource(`/search_progress?query=${encodeURIComponent(query)}`);
-        eventSource.onmessage = function(event) {
-            try {
-                const data = JSON.parse(event.data);
-                status.textContent = data.status;
-                if (data.status === 'complete' || data.status.startsWith('error')) {
-                    spinner.style.display = 'none';
-                    eventSource.close();
-                }
-            } catch (e) {
-                status.textContent = 'Error processing progress';
-                spinner.style.display = 'none';
-                eventSource.close();
+        {% if results %}
+        <div class="results">
+            <h2>Search Results ({{ results|length }})</h2>
+            {% for result in results %}
+            <div class="result-card">
+                <h3 class="result-title"><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank">{{ result.title }}</a></h3>
+                <p class="result-abstract">{{ result.abstract[:300] if result.abstract else 'No abstract available.' }}...</p>
+                <div class="result-meta">
+                    <span><strong>Authors:</strong> {{ result.authors or 'Unknown' }}</span>
+                    <span><strong>Journal:</strong> {{ result.journal or 'Unknown' }}</span>
+                    <span><strong>Date:</strong> {{ result.publication_date or 'Unknown' }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const query = "{{ query | escape }}";
+            if (query) {
+                const source = new EventSource("/search_progress?query=" + encodeURIComponent(query));
+                source.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    const statusElement = document.getElementById('search-status');
+                    if (statusElement) {
+                        statusElement.textContent = data.status;
+                    }
+                    if (data.status === "complete" || data.status.startsWith("error")) {
+                        source.close();
+                    }
+                };
             }
-        };
-        eventSource.onerror = function() {
-            status.textContent = 'Progress update interrupted';
-            spinner.style.display = 'none';
-            eventSource.close();
-        };
-    });
-
-    // Initialize prompt text if a prompt is pre-selected
-    window.onload = function() {
-        updatePromptText();
-    };
-</script>
-{% endblock %}
+        });
+    </script>
+    {% endblock %}
+</body>
+</html>

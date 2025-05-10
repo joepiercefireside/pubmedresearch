@@ -523,10 +523,10 @@ Articles:
             missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
             ranked_indices.extend(missing_indices)
             
-            ranked_results = [results[i] for i in ranked_indices]
-            ranked_embeddings = [embeddings[i] for i in ranked_indices]
-            logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices}")
-            return ranked_results[:result_count], ranked_embeddings[:result_count], ranked_indices[:result_count]
+            ranked_results = [results[i] for i in ranked_indices[:result_count]]
+            ranked_embeddings = [embeddings[i] for i in ranked_indices[:result_count]]
+            logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices[:result_count]}")
+            return ranked_results, ranked_embeddings, ranked_indices
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Error parsing Grok ranking response: {str(e)}")
             # Fall through to fallback ranking
@@ -572,11 +572,10 @@ Articles:
     # Sort by weighted_score (descending) and pub_year (descending) for ties
     scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
     ranked_indices = [i for i, _, _ in scores]
-    ranked_indices = ranked_indices[:max(result_count, len(results))]
     
-    ranked_results = [results[i] for i in ranked_indices]
-    ranked_embeddings = [embeddings[i] for i in ranked_indices]
-    logger.info(f"Fallback ranked {len(ranked_results)} results with indices {ranked_indices}")
+    ranked_results = [results[i] for i in ranked_indices[:result_count]]
+    ranked_embeddings = [embeddings[i] for i in ranked_indices[:result_count]]
+    logger.info(f"Fallback ranked {len(ranked_results)} results with indices {ranked_indices[:result_count]}")
     return ranked_results, ranked_embeddings, ranked_indices
 
 def generate_summary(abstract, query, title=None, authors=None, journal=None, publication_date=None):
@@ -584,7 +583,7 @@ def generate_summary(abstract, query, title=None, authors=None, journal=None, pu
         return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
     text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
     embedding = generate_embedding(text) if text else None
-    summary_text = abstract[:200] if abstract else f"Title: {title}"
+    summary_text = abstract[:300] if abstract else f"Title: {title}"  # Increased to 300 characters
     summary = {
         "text": summary_text,
         "metadata": {
@@ -617,7 +616,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
             flash(f"No results found for {target_year}. Displaying all available results.", "warning")
             filtered_results = results  # Fall back to all results with warning
     
-    # Ensure at least result_count results (or all available) are used
+    # Ensure at least result_count results (or all available) are used for summarization
     context_results = filtered_results[:result_count]
     logger.info(f"Context results count: {len(context_results)}")
     
@@ -747,7 +746,7 @@ def search():
         update_search_progress(current_user.id, query, "ranking results")
         high_relevance, embeddings, ranked_indices = grok_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
         
-        # Sort the full results list using the ranked indices
+        # Sort the full results list using all ranked indices
         results = [results[i] for i in ranked_indices]
         logger.info(f"Full results list sorted by ranked indices: {len(results)} results")
         
@@ -766,7 +765,7 @@ def search():
         return render_template(
             'search.html', 
             result_summaries=list(zip(high_relevance, summaries[:len(high_relevance)])),
-            results=results,  # Full result set, now sorted
+            results=results,  # Full result set, now sorted and including all results
             query=query, 
             prompts=prompts, 
             prompt_id=prompt_id,
@@ -803,7 +802,7 @@ def prompt():
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
+    cur.execute('SELECT życia, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
                 (current_user.id,))
     prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
