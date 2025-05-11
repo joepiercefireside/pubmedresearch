@@ -13,6 +13,7 @@ body {
 
 h1, h2, h3, h5, h6 {
     color: #00689B;
+    margin-bottom: 15px;
 }
 
 .form-group {
@@ -20,7 +21,7 @@ h1, h2, h3, h5, h6 {
 }
 
 .form-group label {
-    display block;
+    display: block;
     margin-bottom: 5px;
     font-weight: bold;
 }
@@ -50,31 +51,37 @@ button:hover, .btn:hover {
     margin: 10px 0;
 }
 
-.ai-response, .summaries, .results {
+.ai-response {
     margin-top: 20px;
 }
 
-.summary, .result-card {
+.ai-response p {
+    margin-bottom: 15px;
+    line-height: 1.6;
+}
+
+.results {
+    margin-top: 20px;
+}
+
+.result-card {
     background-color: white;
     padding: 15px;
     margin-bottom: 15px;
     border-radius: 6px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     transition: transform 0.2s;
-}
-
-.summary:hover, .result-card:hover {
-    transform: translateY(-2px);
-}
-
-.result-card {
     border-left: 4px solid #00689B;
+}
+
+.result-card:hover {
+    transform: translateY(-2px);
 }
 
 .result-title a {
     color: #00689B;
     text-decoration: none;
-    font-size: 1.2em;
+    font-size: 1.1em; /* Reduced from 1.2em */
 }
 
 .result-title a:hover {
@@ -97,7 +104,7 @@ button:hover, .btn:hover {
 }
 
 nav {
-    background-color: #00689B;
+    background-color: #00689B; /* Ensure correct color */
     padding: 10px 0;
 }
 
@@ -152,4 +159,13 @@ nav ul li a:hover {
     border-radius: 4px;
     max-height: 300px;
     overflow-y: auto;
+}
+
+/* Card styling for notifications and prompts */
+.card {
+    background-color: white;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }

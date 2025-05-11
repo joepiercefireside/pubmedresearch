@@ -2,8 +2,8 @@
 {% block title %}Notifications{% endblock %}
 {% block content %}
 <div class="container">
+    <h1>Manage Notification Rules</h1>
     <div class="card">
-        <h2>Manage Notification Rules</h2>
         <form method="POST">
             <div class="mb-3">
                 <label for="rule_name" class="form-label">Rule Name</label>
@@ -48,7 +48,7 @@
     </div>
     {% if notifications %}
         <div class="card mt-3">
-            <h3>Your Notification Rules</h3>
+            <h2>Your Notification Rules</h2>
             <div class="table-responsive">
                 <table class="table table-striped table-hover">
                     <thead>

@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>PubMed Researcher - Search</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='styles.css') }}?v=1">
 </head>
 <body>
     {% extends "base.html" %}
@@ -24,7 +24,7 @@
                 </select>
             </div>
             <div class="form-group">
-                <label for="prompt_text">Custom Prompt:</label>
+                <label for="prompt_text">Prompt Text (editable):</label>
                 <textarea id="prompt_text" name="prompt_text" rows="4">{{ prompt_text if prompt_text else '' }}</textarea>
             </div>
             <button type="submit">Search</button>
@@ -39,20 +39,7 @@
         {% if prompt_output %}
         <div class="ai-response">
             <h2>AI Summary</h2>
-            <p>{{ prompt_output | safe }}</p>
-        </div>
-        {% endif %}
-
-        {% if result_summaries %}
-        <div class="summaries">
-            <h2>Top Summaries</h2>
-            {% for result, summary in result_summaries %}
-            <div class="summary">
-                <h3><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank">{{ result.title }}</a></h3>
-                <p>{{ summary.text }}...</p>
-                <p><strong>Authors:</strong> {{ summary.metadata.authors }} | <strong>Journal:</strong> {{ summary.metadata.journal }} | <strong>Date:</strong> {{ summary.metadata.publication_date }}</p>
-            </div>
-            {% endfor %}
+            {{ prompt_output | safe }}
         </div>
         {% endif %}
 
@@ -76,6 +63,16 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            const promptSelect = document.getElementById('prompt_id');
+            const promptTextArea = document.getElementById('prompt_text');
+            const prompts = {{ prompts | tojson }};
+
+            promptSelect.addEventListener('change', function() {
+                const selectedPromptId = this.value;
+                const selectedPrompt = prompts.find(prompt => prompt.id === selectedPromptId);
+                promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
+            });
+
             const query = "{{ query | escape }}";
             if (query) {
                 const source = new EventSource("/search_progress?query=" + encodeURIComponent(query));

@@ -402,7 +402,7 @@ def build_pubmed_query(keywords, intent):
         else:
             logger.warning(f"Invalid focus: {intent['focus']}, skipping focus terms")
     if intent.get('author'):
-        query += f" AND|au]"
+        query += f" AND {intent['author']}[au]"
     if intent.get('date'):
         query += f" {intent['date']}"
     return query
@@ -604,7 +604,7 @@ def generate_summary(abstract, query, title=None, authors=None, journal=None, pu
         return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
     text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
     embedding = generate_embedding(text) if text else None
-    summary_text = abstract[:300] if abstract else f"Title: {title}"  # Increased to 300 characters
+    summary_text = abstract[:300] if abstract else f"Title: {title}"
     summary = {
         "text": summary_text,
         "metadata": {
@@ -650,8 +650,11 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
     # Use xAI Grok API to generate response
     output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
     
-    logger.info(f"Generated prompt output: length={len(output)}")
-    return output
+    # Format output with paragraph breaks
+    paragraphs = output.split('\n\n')
+    formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
+    logger.info(f"Generated prompt output: length={len(formatted_output)}")
+    return formatted_output
 
 @app.route('/search_progress', methods=['GET'])
 @login_required
@@ -688,9 +691,10 @@ def search():
     conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
 
-    prompt_id = request.form.get('prompt_id', '') if request.method == 'POST' else ''
-    prompt_text = request.form.get('prompt_text', '') if request.method == 'POST' else ''
-    query = request.form.get('query', '') if request.method == 'POST' else ''
+    # Handle prompt_id from GET (e.g., page reload) or POST (form submission)
+    prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
+    prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
+    query = request.args.get('query', request.form.get('query', ''))
 
     # If a prompt_id is selected, fetch its text
     selected_prompt_text = prompt_text
@@ -708,7 +712,7 @@ def search():
     if request.method == 'POST':
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], username=current_user.email)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', username=current_user.email)
         
         # Update progress
         update_search_progress(current_user.id, query, "contacting PubMed")
@@ -716,7 +720,7 @@ def search():
         keywords, intent = extract_keywords_and_intent(query)
         if not keywords:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], username=current_user.email)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', username=current_user.email)
         
         prompt_params = parse_prompt(selected_prompt_text)
         result_count = prompt_params['result_count']
@@ -736,7 +740,7 @@ def search():
             if not pmids:
                 logger.info("No results with initial query")
                 update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', target_year=target_year, username=current_user.email)
             
             update_search_progress(current_user.id, query, "fetching article details")
             efetch_xml = efetch(pmids, api_key=api_key)
@@ -752,43 +756,18 @@ def search():
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', target_year=target_year, username=current_user.email)
         
-        high_relevance = []
-        embeddings = []
-        summaries = []
-        for r in results:
-            text = f"{r['title']} {r['abstract'] or ''} {r['authors'] or ''} {r['journal'] or ''}".strip()
-            embedding = generate_embedding(text) if text else None
-            summary = generate_summary(
-                r['abstract'], query, 
-                title=r['title'], authors=r['authors'], 
-                journal=r['journal'], publication_date=r['publication_date']
-            )
-            high_relevance.append({
-                'id': r['id'],
-                'title': r['title'],
-                'abstract': r['abstract'],
-                'score': 0,
-                'authors': r['authors'],
-                'journal': r['journal'],
-                'publication_date': r['publication_date'],
-                'keywords': None
-            })
-            summaries.append(summary)
-            embeddings.append(embedding)
-        
+        # Rank results
         update_search_progress(current_user.id, query, "ranking results")
-        high_relevance, embeddings, ranked_indices = grok_llm_ranking(query, high_relevance, embeddings, intent, prompt_params)
+        ranked_results, _, ranked_indices = grok_llm_ranking(query, results, [generate_embedding(f"{r['title']} {r['abstract'] or ''}") for r in results], intent, prompt_params)
         
         # Sort the full results list using all ranked indices
         results = [results[i] for i in ranked_indices]
         logger.info(f"Full results list sorted by ranked indices: {len(results)} results")
         
         update_search_progress(current_user.id, query, "creating AI response")
-        prompt_output = generate_prompt_output(
-            query, high_relevance, selected_prompt_text, prompt_params
-        )
+        prompt_output = generate_prompt_output(query, ranked_results, selected_prompt_text, prompt_params)
         
         # Ensure partial results are displayed even if Grok fails
         if prompt_output.startswith("Fallback:"):
@@ -796,11 +775,9 @@ def search():
         
         update_search_progress(current_user.id, query, "complete")
         
-        # Pass both high_relevance (for summaries) and sorted results (for full list)
         return render_template(
             'search.html', 
-            result_summaries=list(zip(high_relevance, summaries[:len(high_relevance)])),
-            results=results,  # Full result set, now sorted and including all results
+            results=results,
             query=query, 
             prompts=prompts, 
             prompt_id=prompt_id,
@@ -810,7 +787,7 @@ def search():
             username=current_user.email
         )
     
-    return render_template('search.html', prompts=prompts, prompt_id='', prompt_text='', results=[], result_summaries=[], username=current_user.email)
+    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', username=current_user.email)
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
