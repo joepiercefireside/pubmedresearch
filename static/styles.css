@@ -81,7 +81,7 @@ button:hover, .btn:hover {
 .result-title a {
     color: #00689B;
     text-decoration: none;
-    font-size: 1.1em; /* Reduced from 1.2em */
+    font-size: 1em; /* Reduced from 1.1em */
 }
 
 .result-title a:hover {
@@ -104,8 +104,44 @@ button:hover, .btn:hover {
 }
 
 nav {
-    background-color: #00689B; /* Ensure correct color */
+    background-color: #00689B;
     padding: 10px 0;
+}
+
+.navbar-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 20px;
+}
+
+.navbar-brand {
+    display: flex;
+    align-items: center;
+}
+
+.navbar-logo {
+    height: 40px;
+    margin-right: 10px;
+}
+
+.navbar-title {
+    color: white;
+    font-size: 1.5em;
+    font-weight: bold;
+}
+
+.navbar-right {
+    display: flex;
+    align-items: center;
+}
+
+.navbar-user {
+    color: white;
+    margin-right: 20px;
+    font-size: 1em;
 }
 
 nav ul {
@@ -113,7 +149,6 @@ nav ul {
     margin: 0;
     padding: 0;
     display: flex;
-    justify-content: center;
 }
 
 nav ul li {
