@@ -24,6 +24,7 @@ from openai import OpenAI
 import traceback
 import openai
 import httpx.__version__
+import time
 import tenacity
 
 load_dotenv()
@@ -401,7 +402,7 @@ def build_pubmed_query(keywords, intent):
         else:
             logger.warning(f"Invalid focus: {intent['focus']}, skipping focus terms")
     if intent.get('author'):
-        query += f" AND {intent['author']}[au]"
+        query += f" AND|au]"
     if intent.get('date'):
         query += f" {intent['date']}"
     return query
@@ -682,17 +683,32 @@ def search():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT id, prompt_name, prompt_text FROM prompts WHERE user_id = %s', (current_user.id,))
-    prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2]} for p in cur.fetchall()]
+    prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2]} for p in cur.fetchall()]
     cur.close()
     conn.close()
+    logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
+
+    prompt_id = request.form.get('prompt_id', '') if request.method == 'POST' else ''
+    prompt_text = request.form.get('prompt_text', '') if request.method == 'POST' else ''
+    query = request.form.get('query', '') if request.method == 'POST' else ''
+
+    # If a prompt_id is selected, fetch its text
+    selected_prompt_text = prompt_text
+    if prompt_id and not prompt_text:  # Only override if prompt_text is empty
+        for prompt in prompts:
+            if prompt['id'] == prompt_id:
+                selected_prompt_text = prompt['prompt_text']
+                break
+        else:
+            logger.warning(f"Prompt ID {prompt_id} not found in prompts")
+            selected_prompt_text = ''
+
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}...")
 
     if request.method == 'POST':
-        query = request.form.get('query')
-        prompt_id = request.form.get('prompt_id')
-        prompt_text = request.form.get('prompt_text')
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], username=current_user.email)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], username=current_user.email)
         
         # Update progress
         update_search_progress(current_user.id, query, "contacting PubMed")
@@ -700,9 +716,8 @@ def search():
         keywords, intent = extract_keywords_and_intent(query)
         if not keywords:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], username=current_user.email)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], username=current_user.email)
         
-        selected_prompt_text = prompt_text if prompt_text else next((p['prompt_text'] for p in prompts if str(p['id']) == prompt_id), None)
         prompt_params = parse_prompt(selected_prompt_text)
         result_count = prompt_params['result_count']
         limit_presentation = prompt_params['limit_presentation']
@@ -721,7 +736,7 @@ def search():
             if not pmids:
                 logger.info("No results with initial query")
                 update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
             
             update_search_progress(current_user.id, query, "fetching article details")
             efetch_xml = efetch(pmids, api_key=api_key)
@@ -737,7 +752,7 @@ def search():
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], result_summaries=[], target_year=target_year, username=current_user.email)
         
         high_relevance = []
         embeddings = []
@@ -789,7 +804,7 @@ def search():
             query=query, 
             prompts=prompts, 
             prompt_id=prompt_id,
-            prompt_text=prompt_text,
+            prompt_text=selected_prompt_text,
             prompt_output=prompt_output,
             target_year=target_year,
             username=current_user.email
@@ -824,7 +839,7 @@ def prompt():
     cur = conn.cursor()
     cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
                 (current_user.id,))
-    prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
+    prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
     conn.close()
     return render_template('prompt.html', prompts=prompts, username=current_user.email)
