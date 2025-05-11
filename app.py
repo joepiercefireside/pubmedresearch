@@ -14,7 +14,7 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 from scipy.spatial.distance import cosine
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import Counter
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -24,7 +24,6 @@ from openai import OpenAI
 import traceback
 import openai
 import httpx.__version__
-import time
 import tenacity
 
 load_dotenv()
@@ -171,29 +170,35 @@ def load_user(user_id):
         return User(user[0], user[1])
     return None
 
-def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email):
-    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}")
+def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=False):
+    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, test_mode: {test_mode}")
     keywords_list = [k.strip() for k in keywords.split(',')]
+    
+    # Calculate precise date ranges for PubMed [dp]
+    today = datetime.now()
     date_filters = {
-        'daily': 'last+1+day[dp]',
-        'weekly': 'last+7+days[dp]',
-        'monthly': 'last+30+days[dp]',
-        'annually': 'last+365+days[dp]'
+        'daily': f"{(today - timedelta(days=1)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]",
+        'weekly': f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]",
+        'monthly': f"{(today - timedelta(days=31)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]",
+        'annually': f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
     }
     intent = {'date': date_filters[timeframe]}
     search_query = build_pubmed_query(keywords_list, intent)
+    
     try:
         api_key = os.environ.get('PUBMED_API_KEY')
         esearch_result = esearch(search_query, retmax=20, api_key=api_key)
         pmids = esearch_result['esearchresult']['idlist']
         if not pmids:
             logger.info(f"No new results for rule {rule_id}")
+            if test_mode:
+                return {"results": [], "email_content": "No new results found for this rule.", "status": "success"}
             return
         
         efetch_xml = efetch(pmids, api_key=api_key)
         results = parse_efetch_xml(efetch_xml)
         
-        # Use xAI Grok API for prompt processing
+        # Prepare email content
         context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
         output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
         
@@ -204,6 +209,14 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         else:
             content = output
         
+        if test_mode:
+            return {
+                "results": results,
+                "email_content": content,
+                "status": "success"
+            }
+        
+        # Send email if not in test mode
         message = Mail(
             from_email=Email("notifications@pubmedresearcher.com"),
             to_emails=To(user_email),
@@ -214,6 +227,13 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}")
     except Exception as e:
         logger.error(f"Error running notification rule {rule_id}: {str(e)}")
+        if test_mode:
+            return {
+                "results": [],
+                "email_content": f"Error: {str(e)}",
+                "status": "error"
+            }
+        raise
 
 def schedule_notification_rules():
     scheduler.remove_all_jobs()
@@ -802,7 +822,7 @@ def prompt():
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT życia, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
+    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
                 (current_user.id,))
     prompts = [{'id': p[0], 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
@@ -1014,6 +1034,34 @@ def delete_notification(id):
         conn.close()
     
     return redirect(url_for('notifications'))
+
+@app.route('/notifications/test/<int:id>', methods=['GET'])
+@login_required
+def test_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, u.email "
+        "FROM notifications n JOIN users u ON n.user_id = u.id WHERE n.id = %s AND n.user_id = %s",
+        (id, current_user.id)
+    )
+    rule = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if not rule:
+        flash('Notification rule not found or you do not have permission to test it.', 'error')
+        return jsonify({"status": "error", "message": "Rule not found"}), 404
+    
+    rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
+    try:
+        test_result = run_notification_rule(
+            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=True
+        )
+        return jsonify(test_result)
+    except Exception as e:
+        logger.error(f"Error testing notification rule {rule_id}: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # Schedule notifications on startup
 schedule_notification_rules()

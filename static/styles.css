@@ -11,7 +11,7 @@ body {
     padding: 20px;
 }
 
-h1, h2, h3 {
+h1, h2, h3, h5, h6 {
     color: #00689B;
 }
 
@@ -20,7 +20,7 @@ h1, h2, h3 {
 }
 
 .form-group label {
-    display: block;
+    display block;
     margin-bottom: 5px;
     font-weight: bold;
 }
@@ -32,7 +32,7 @@ h1, h2, h3 {
     border-radius: 4px;
 }
 
-button {
+button, .btn {
     background-color: #00689B;
     color: white;
     padding: 10px 20px;
@@ -41,7 +41,7 @@ button {
     cursor: pointer;
 }
 
-button:hover {
+button:hover, .btn:hover {
     background-color: #005f8a;
 }
 
@@ -121,4 +121,35 @@ nav ul li a {
 
 nav ul li a:hover {
     text-decoration: underline;
+}
+
+/* Modal styling for test notification */
+.modal-content {
+    border-radius: 6px;
+}
+
+.modal-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-body ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+.modal-body ul li {
+    margin-bottom: 15px;
+}
+
+.modal-body pre {
+    background-color: #f8f9fa;
+    padding: 10px;
+    border-radius: 4px;
+    max-height: 300px;
+    overflow-y: auto;
 }

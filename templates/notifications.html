@@ -1,43 +1,4 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script>{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}Notifications{% endblock %}
 {% block content %}
 <div class="container">
@@ -112,7 +73,35 @@
                                 <td>{{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                                 <td>
                                     <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning">Edit</a>
+                                    <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#testModal-{{ notification.id }}">Test</button>
                                     <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}">Delete</button>
+                                    <!-- Test Modal -->
+                                    <div class="modal fade" id="testModal-{{ notification.id }}" tabindex="-1" aria-labelledby="testModalLabel-{{ notification.id }}" aria-hidden="true">
+                                        <div class="modal-dialog modal-lg">
+                                            <div class="modal-content">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title" id="testModalLabel-{{ notification.id }}">Test Notification Rule: {{ notification.rule_name }}</h5>
+                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                                </div>
+                                                <div class="modal-body">
+                                                    <div id="test-loading-{{ notification.id }}" class="alert alert-info">
+                                                        Testing rule... Please wait.
+                                                    </div>
+                                                    <div id="test-results-{{ notification.id }}" style="display: none;">
+                                                        <h6>Retrieved Articles</h6>
+                                                        <div id="test-articles-{{ notification.id }}"></div>
+                                                        <h6>Email Preview</h6>
+                                                        <pre id="test-email-{{ notification.id }}" style="white-space: pre-wrap;"></pre>
+                                                    </div>
+                                                    <div id="test-error-{{ notification.id }}" class="alert alert-danger" style="display: none;"></div>
+                                                </div>
+                                                <div class="modal-footer">
+                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- Delete Modal -->
                                     <div class="modal fade" id="deleteModal-{{ notification.id }}" tabindex="-1" aria-labelledby="deleteModalLabel-{{ notification.id }}" aria-hidden="true">
                                         <div class="modal-dialog">
                                             <div class="modal-content">
@@ -141,4 +130,53 @@
         </div>
     {% endif %}
 </div>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        {% for notification in notifications %}
+            document.querySelector(`#testModal-{{ notification.id }}`).addEventListener('show.bs.modal', function() {
+                const loadingDiv = document.getElementById(`test-loading-{{ notification.id }}`);
+                const resultsDiv = document.getElementById(`test-results-{{ notification.id }}`);
+                const errorDiv = document.getElementById(`test-error-{{ notification.id }}`);
+                const articlesDiv = document.getElementById(`test-articles-{{ notification.id }}`);
+                const emailDiv = document.getElementById(`test-email-{{ notification.id }}`);
+                
+                // Reset modal state
+                loadingDiv.style.display = 'block';
+                resultsDiv.style.display = 'none';
+                errorDiv.style.display = 'none';
+                articlesDiv.innerHTML = '';
+                emailDiv.textContent = '';
+                
+                // Fetch test results
+                fetch(`/notifications/test/{{ notification.id }}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        loadingDiv.style.display = 'none';
+                        if (data.status === 'success') {
+                            resultsDiv.style.display = 'block';
+                            if (data.results.length > 0) {
+                                let html = '<ul>';
+                                data.results.forEach(result => {
+                                    html += `<li><strong>${result.title}</strong> (${result.publication_date})<br>${result.abstract ? result.abstract.substring(0, 200) + '...' : 'No abstract'}</li>`;
+                                });
+                                html += '</ul>';
+                                articlesDiv.innerHTML = html;
+                            } else {
+                                articlesDiv.innerHTML = '<p>No articles found.</p>';
+                            }
+                            emailDiv.textContent = data.email_content;
+                        } else {
+                            errorDiv.style.display = 'block';
+                            errorDiv.textContent = `Error: ${data.message}`;
+                        }
+                    })
+                    .catch(error => {
+                        loadingDiv.style.display = 'none';
+                        errorDiv.style.display = 'block';
+                        errorDiv.textContent = `Error: ${error.message}`;
+                    });
+            });
+        {% endfor %}
+    });
+</script>
 {% endblock %}
