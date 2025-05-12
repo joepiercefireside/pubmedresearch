@@ -46,6 +46,16 @@ button:hover, .btn:hover {
     background-color: #005f8a;
 }
 
+.btn-primary {
+    background-color: #00689B;
+    border-color: #00689B;
+}
+
+.btn-primary:hover {
+    background-color: #005f8a;
+    border-color: #005f8a;
+}
+
 .error {
     color: red;
     margin: 10px 0;
@@ -81,7 +91,7 @@ button:hover, .btn:hover {
 .result-title a {
     color: #00689B;
     text-decoration: none;
-    font-size: 1em; /* Reduced from 1.1em */
+    font-size: 1em;
 }
 
 .result-title a:hover {
