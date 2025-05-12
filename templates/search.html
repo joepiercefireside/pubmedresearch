@@ -100,7 +100,7 @@
         }
         {% for prompt in prompts %}
             if (promptId === '{{ prompt.id }}') {
-                promptTextArea.value = '{{ prompt.prompt_text|escapejs }}';
+                promptTextArea.value = {{ prompt.prompt_text|tojson }};
             }
         {% endfor %}
     }
