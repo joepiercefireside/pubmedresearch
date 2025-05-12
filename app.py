@@ -112,7 +112,7 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
         logger.info(f"Sending Grok API request: prompt={query[:50]}..., context_length={len(context)}")
         
         completion = client.chat.completions.create(
-            model="grok-3-latest",
+            model="grok-3",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
@@ -133,7 +133,7 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
                 "Content-Type": "application/json"
             }
             data = {
-                "model": "grok-3-latest",
+                "model": "grok-3",
                 "messages": [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
@@ -192,8 +192,24 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         pmids = esearch_result['esearchresult']['idlist']
         if not pmids:
             logger.info(f"No new results for rule {rule_id}")
+            content = "No new results found for this rule."
+            # Send email even if no results (to test SendGrid)
+            message = Mail(
+                from_email=Email("notifications@pubmedresearcher.com"),
+                to_emails=To(user_email),
+                subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+                plain_text_content=content
+            )
+            response = sg.send(message)
+            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, no results")
+            
             if test_mode:
-                return {"results": [], "email_content": "No new results found for this rule.", "status": "success"}
+                return {
+                    "results": [],
+                    "email_content": content,
+                    "status": "success",
+                    "email_sent": True
+                }
             return
         
         efetch_xml = efetch(pmids, api_key=api_key)
@@ -210,29 +226,46 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         else:
             content = output
         
+        # Send email (in both test and non-test mode)
+        message = Mail(
+            from_email=Email("notifications@pubmedresearcher.com"),
+            to_emails=To(user_email),
+            subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+            plain_text_content=content
+        )
+        response = sg.send(message)
+        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}")
+        
         if test_mode:
             return {
                 "results": results,
                 "email_content": content,
-                "status": "success"
+                "status": "success",
+                "email_sent": True
             }
         
-        # Send email if not in test mode
-        message = Mail(
-            from_email=Email("notifications@pubmedresearcher.com"),
-            to_emails=To(user_email),
-            subject=f"PubMedResearcher Notification: {rule_name}",
-            plain_text_content=content
-        )
-        response = sg.send(message)
-        logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}")
     except Exception as e:
         logger.error(f"Error running notification rule {rule_id}: {str(e)}")
         if test_mode:
+            # Attempt to send an error email
+            try:
+                message = Mail(
+                    from_email=Email("notifications@pubmedresearcher.com"),
+                    to_emails=To(user_email),
+                    subject=f"PubMedResearcher Test Notification Failed: {rule_name}",
+                    plain_text_content=f"Error testing notification rule: {str(e)}"
+                )
+                response = sg.send(message)
+                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}")
+                email_sent = True
+            except Exception as email_e:
+                logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
+                email_sent = False
             return {
                 "results": [],
                 "email_content": f"Error: {str(e)}",
-                "status": "error"
+                "status": "error",
+                "email_sent": email_sent
             }
         raise
 
@@ -317,7 +350,6 @@ def logout():
     return redirect(url_for('login'))
 
 def extract_keywords_and_intent(query):
-    # Use Grok to understand query intent and extract keywords
     intent_prompt = """
 Analyze the following medical research query and extract its intent and keywords for a PubMed API search.
 - Identify the core topic (e.g., disease, condition).
@@ -1033,7 +1065,7 @@ def test_notification(id):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, u.email "
+        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
         "FROM notifications n JOIN users u ON n.user_id = u.id WHERE n.id = %s AND n.user_id = %s",
         (id, current_user.id)
     )

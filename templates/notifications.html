@@ -85,12 +85,15 @@
                                                 </div>
                                                 <div class="modal-body">
                                                     <div id="test-loading-{{ notification.id }}" class="alert alert-info">
-                                                        Testing rule... Please wait.
+                                                        Testing rule and sending email... Please wait.
                                                     </div>
                                                     <div id="test-results-{{ notification.id }}" style="display: none;">
+                                                        <div id="test-email-status-{{ notification.id }}" class="alert alert-success" style="display: none;">
+                                                            Email sent to {{ current_user.email }}. Check your inbox.
+                                                        </div>
                                                         <h6>Retrieved Articles</h6>
                                                         <div id="test-articles-{{ notification.id }}"></div>
-                                                        <h6>Email Preview</h6>
+                                                        <h6>Email Content Preview</h6>
                                                         <pre id="test-email-{{ notification.id }}" style="white-space: pre-wrap;"></pre>
                                                     </div>
                                                     <div id="test-error-{{ notification.id }}" class="alert alert-danger" style="display: none;"></div>
@@ -136,6 +139,7 @@
             document.querySelector(`#testModal-{{ notification.id }}`).addEventListener('show.bs.modal', function() {
                 const loadingDiv = document.getElementById(`test-loading-{{ notification.id }}`);
                 const resultsDiv = document.getElementById(`test-results-{{ notification.id }}`);
+                const emailStatusDiv = document.getElementById(`test-email-status-{{ notification.id }}`);
                 const errorDiv = document.getElementById(`test-error-{{ notification.id }}`);
                 const articlesDiv = document.getElementById(`test-articles-{{ notification.id }}`);
                 const emailDiv = document.getElementById(`test-email-{{ notification.id }}`);
@@ -143,17 +147,24 @@
                 // Reset modal state
                 loadingDiv.style.display = 'block';
                 resultsDiv.style.display = 'none';
+                emailStatusDiv.style.display = 'none';
                 errorDiv.style.display = 'none';
                 articlesDiv.innerHTML = '';
                 emailDiv.textContent = '';
                 
                 // Fetch test results
                 fetch(`/notifications/test/{{ notification.id }}`)
-                    .then(response => response.json())
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Failed to test notification: ${response.statusText}`);
+                        }
+                        return response.json();
+                    })
                     .then(data => {
                         loadingDiv.style.display = 'none';
                         if (data.status === 'success') {
                             resultsDiv.style.display = 'block';
+                            emailStatusDiv.style.display = data.email_sent ? 'block' : 'none';
                             if (data.results.length > 0) {
                                 let html = '<ul>';
                                 data.results.forEach(result => {
@@ -168,6 +179,9 @@
                         } else {
                             errorDiv.style.display = 'block';
                             errorDiv.textContent = `Error: ${data.message}`;
+                            if (data.email_sent) {
+                                errorDiv.textContent += ' (Error email sent to your inbox)';
+                            }
                         }
                     })
                     .catch(error => {
