@@ -1,94 +1,126 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>PubMed Researcher - Search</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='styles.css') }}?v=1">
-</head>
-<body>
-    {% extends "base.html" %}
-    {% block content %}
-    <div class="container">
-        <h1>Search PubMed</h1>
-        <form method="POST" action="{{ url_for('search') }}">
-            <div class="form-group">
-                <label for="query">Search Query:</label>
-                <input type="text" id="query" name="query" value="{{ query if query else '' }}" required>
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>Search PubMed</h1>
+    <div class="card">
+        <form method="POST" id="searchForm">
+            <div class="mb-3">
+                <label for="query" class="form-label">Search Query</label>
+                <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" placeholder="Enter your search query (e.g., diabetes treatments in 2025)" required>
             </div>
-            <div class="form-group">
-                <label for="prompt_id">Select Prompt:</label>
-                <select id="prompt_id" name="prompt_id">
+            <div class="mb-3">
+                <label for="prompt_id" class="form-label">Select Prompt (Optional)</label>
+                <select class="form-control" id="prompt_id" name="prompt_id" onchange="updatePromptText()">
                     <option value="">None</option>
                     {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" {% if prompt.id == prompt_id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div class="form-group">
-                <label for="prompt_text">Prompt Text (editable):</label>
-                <textarea id="prompt_text" name="prompt_text" rows="4">{{ prompt_text if prompt_text else '' }}</textarea>
+            <div class="mb-3">
+                <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
+                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter custom prompt (e.g., Summarize the top 3 results)">{{ prompt_text|default('') }}</textarea>
             </div>
-            <button type="submit">Search</button>
+            <button type="submit" class="btn btn-primary">Search</button>
         </form>
-
-        {% if error %}
-        <div class="error">
-            <p>{{ error }}</p>
-        </div>
-        {% endif %}
-
-        {% if prompt_output %}
-        <div class="ai-response">
-            <h2>AI Summary</h2>
-            {{ prompt_output | safe }}
-        </div>
-        {% endif %}
-
-        {% if results %}
-        <div class="results">
-            <h2>Search Results ({{ results|length }})</h2>
-            {% for result in results %}
-            <div class="result-card">
-                <h3 class="result-title"><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank">{{ result.title }}</a></h3>
-                <p class="result-abstract">{{ result.abstract[:300] if result.abstract else 'No abstract available.' }}...</p>
-                <div class="result-meta">
-                    <span><strong>Authors:</strong> {{ result.authors or 'Unknown' }}</span>
-                    <span><strong>Journal:</strong> {{ result.journal or 'Unknown' }}</span>
-                    <span><strong>Date:</strong> {{ result.publication_date or 'Unknown' }}</span>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else 'warning' if category == 'warning' else 'success' }} mt-3">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
     </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const promptSelect = document.getElementById('prompt_id');
-            const promptTextArea = document.getElementById('prompt_text');
-            const prompts = {{ prompts | tojson }};
+    {% if error %}
+        <div class="alert alert-danger mt-3">{{ error }}</div>
+    {% endif %}
 
-            promptSelect.addEventListener('change', function() {
-                const selectedPromptId = this.value;
-                const selectedPrompt = prompts.find(prompt => prompt.id === selectedPromptId);
-                promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
-            });
+    <!-- Primary Results (Within Timeframe) -->
+    {% if results %}
+        <div class="card mt-3">
+            <h2>Search Results{% if query %} for "{{ query }}"{% endif %}</h2>
+            {% if prompt_output %}
+                <div class="card-body">
+                    <h3>AI Summary</h3>
+                    {{ prompt_output|safe }}
+                </div>
+            {% endif %}
+            <div class="list-group">
+                {% for result in results %}
+                    <div class="list-group-item">
+                        <h4 class="mb-1">{{ result.title }}</h4>
+                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Publication Date:</strong> {{ result.publication_date or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Abstract:</strong> {{ result.abstract or 'No abstract available' }}</p>
+                        <a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank" class="btn btn-sm btn-info">View on PubMed</a>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
 
-            const query = "{{ query | escape }}";
-            if (query) {
-                const source = new EventSource("/search_progress?query=" + encodeURIComponent(query));
-                source.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    const statusElement = document.getElementById('search-status');
-                    if (statusElement) {
-                        statusElement.textContent = data.status;
-                    }
-                    if (data.status === "complete" || data.status.startsWith("error")) {
-                        source.close();
-                    }
-                };
+    <!-- Fallback Results (Outside Timeframe) -->
+    {% if fallback_results %}
+        <div class="card mt-3">
+            <h2>These results are relevant but outside your timeframe</h2>
+            {% if fallback_prompt_output %}
+                <div class="card-body">
+                    <h3>AI Summary (Outside Timeframe)</h3>
+                    {{ fallback_prompt_output|safe }}
+                </div>
+            {% endif %}
+            <div class="list-group">
+                {% for result in fallback_results %}
+                    <div class="list-group-item">
+                        <h4 class="mb-1">{{ result.title }}</h4>
+                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Publication Date:</strong> {{ result.publication_date or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Abstract:</strong> {{ result.abstract or 'No abstract available' }}</p>
+                        <a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank" class="btn btn-sm btn-info">View on PubMed</a>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+<script>
+    function updatePromptText() {
+        const promptId = document.getElementById('prompt_id').value;
+        const promptTextArea = document.getElementById('prompt_text');
+        if (!promptId) {
+            promptTextArea.value = '';
+            return;
+        }
+        {% for prompt in prompts %}
+            if (promptId === '{{ prompt.id }}') {
+                promptTextArea.value = '{{ prompt.prompt_text|escapejs }}';
             }
+        {% endfor %}
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.getElementById('searchForm');
+        form.addEventListener('submit', function() {
+            updateSearchProgress('contacting PubMed');
         });
-    </script>
-    {% endblock %}
-</body>
-</html>
+
+        function updateSearchProgress(status) {
+            const eventSource = new EventSource('/search_progress?query=' + encodeURIComponent('{{ query|default('') }}'));
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log('Search progress:', data.status);
+                if (data.status.includes('error') || data.status === 'complete') {
+                    eventSource.close();
+                }
+            };
+        }
+    });
+</script>
+{% endblock %}
