@@ -200,7 +200,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 raise Exception("SendGrid API key not configured. Please contact support.")
             # Send email even if no results (to test SendGrid)
             message = Mail(
-                from_email=Email("notifications@pubmedresearcher.com"),
+                from_email=Email("noreply@firesidetechnologies.com"),
                 to_emails=To(user_email),
                 subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
                 plain_text_content=content
@@ -235,7 +235,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             raise Exception("SendGrid API key not configured. Please contact support.")
         # Send email (in both test and non-test mode)
         message = Mail(
-            from_email=Email("notifications@pubmedresearcher.com"),
+            from_email=Email("noreply@firesidetechnologies.com"),
             to_emails=To(user_email),
             subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
             plain_text_content=content
@@ -259,7 +259,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 if not sg:
                     raise Exception("SendGrid API key not configured. Please contact support.")
                 message = Mail(
-                    from_email=Email("notifications@pubmedresearcher.com"),
+                    from_email=Email("noreply@firesidetechnologies.com"),
                     to_emails=To(user_email),
                     subject=f"PubMedResearcher Test Notification Failed: {rule_name}",
                     plain_text_content=f"Error testing notification rule: {str(e)}"
@@ -269,8 +269,22 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 email_sent = True
             except Exception as email_e:
                 logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}\n{traceback.format_exc()}")
+                # Parse SendGrid error response for details
+                error_detail = ""
+                if hasattr(email_e, 'body') and email_e.body:
+                    try:
+                        error_body = json.loads(email_e.body.decode('utf-8'))
+                        error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
+                    except json.JSONDecodeError:
+                        error_detail = f": {email_e.body.decode('utf-8')}"
                 email_sent = False
-            error_message = "Email sending failed due to invalid API key configuration. Please contact support." if "Invalid header value" in str(e) or "API key not configured" in str(e) else str(e)
+            error_message = (
+                f"Email sending failed due to unverified sender identity. Please verify noreply@firesidetechnologies.com in SendGrid{error_detail}."
+                if "403" in str(e) or "Forbidden" in str(e)
+                else "Email sending failed due to invalid API key configuration. Please contact support."
+                if "Invalid header value" in str(e) or "API key not configured" in str(e)
+                else f"Email sending failed: {str(e)}{error_detail}"
+            )
             return {
                 "results": [],
                 "email_content": error_message,
@@ -610,7 +624,7 @@ Articles:
         'relationship': ['relationship', 'association', 'impact', 'effect']
     }
     focus_weight = 0.2 if intent and intent.get('focus') else 0
-    focus_terms = focus_keywords.get(intent.get('focus'), []) if intent else []
+    focus_terms = focus_keywords.get(intent.get('findent', [])) if intent else []
     
     for i, (emb, result) in enumerate(zip(embeddings, results)):
         similarity = 1 - cosine(query_embedding, emb) if emb is not None else 0.0
@@ -900,7 +914,7 @@ def edit_prompt(id):
     conn.close()
     return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
 
-@app.route('/prompt/delete/<int:id>', methods=['POST'])
+@app.route('/ litt/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_prompt(id):
     conn = get_db_connection()
