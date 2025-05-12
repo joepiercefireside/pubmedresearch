@@ -165,7 +165,7 @@
                         if (data.status === 'success') {
                             resultsDiv.style.display = 'block';
                             emailStatusDiv.style.display = data.email_sent ? 'block' : 'none';
-                            if (data.results.length > 0) {
+                            if (data.results && data.results.length > 0) {
                                 let html = '<ul>';
                                 data.results.forEach(result => {
                                     html += `<li><strong>${result.title}</strong> (${result.publication_date})<br>${result.abstract ? result.abstract.substring(0, 200) + '...' : 'No abstract'}</li>`;
@@ -175,10 +175,10 @@
                             } else {
                                 articlesDiv.innerHTML = '<p>No articles found.</p>';
                             }
-                            emailDiv.textContent = data.email_content;
+                            emailDiv.textContent = data.email_content || 'No content available';
                         } else {
                             errorDiv.style.display = 'block';
-                            errorDiv.textContent = `Error: ${data.message}`;
+                            errorDiv.textContent = `Error: ${data.message || 'An unexpected error occurred'}`;
                             if (data.email_sent) {
                                 errorDiv.textContent += ' (Error email sent to your inbox)';
                             }
@@ -187,7 +187,7 @@
                     .catch(error => {
                         loadingDiv.style.display = 'none';
                         errorDiv.style.display = 'block';
-                        errorDiv.textContent = `Error: ${error.message}`;
+                        errorDiv.textContent = `Error: ${error.message || 'Failed to connect to server'}`;
                     });
             });
         {% endfor %}

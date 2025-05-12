@@ -51,7 +51,10 @@ scheduler = BackgroundScheduler()
 scheduler.start()
 
 # SendGrid client
-sg = sendgrid.SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+sendgrid_api_key = os.environ.get('SENDGRID_API_KEY')
+if not sendgrid_api_key:
+    logger.error("SENDGRID_API_KEY not set in environment variables")
+sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
 # Initialize SQLite database for search progress
 def init_progress_db():
@@ -193,6 +196,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         if not pmids:
             logger.info(f"No new results for rule {rule_id}")
             content = "No new results found for this rule."
+            if not sg:
+                raise Exception("SendGrid API key not configured")
             # Send email even if no results (to test SendGrid)
             message = Mail(
                 from_email=Email("notifications@pubmedresearcher.com"),
@@ -226,6 +231,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         else:
             content = output
         
+        if not sg:
+            raise Exception("SendGrid API key not configured")
         # Send email (in both test and non-test mode)
         message = Mail(
             from_email=Email("notifications@pubmedresearcher.com"),
@@ -249,6 +256,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         if test_mode:
             # Attempt to send an error email
             try:
+                if not sg:
+                    raise Exception("SendGrid API key not configured")
                 message = Mail(
                     from_email=Email("notifications@pubmedresearcher.com"),
                     to_emails=To(user_email),
