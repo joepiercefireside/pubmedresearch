@@ -51,7 +51,7 @@ scheduler = BackgroundScheduler()
 scheduler.start()
 
 # SendGrid client
-sendgrid_api_key = os.environ.get('SENDGRID_API_KEY')
+sendgrid_api_key = os.environ.get('SENDGRID_API_KEY', '').strip()
 if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
@@ -197,7 +197,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             logger.info(f"No new results for rule {rule_id}")
             content = "No new results found for this rule."
             if not sg:
-                raise Exception("SendGrid API key not configured")
+                raise Exception("SendGrid API key not configured. Please contact support.")
             # Send email even if no results (to test SendGrid)
             message = Mail(
                 from_email=Email("notifications@pubmedresearcher.com"),
@@ -206,7 +206,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 plain_text_content=content
             )
             response = sg.send(message)
-            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, no results")
+            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}")
             
             if test_mode:
                 return {
@@ -232,7 +232,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             content = output
         
         if not sg:
-            raise Exception("SendGrid API key not configured")
+            raise Exception("SendGrid API key not configured. Please contact support.")
         # Send email (in both test and non-test mode)
         message = Mail(
             from_email=Email("notifications@pubmedresearcher.com"),
@@ -241,7 +241,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             plain_text_content=content
         )
         response = sg.send(message)
-        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}")
+        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}")
         
         if test_mode:
             return {
@@ -252,12 +252,12 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             }
         
     except Exception as e:
-        logger.error(f"Error running notification rule {rule_id}: {str(e)}")
+        logger.error(f"Error running notification rule {rule_id}: {str(e)}\n{traceback.format_exc()}")
         if test_mode:
             # Attempt to send an error email
             try:
                 if not sg:
-                    raise Exception("SendGrid API key not configured")
+                    raise Exception("SendGrid API key not configured. Please contact support.")
                 message = Mail(
                     from_email=Email("notifications@pubmedresearcher.com"),
                     to_emails=To(user_email),
@@ -265,14 +265,15 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     plain_text_content=f"Error testing notification rule: {str(e)}"
                 )
                 response = sg.send(message)
-                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}")
+                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}")
                 email_sent = True
             except Exception as email_e:
-                logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
+                logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}\n{traceback.format_exc()}")
                 email_sent = False
+            error_message = "Email sending failed due to invalid API key configuration. Please contact support." if "Invalid header value" in str(e) or "API key not configured" in str(e) else str(e)
             return {
                 "results": [],
-                "email_content": f"Error: {str(e)}",
+                "email_content": error_message,
                 "status": "error",
                 "email_sent": email_sent
             }

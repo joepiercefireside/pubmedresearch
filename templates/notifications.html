@@ -178,7 +178,7 @@
                             emailDiv.textContent = data.email_content || 'No content available';
                         } else {
                             errorDiv.style.display = 'block';
-                            errorDiv.textContent = `Error: ${data.message || 'An unexpected error occurred'}`;
+                            errorDiv.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
                             if (data.email_sent) {
                                 errorDiv.textContent += ' (Error email sent to your inbox)';
                             }
@@ -187,7 +187,7 @@
                     .catch(error => {
                         loadingDiv.style.display = 'none';
                         errorDiv.style.display = 'block';
-                        errorDiv.textContent = `Error: ${error.message || 'Failed to connect to server'}`;
+                        errorDiv.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
                     });
             });
         {% endfor %}
