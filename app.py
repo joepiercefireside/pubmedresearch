@@ -26,6 +26,8 @@ import openai
 import httpx.__version__
 import time
 import tenacity
+import email_validator
+from email_validator import validate_email, EmailNotValidError
 
 load_dotenv()
 
@@ -174,8 +176,19 @@ def load_user(user_id):
         return User(user[0], user[1])
     return None
 
+def validate_user_email(email):
+    try:
+        validate_email(email, check_deliverability=False)
+        return True
+    except EmailNotValidError as e:
+        logger.error(f"Invalid email address: {email}, error: {str(e)}")
+        return False
+
 def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=False):
-    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, test_mode: {test_mode}")
+    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, test_mode: {test_mode}, recipient: {user_email}")
+    if not validate_user_email(user_email):
+        raise ValueError(f"Invalid recipient email address: {user_email}")
+    
     keywords_list = [k.strip() for k in keywords.split(',')]
     
     # Calculate precise date ranges for PubMed [dp]
@@ -193,6 +206,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         api_key = os.environ.get('PUBMED_API_KEY')
         esearch_result = esearch(search_query, retmax=20, api_key=api_key)
         pmids = esearch_result['esearchresult']['idlist']
+        logger.info(f"Notification rule {rule_id} query: {search_query}, PMIDs: {len(pmids)}")
         if not pmids:
             logger.info(f"No new results for rule {rule_id}")
             content = "No new results found for this rule."
@@ -205,15 +219,18 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
                 plain_text_content=content
             )
+            logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
             response = sg.send(message)
-            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}")
+            response_headers = {k: v for k, v in response.headers.items()}
+            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
             
             if test_mode:
                 return {
                     "results": [],
                     "email_content": content,
                     "status": "success",
-                    "email_sent": True
+                    "email_sent": True,
+                    "message_id": response_headers.get('X-Message-Id', 'Not provided')
                 }
             return
         
@@ -240,15 +257,18 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
             plain_text_content=content
         )
+        logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
         response = sg.send(message)
-        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}")
+        response_headers = {k: v for k, v in response.headers.items()}
+        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
         
         if test_mode:
             return {
                 "results": results,
                 "email_content": content,
                 "status": "success",
-                "email_sent": True
+                "email_sent": True,
+                "message_id": response_headers.get('X-Message-Id', 'Not provided')
             }
         
     except Exception as e:
@@ -264,8 +284,10 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     subject=f"PubMedResearcher Test Notification Failed: {rule_name}",
                     plain_text_content=f"Error testing notification rule: {str(e)}"
                 )
+                logger.info(f"Sending error email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
                 response = sg.send(message)
-                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, status: {response.status_code}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}")
+                response_headers = {k: v for k, v in response.headers.items()}
+                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
                 email_sent = True
             except Exception as email_e:
                 logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}\n{traceback.format_exc()}")
@@ -289,7 +311,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 "results": [],
                 "email_content": error_message,
                 "status": "error",
-                "email_sent": email_sent
+                "email_sent": email_sent,
+                "message_id": None
             }
         raise
 
@@ -380,7 +403,7 @@ Analyze the following medical research query and extract its intent and keywords
 - Identify the focus, which must be one of: 'treatment', 'diagnosis', 'prevention', 'review', or 'relationship' (for queries about impact, association, or effect).
 - Extract only explicit terms from the query (e.g., 'weight loss', 'heart disease'), avoiding inferred terms unless directly mentioned.
 - Exclude terms like 'impact', 'relationship', or 'association' from keywords; map them to 'focus: relationship'.
-- Identify the timeframe (e.g., specific year, recent).
+- Identify the timeframe (e.g., specific year, recent, past week). For 'past week', use a date range from 7 days ago to today in YYYY/MM/DD[dp] format.
 - Identify any author names if present.
 - Return a JSON object with:
   - 'keywords': List of search terms (prioritize explicit phrases, include MeSH terms if applicable).
@@ -397,13 +420,13 @@ Example output for "articles on the relationship between weight loss and heart d
     "author": null
   }}
 }}
-Example output for "what can you tell me is new in the treatment of diabetes in 2025":
+Example output for "weight loss and diabetes. only in the past week.":
 {{
-  "keywords": ["diabetes", "new treatment"],
+  "keywords": ["weight loss", "diabetes"],
   "intent": {{
     "topic": "diabetes",
-    "focus": "treatment",
-    "date": "2025[dp]",
+    "focus": "relationship",
+    "date": "2025/05/05[dp] TO 2025/05/12[dp]",
     "author": null
   }}
 }}
@@ -416,16 +439,22 @@ Example output for "what can you tell me is new in the treatment of diabetes in 
         logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
         if not keywords:
             logger.warning("No keywords extracted, using fallback")
-            keywords = [word for word in query.lower().split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between'} and len(word) > 1][:3]
+            keywords = [word for word in query.lower().split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between', 'only', 'past', 'week'} and len(word) > 1][:3]
+        # Fallback for 'past week' if not set by Grok
+        if 'past week' in query.lower() and not intent.get('date'):
+            today = datetime.now()
+            intent['date'] = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
         return keywords, intent
     except Exception as e:
         logger.error(f"Error extracting intent with Grok: {str(e)}")
         # Fallback to simple keyword extraction
         query_lower = query.lower()
-        keywords = [word for word in query_lower.split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between'} and len(word) > 1][:3]
+        keywords = [word for word in query_lower.split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between', 'only', 'past', 'week'} and len(word) > 1][:3]
         intent = {'topic': None, 'focus': None, 'date': None, 'author': None}
-        year_match = re.search(r'\b(20\d{2})\b', query_lower)
-        if year_match:
+        today = datetime.now()
+        if 'past week' in query_lower:
+            intent['date'] = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+        elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
             intent['date'] = f"{year_match.group(1)}[dp]"
         if 'relationship' in query_lower or 'impact' in query_lower or 'association' in query_lower:
             intent['focus'] = 'relationship'
@@ -624,7 +653,7 @@ Articles:
         'relationship': ['relationship', 'association', 'impact', 'effect']
     }
     focus_weight = 0.2 if intent and intent.get('focus') else 0
-    focus_terms = focus_keywords.get(intent.get('findent', [])) if intent else []
+    focus_terms = focus_keywords.get(intent.get('focus', [])) if intent else []
     
     for i, (emb, result) in enumerate(zip(embeddings, results)):
         similarity = 1 - cosine(query_embedding, emb) if emb is not None else 0.0
@@ -681,16 +710,23 @@ def generate_prompt_output(query, results, prompt_text, prompt_params):
     
     # Apply year filter if specified
     query_lower = query.lower()
-    year_match = re.search(r'\b(20\d{2})\b', query_lower)
-    target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
     result_count = prompt_params.get('result_count', 20) if prompt_params else 20
     
+    # Handle 'past week' filter
     filtered_results = results
-    if target_year:
-        filtered_results = [r for r in results if r['publication_date'] == target_year]
-        logger.info(f"After year filter ({target_year}): {len(filtered_results)} results")
+    if 'past week' in query_lower:
+        today = datetime.now()
+        start_date = today - timedelta(days=7)
+        start_date_str = start_date.strftime('%Y/%m/%d')
+        end_date_str = today.strftime('%Y/%m/%d')
+        filtered_results = [
+            r for r in results
+            if r['publication_date'] and r['publication_date'].isdigit() and
+            start_date.year <= int(r['publication_date']) <= today.year
+        ]
+        logger.info(f"After past week filter ({start_date_str} to {end_date_str}): {len(filtered_results)} results")
         if not filtered_results:
-            flash(f"No results found for {target_year}. Displaying all available results.", "warning")
+            flash(f"No results found for the past week. Displaying all available results.", "warning")
             filtered_results = results  # Fall back to all results with warning
     
     # Ensure at least result_count results (or all available) are used for summarization
@@ -782,10 +818,6 @@ def search():
         result_count = prompt_params['result_count']
         limit_presentation = prompt_params['limit_presentation']
         
-        query_lower = query.lower()
-        year_match = re.search(r'\b(20\d{2})\b', query_lower)
-        target_year = year_match.group(1) if year_match else str(datetime.now().year) if 'this year' in query_lower else None
-        
         results = None
         api_key = os.environ.get('PUBMED_API_KEY')
         search_query = build_pubmed_query(keywords, intent)
@@ -796,7 +828,7 @@ def search():
             if not pmids:
                 logger.info("No results with initial query")
                 update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', target_year=target_year, username=current_user.email)
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', target_year=None, username=current_user.email)
             
             update_search_progress(current_user.id, query, "fetching article details")
             efetch_xml = efetch(pmids, api_key=api_key)
@@ -812,7 +844,7 @@ def search():
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', target_year=target_year, username=current_user.email)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], prompt_output='', target_year=None, username=current_user.email)
         
         # Rank results
         update_search_progress(current_user.id, query, "ranking results")
@@ -839,7 +871,7 @@ def search():
             prompt_id=prompt_id,
             prompt_text=selected_prompt_text,
             prompt_output=prompt_output,
-            target_year=target_year,
+            target_year=None,
             username=current_user.email
         )
     
@@ -914,7 +946,7 @@ def edit_prompt(id):
     conn.close()
     return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
 
-@app.route('/ litt/delete/<int:id>', methods=['POST'])
+@app.route('/prompt/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_prompt(id):
     conn = get_db_connection()
@@ -1111,8 +1143,44 @@ def test_notification(id):
         logger.error(f"Error testing notification rule {rule_id}: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# Schedule notifications on startup
-schedule_notification_rules()
+@app.route('/notifications/test_email', methods=['POST'])
+@login_required
+def test_email():
+    if not sg:
+        logger.error("SendGrid API key not configured for test email")
+        return jsonify({"status": "error", "message": "SendGrid API key not configured"}), 500
+    
+    email = request.form.get('email', current_user.email)
+    if not validate_user_email(email):
+        logger.error(f"Invalid email for test: {email}")
+        return jsonify({"status": "error", "message": f"Invalid email address: {email}"}), 400
+    
+    try:
+        message = Mail(
+            from_email=Email("noreply@firesidetechnologies.com"),
+            to_emails=To(email),
+            subject="PubMedResearcher Test Email",
+            plain_text_content="This is a test email to verify SendGrid integration."
+        )
+        logger.info(f"Sending test email, recipient: {email}, subject: {message.subject}")
+        response = sg.send(message)
+        response_headers = {k: v for k, v in response.headers.items()}
+        logger.info(f"Test email sent, recipient: {email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+        return jsonify({
+            "status": "success",
+            "message": f"Test email sent to {email}. Check your inbox and spam/junk folder.",
+            "message_id": response_headers.get('X-Message-Id', 'Not provided')
+        })
+    except Exception as e:
+        logger.error(f"Error sending test email: {str(e)}\n{traceback.format_exc()}")
+        error_detail = ""
+        if hasattr(e, 'body') and e.body:
+            try:
+                error_body = json.loads(e.body.decode('utf-8'))
+                error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
+            except json.JSONDecodeError:
+                error_detail = f": {e.body.decode('utf-8')}"
+        return jsonify({"status": "error", "message": f"Failed to send test email: {str(e)}{error_detail}"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
