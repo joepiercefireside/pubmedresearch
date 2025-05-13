@@ -275,7 +275,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             if test_mode:
                 return {
                     "results": [],
-                    "email - search_results: [],
                     "email_content": content,
                     "status": "success",
                     "email_sent": True,
