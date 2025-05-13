@@ -28,6 +28,15 @@ import time
 import tenacity
 import email_validator
 from email_validator import validate_email, EmailNotValidError
+import nltk
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk import pos_tag
+
+# Download NLTK data
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('averaged_perceptron_tagger')
 
 load_dotenv()
 
@@ -58,7 +67,7 @@ if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
-# Initialize SQLite database for search progress and synonym cache
+# Initialize SQLite database for search progress, synonym cache, and Grok response cache
 def init_progress_db():
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
@@ -66,6 +75,8 @@ def init_progress_db():
                  (user_id TEXT, query TEXT, status TEXT, timestamp REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS synonym_cache
                  (keyword TEXT PRIMARY KEY, synonyms TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
+                 (query TEXT PRIMARY KEY, response TEXT, timestamp REAL)''')
     conn.commit()
     conn.close()
 
@@ -89,6 +100,24 @@ def get_search_progress(user_id, query):
     conn.close()
     return result if result else (None, None)
 
+def cache_grok_response(query, response):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO grok_cache (query, response, timestamp) VALUES (?, ?, ?)",
+              (query, response, time.time()))
+    conn.commit()
+    conn.close()
+    logger.info(f"Cached Grok response for query: {query[:50]}...")
+
+def get_cached_grok_response(query):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT response, timestamp FROM grok_cache WHERE query = ? AND timestamp > ?",
+              (query, time.time() - 86400))  # Cache valid for 24 hours
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else None
+
 def load_embedding_model():
     global embedding_model
     if embedding_model is None:
@@ -101,12 +130,14 @@ def generate_embedding(text):
     model = load_embedding_model()
     return model.encode(text, convert_to_numpy=True)
 
-# Precomputed biomedical vocabulary for synonym expansion (simplified example)
+# Expanded biomedical vocabulary for synonym expansion
 BIOMEDICAL_VOCAB = {
     "diabetes": ["Diabetes Mellitus", "insulin resistance", "type 2 diabetes", "glycemic control", "glucose metabolism"],
     "weight loss": ["obesity", "body weight reduction", "fat loss", "bariatric", "dietary restriction"],
     "treatment": ["therapy", "therapeutic approach", "intervention", "management", "care"],
     "disease": ["illness", "disorder", "condition", "sickness", "pathology"],
+    "statins": ["HMG-CoA reductase inhibitors", "lipid-lowering drugs", "atorvastatin", "simvastatin", "rosuvastatin"],
+    "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction", "atherosclerosis", "cardiac disorder"],
     # Add more terms as needed
 }
 
@@ -181,13 +212,19 @@ def get_mesh_synonyms(keyword, api_key=None):
 
 # xAI Grok API call with enhanced retries
 @tenacity.retry(
-    stop=tenacity.stop_after_attempt(5),
-    wait=tenacity.wait_exponential(multiplier=1, min=2, max=10),
+    stop=tenacity.stop_after_attempt(7),  # Increased retries
+    wait=tenacity.wait_exponential(multiplier=1, min=2, max=15),
     retry=tenacity.retry_if_exception_type((requests.exceptions.RequestException, Exception)),
     before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
 )
 def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
+        # Check cache first
+        cached_response = get_cached_grok_response(query + prompt)
+        if cached_response:
+            logger.info(f"Using cached Grok response for query: {query[:50]}...")
+            return cached_response
+        
         api_key = os.environ.get('XAI_API_KEY')
         if not api_key:
             logger.error("XAI_API_KEY not set")
@@ -203,10 +240,13 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
                 {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
             ],
             max_tokens=1000,
-            timeout=30
+            timeout=60  # Increased timeout
         )
         response = completion.choices[0].message.content
         logger.info(f"Grok API response received: length={len(response)}")
+        
+        # Cache response
+        cache_grok_response(query + prompt, response)
         return response
     except Exception as e:
         logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
@@ -225,14 +265,15 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
                 ],
                 "max_tokens": 1000
             }
-            response = requests.post(url, headers=headers, json=data, proxies=None, timeout=30)
+            response = requests.post(url, headers=headers, json=data, proxies=None, timeout=60)
             response.raise_for_status()
             response_text = response.json()['choices'][0]['message']['content']
             logger.info(f"Fallback Grok API response received: length={len(response_text)}")
+            cache_grok_response(query + prompt, response_text)
             return response_text
         except Exception as fallback_e:
             logger.error(f"Fallback API call failed: {str(fallback_e)}")
-            return f"Fallback: Unable to generate AI summary. Please check API key or endpoint."
+            return None  # Return None to trigger fallback logic
 
 # Database connection
 def get_db_connection():
@@ -269,18 +310,17 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     if not validate_user_email(user_email):
         raise ValueError(f"Invalid recipient email address: {user_email}")
     
-    keywords_list = [k.strip() for k in keywords.split(',')]
+    # Parse keywords as a query to leverage synonym expansion
+    query = keywords
+    keywords_with_synonyms, intent = extract_keywords_and_intent(query)
+    intent['date'] = {
+        'daily': f"{(datetime.now() - timedelta(days=1)).strftime('%Y/%m/%d')}[dp] TO {datetime.now().strftime('%Y/%m/%d')}[dp]",
+        'weekly': f"{(datetime.now() - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {datetime.now().strftime('%Y/%m/%d')}[dp]",
+        'monthly': f"{(datetime.now() - timedelta(days=31)).strftime('%Y/%m/%d')}[dp] TO {datetime.now().strftime('%Y/%m/%d')}[dp]",
+        'annually': f"{(datetime.now() - timedelta(days=365)).strftime('%Y/%m/%d')}[dp] TO {datetime.now().strftime('%Y/%m/%d')}[dp]"
+    }[timeframe]
     
-    # Calculate precise date ranges for PubMed [dp]
-    today = datetime.now()
-    date_filters = {
-        'daily': f"{(today - timedelta(days=1)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]",
-        'weekly': f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]",
-        'monthly': f"{(today - timedelta(days=31)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]",
-        'annually': f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
-    }
-    intent = {'date': date_filters[timeframe]}
-    search_query = build_pubmed_query(keywords_list, intent)
+    search_query = build_pubmed_query(keywords_with_synonyms, intent)
     
     try:
         api_key = os.environ.get('PUBMED_API_KEY')
@@ -292,7 +332,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             content = "No new results found for this rule."
             if not sg:
                 raise Exception("SendGrid API key not configured. Please contact support.")
-            # Send email even if no results (to test SendGrid)
             message = Mail(
                 from_email=Email("noreply@firesidetechnologies.com"),
                 to_emails=To(user_email),
@@ -330,7 +369,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         
         if not sg:
             raise Exception("SendGrid API key not configured. Please contact support.")
-        # Send email (in both test and non-test mode)
         message = Mail(
             from_email=Email("noreply@firesidetechnologies.com"),
             to_emails=To(user_email),
@@ -354,7 +392,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     except Exception as e:
         logger.error(f"Error running notification rule {rule_id}: {str(e)}\n{traceback.format_exc()}")
         if test_mode:
-            # Attempt to send an error email
             try:
                 if not sg:
                     raise Exception("SendGrid API key not configured. Please contact support.")
@@ -481,8 +518,8 @@ Analyze the following medical research query and extract its intent and keywords
 - Identify the core topic (e.g., disease, condition).
 - Identify the focus, which must be one of: 'treatment', 'diagnosis', 'prevention', 'review', or 'relationship' (for queries about impact, association, or effect), or null if no specific focus is implied.
 - Set focus to null for broad queries (e.g., "diabetes in 2025") unless specific terms like 'treatment', 'diagnosis', 'prevention', 'review', or 'relationship' are explicitly mentioned.
-- Extract only explicit terms from the query (e.g., 'weight loss', 'heart disease'), avoiding inferred terms unless directly mentioned.
-- Exclude terms like 'impact', 'relationship', or 'association' from keywords; map them to 'focus: relationship' only if explicitly stated.
+- Extract explicit terms and phrases (e.g., 'weight loss', 'heart disease'), preserving multi-word medical terms.
+- Exclude stop words (e.g., 'what', 'about', 'and') unless part of a medical phrase.
 - Identify the timeframe explicitly mentioned in the query (e.g., specific year like "2025", "past year", "since 2023"). 
   - For a specific year (e.g., "2025"), use YYYY/01/01[dp] TO YYYY/12/31[dp].
   - For "past year", use date range from one year ago to today in YYYY/MM/DD[dp] format.
@@ -490,7 +527,7 @@ Analyze the following medical research query and extract its intent and keywords
   - If no timeframe is specified, set date to null.
 - Identify any author names if present.
 - Return a JSON object with:
-  - 'keywords': List of search terms (prioritize explicit phrases, include MeSH terms if applicable).
+  - 'keywords': List of search terms and phrases (prioritize medical terms, include MeSH terms if applicable).
   - 'intent': Dictionary with 'topic', 'focus', 'date', 'author' (null if not specified).
 Ensure terms are relevant to medical research and suitable for PubMed's Boolean query syntax.
 Query: {0}
@@ -504,104 +541,108 @@ Example output for "articles on the relationship between weight loss and heart d
     "author": null
   }}
 }}
-Example output for "weight loss and diabetes in 2025":
+Example output for "statins and heart disease":
 {{
-  "keywords": ["weight loss", "diabetes"],
+  "keywords": ["statins", "heart disease"],
   "intent": {{
-    "topic": "diabetes",
+    "topic": "heart disease",
     "focus": null,
-    "date": "2025/01/01[dp] TO 2025/12/31[dp]",
+    "date": null,
     "author": null
   }}
 }}
-Example output for "diabetes in the past year":
-{{
-  "keywords": ["diabetes"],
-  "intent": {{
-    "topic": "diabetes",
-    "focus": null,
-    "date": "2024/05/12[dp] TO 2025/05/12[dp]",
-    "author": null
-  }}
-}}
-Example output for "treatments for diabetes since 2023":
-{{
-  "keywords": ["diabetes", "treatments"],
-  "intent": {{
-    "topic": "diabetes",
-    "focus": "treatment",
-    "date": "2023/01/01[dp] TO 2025/05/12[dp]",
-    "author": null
-  }}
-}}
-""".format(query)
+"""
     try:
-        response = query_grok_api(query, "", prompt=intent_prompt)
-        result = json.loads(response)
-        keywords = result.get('keywords', [])
-        intent = result.get('intent', {'topic': None, 'focus': None, 'date': None, 'author': None})
-        logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
-        if not keywords:
-            logger.warning("No keywords extracted, using fallback")
-            keywords = [word for word in query.lower().split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between', 'only', 'past', 'week', 'year', 'since', 'related', 'to'} and len(word) > 1][:3]
+        response = query_grok_api(query, "", prompt=intent_prompt.format(query))
+        if response:
+            result = json.loads(response)
+            keywords = result.get('keywords', [])
+            intent = result.get('intent', {'topic': None, 'focus': None, 'date': None, 'author': None})
+            logger.info(f"Extracted keywords: {keywords}, Intent: {intent}")
+            if not keywords:
+                logger.warning("No keywords extracted from Grok, using fallback")
+                keywords, intent = extract_keywords_fallback(query)
+        else:
+            logger.warning("Grok API returned None, using fallback")
+            keywords, intent = extract_keywords_fallback(query)
         
-        # Expand keywords with synonyms
-        expanded_keywords = []
-        for kw in keywords:
-            mesh_synonyms = get_mesh_synonyms(kw, api_key=os.environ.get('PUBMED_API_KEY'))
-            embedding_synonyms = get_embedding_synonyms(kw)
-            synonyms = list(set(mesh_synonyms + embedding_synonyms))[:5]  # Limit to 5 synonyms
-            expanded_keywords.append((kw, synonyms))
-        
-        # Fallback for date parsing if Grok fails
-        query_lower = query.lower()
-        if not intent.get('date'):
-            today = datetime.now()
-            if 'past week' in query_lower:
-                intent['date'] = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
-            elif 'past year' in query_lower:
-                intent['date'] = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
-            elif year_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
-                intent['date'] = f"{year_match.group(1)}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
-            elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
-                intent['date'] = f"{year_match.group(1)}/01/01[dp] TO {year_match.group(1)}/12/31[dp]"
-        
-        logger.info(f"Expanded keywords: {expanded_keywords}, Updated intent: {intent}")
-        return expanded_keywords, intent
-    except Exception as e:
-        logger.error(f"Error extracting intent with Grok: {str(e)}")
-        # Fallback to simple keyword extraction
-        query_lower = query.lower()
-        keywords = [word for word in query_lower.split() if word not in {'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'relationship', 'impact', 'between', 'only', 'past', 'week', 'year', 'since', 'related', 'to'} and len(word) > 1][:3]
-        intent = {'topic': None, 'focus': None, 'date': None, 'author': None}
-        today = datetime.now()
-        if 'past week' in query_lower:
-            intent['date'] = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
-        elif 'past year' in query_lower:
-            intent['date'] = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
-        elif year_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
-            intent['date'] = f"{year_match.group(1)}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
-        elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
-            intent['date'] = f"{year_match.group(1)}/01/01[dp] TO {year_match.group(1)}/12/31[dp]"
-        if 'relationship' in query_lower or 'impact' in query_lower or 'association' in query_lower:
-            intent['focus'] = 'relationship'
-        elif 'treatment' in query_lower or 'therapy' in query_lower:
-            intent['focus'] = 'treatment'
-        elif 'diagnosis' in query_lower:
-            intent['focus'] = 'diagnosis'
-        elif 'prevention' in query_lower:
-            intent['focus'] = 'prevention'
-        elif 'review' in query_lower or 'meta-analysis' in query_lower:
-            intent['focus'] = 'review'
         # Expand keywords with synonyms
         expanded_keywords = []
         for kw in keywords:
             mesh_synonyms = get_mesh_synonyms(kw, api_key=os.environ.get('PUBMED_API_KEY'))
             embedding_synonyms = get_embedding_synonyms(kw)
             synonyms = list(set(mesh_synonyms + embedding_synonyms))[:5]
+            # Fallback synonyms for common terms
+            if not synonyms and kw.lower() in BIOMEDICAL_VOCAB:
+                synonyms = BIOMEDICAL_VOCAB[kw.lower()]
             expanded_keywords.append((kw, synonyms))
-        logger.info(f"Fallback expanded keywords: {expanded_keywords}, Intent: {intent}")
+        
+        logger.info(f"Expanded keywords: {expanded_keywords}, Intent: {intent}")
         return expanded_keywords, intent
+    except Exception as e:
+        logger.error(f"Error extracting intent with Grok: {str(e)}")
+        return extract_keywords_fallback(query)
+
+def extract_keywords_fallback(query):
+    """Fallback keyword extraction using NLTK for robust phrase detection."""
+    query_lower = query.lower()
+    # Tokenize and tag parts of speech
+    tokens = word_tokenize(query)
+    tagged = pos_tag(tokens)
+    
+    # Define stop words
+    stop_words = set(stopwords.words('english')).union({'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to'})
+    
+    # Extract noun phrases and significant terms
+    keywords = []
+    current_phrase = []
+    for word, tag in tagged:
+        if word.lower() not in stop_words and (tag.startswith('NN') or tag.startswith('JJ') or word.lower() in BIOMEDICAL_VOCAB):
+            current_phrase.append(word.lower())
+        else:
+            if current_phrase:
+                keywords.append(' '.join(current_phrase))
+                current_phrase = []
+    if current_phrase:
+        keywords.append(' '.join(current_phrase))
+    
+    # Remove empty or single-character keywords
+    keywords = [kw for kw in keywords if len(kw) > 1]
+    
+    # Default to query terms if no keywords found
+    if not keywords:
+        keywords = [word for word in query_lower.split() if word not in stop_words and len(word) > 1]
+    
+    # Limit to 5 keywords to avoid overly broad queries
+    keywords = keywords[:5]
+    
+    # Parse intent
+    intent = {'topic': None, 'focus': None, 'date': None, 'author': None}
+    today = datetime.now()
+    if 'past week' in query_lower:
+        intent['date'] = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+    elif 'past year' in query_lower:
+        intent['date'] = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+    elif year_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
+        intent['date'] = f"{year_match.group(1)}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+    elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
+        intent['date'] = f"{year_match.group(1)}/01/01[dp] TO {year_match.group(1)}/12/31[dp]"
+    if 'relationship' in query_lower or 'impact' in query_lower or 'association' in query_lower:
+        intent['focus'] = 'relationship'
+    elif 'treatment' in query_lower or 'therapy' in query_lower:
+        intent['focus'] = 'treatment'
+    elif 'diagnosis' in query_lower:
+        intent['focus'] = 'diagnosis'
+    elif 'prevention' in query_lower:
+        intent['focus'] = 'prevention'
+    elif 'review' in query_lower or 'meta-analysis' in query_lower:
+        intent['focus'] = 'review'
+    
+    # Set topic to the first meaningful keyword
+    intent['topic'] = keywords[0] if keywords else None
+    
+    logger.info(f"Fallback keywords: {keywords}, Intent: {intent}")
+    return keywords, intent
 
 def build_pubmed_query(keywords_with_synonyms, intent):
     query_parts = []
@@ -612,9 +653,11 @@ def build_pubmed_query(keywords_with_synonyms, intent):
             terms = [keyword.replace(' ', '+')] + [syn.replace(' ', '+') for syn in synonyms]
         term_query = f"({' OR '.join([f'{t}[MeSH Terms] OR {t}' for t in terms])})"
         query_parts.append(term_query)
-    # Use AND to ensure all keyword groups are included
-    query = " AND ".join(query_parts)
-    # Only apply focus terms if explicitly specified
+    
+    # Use OR for non-essential terms to avoid over-restriction
+    query = " OR ".join(query_parts) if query_parts else ""
+    
+    # Apply focus terms if specified
     if intent.get('focus') and intent['focus'] in ['treatment', 'diagnosis', 'prevention', 'review', 'relationship']:
         focus_terms = {
             'treatment': '(treatment OR therapy OR therapeutic)',
@@ -623,11 +666,16 @@ def build_pubmed_query(keywords_with_synonyms, intent):
             'review': '(review OR meta-analysis)',
             'relationship': '(relationship OR association OR impact OR effect)'
         }
-        query += f" AND {focus_terms[intent['focus']]}"
+        query = f"({query}) AND {focus_terms[intent['focus']]}" if query else focus_terms[intent['focus']]
+    
+    # Apply author if specified
     if intent.get('author'):
-        query += f" AND {intent['author']}[au]"
+        query = f"({query}) AND {intent['author']}[au]" if query else f"{intent['author']}[au]"
+    
+    # Apply date if specified
     if intent.get('date'):
-        query += f" {intent['date']}"
+        query = f"({query}) {intent['date']}" if query else intent['date']
+    
     return query
 
 @sleep_and_retry
@@ -747,38 +795,36 @@ Articles:
 """
         
         response = query_grok_api(query, context, prompt=ranking_prompt)
+        if not response:
+            raise ValueError("Grok API returned None")
+        
         logger.info(f"Grok ranking response: {response[:200]}...")
         
         # Parse Grok's JSON response
-        try:
-            ranking = json.loads(response)
-            # Handle case where response is {"articles": [...]}
-            if isinstance(ranking, dict) and 'articles' in ranking:
-                ranking = ranking['articles']
-            if not isinstance(ranking, list):
-                raise ValueError("Grok response is not a list")
-            
-            # Convert 1-based indices to 0-based
-            ranked_indices = []
-            for item in ranking:
-                if isinstance(item, dict) and 'index' in item:
-                    index = item['index']
-                    if isinstance(index, (int, str)) and str(index).isdigit():
-                        index = int(index) - 1
-                        if 0 <= index < len(results):
-                            ranked_indices.append(index)
-            
-            # Add missing indices
-            missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
-            ranked_indices.extend(missing_indices)
-            
-            ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
-            ranked_embeddings = [embeddings[i] for i in ranked_indices[:display_result_count]]
-            logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices[:display_result_count]}")
-            return ranked_results, ranked_embeddings, ranked_indices
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Error parsing Grok ranking response: {str(e)}")
-            # Fall through to fallback ranking
+        ranking = json.loads(response)
+        if isinstance(ranking, dict) and 'articles' in ranking:
+            ranking = ranking['articles']
+        if not isinstance(ranking, list):
+            raise ValueError("Grok response is not a list")
+        
+        # Convert 1-based indices to 0-based
+        ranked_indices = []
+        for item in ranking:
+            if isinstance(item, dict) and 'index' in item:
+                index = item['index']
+                if isinstance(index, (int, str)) and str(index).isdigit():
+                    index = int(index) - 1
+                    if 0 <= index < len(results):
+                        ranked_indices.append(index)
+        
+        # Add missing indices
+        missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
+        ranked_indices.extend(missing_indices)
+        
+        ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
+        ranked_embeddings = [embeddings[i] for i in ranked_indices[:display_result_count]]
+        logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices[:display_result_count]}")
+        return ranked_results, ranked_embeddings, ranked_indices
     except Exception as e:
         logger.error(f"Grok ranking failed: {str(e)}")
     
@@ -814,11 +860,9 @@ Articles:
             if author_lower in result['authors'].lower():
                 author_score = 0.3
         
-        # Primary: relevance score; Secondary: publication year for tie-breaking
         weighted_score = (0.7 * similarity) + (0.2 * recency_bonus) + (focus_weight * focus_score) + author_score
         scores.append((i, weighted_score, pub_year))
     
-    # Sort by weighted_score (descending) and pub_year (descending) for ties
     scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
     ranked_indices = [i for i, _, _ in scores]
     
@@ -848,14 +892,11 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     if not results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''}."
     
-    # Log initial results
     logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
     
-    # Apply year filter if specified and not fallback
     query_lower = query.lower()
     summary_result_count = prompt_params.get('summary_result_count', 20) if prompt_params else 20
     
-    # Handle 'past week' filter for non-fallback results
     filtered_results = results
     if 'past week' in query_lower and not is_fallback:
         today = datetime.now()
@@ -869,20 +910,18 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         ]
         logger.info(f"After past week filter ({start_date_str} to {end_date_str}): {len(filtered_results)} results")
     
-    # Use summary_result_count for AI summary
     context_results = filtered_results[:summary_result_count]
     logger.info(f"Context results count for summary: {len(context_results)}")
     
     if not context_results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
-    # Prepare context from results
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
     
-    # Use xAI Grok API to generate response
     output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
+    if not output:
+        output = "AI summary unavailable due to API error."
     
-    # Format output with paragraph breaks
     paragraphs = output.split('\n\n')
     formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
     logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")
@@ -923,14 +962,12 @@ def search():
     conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
 
-    # Handle prompt_id from GET (e.g., page reload) or POST (form submission)
     prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
     prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
     query = request.args.get('query', request.form.get('query', ''))
 
-    # If a prompt_id is selected, fetch its text
     selected_prompt_text = prompt_text
-    if prompt_id and not prompt_text:  # Only override if prompt_text is empty
+    if prompt_id and not prompt_text:
         for prompt in prompts:
             if prompt['id'] == prompt_id:
                 selected_prompt_text = prompt['prompt_text']
@@ -946,7 +983,6 @@ def search():
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
             return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
         
-        # Update progress
         update_search_progress(current_user.id, query, "contacting PubMed")
         
         keywords_with_synonyms, intent = extract_keywords_and_intent(query)
@@ -972,7 +1008,6 @@ def search():
                 efetch_xml = efetch(pmids, api_key=api_key)
                 results = parse_efetch_xml(efetch_xml)
             elif intent.get('date'):
-                # Fallback: Retry without timeframe
                 logger.info(f"No results for query: {search_query}, retrying without timeframe")
                 fallback_intent = intent.copy()
                 fallback_intent['date'] = None
@@ -984,7 +1019,6 @@ def search():
                     efetch_xml = efetch(pmids, api_key=api_key)
                     fallback_results = parse_efetch_xml(efetch_xml)
             
-            # Cache results
             if results or fallback_results:
                 conn = get_db_connection()
                 cur = conn.cursor()
@@ -999,7 +1033,6 @@ def search():
                 update_search_progress(current_user.id, query, "error: No results found")
                 return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
             
-            # Rank results
             update_search_progress(current_user.id, query, "ranking results")
             ranked_results = []
             ranked_fallback_results = []
@@ -1016,7 +1049,6 @@ def search():
             prompt_output = generate_prompt_output(query, ranked_results, selected_prompt_text, prompt_params)
             fallback_prompt_output = generate_prompt_output(query, ranked_fallback_results, selected_prompt_text, prompt_params, is_fallback=True) if ranked_fallback_results else ''
             
-            # Ensure partial results are displayed even if Grok fails
             if prompt_output.startswith("Fallback:"):
                 flash("AI summarization failed for primary results, displaying raw results.", "warning")
             if fallback_prompt_output and fallback_prompt_output.startswith("Fallback:"):
