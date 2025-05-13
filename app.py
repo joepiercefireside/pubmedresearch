@@ -691,31 +691,36 @@ def parse_efetch_xml(xml_content):
 def parse_prompt(prompt_text):
     if not prompt_text:
         return {
-            'result_count': 20,
+            'summary_result_count': 20,
+            'display_result_count': 20,
             'limit_presentation': False
         }
     
     prompt_text_lower = prompt_text.lower()
     
-    # Extract number of results
-    result_count = 20
+    # Extract number of results for AI summary
+    summary_result_count = 20
     if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
-        result_count = min(int(match.group(1)), 20)  # Cap at 20 due to PubMed API
+        summary_result_count = min(int(match.group(1)), 20)  # Cap at 20 due to PubMed API
     elif 'top' in prompt_text_lower:
-        result_count = 3  # Default for "top"
+        summary_result_count = 3  # Default for "top"
+    
+    # Always display up to 20 results
+    display_result_count = 20
     
     # Check for limiting presentation (only for display, not context)
     limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
     
-    logger.info(f"Parsed prompt: result_count={result_count}, limit_presentation={limit_presentation}")
+    logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
     
     return {
-        'result_count': result_count,
+        'summary_result_count': summary_result_count,
+        'display_result_count': display_result_count,
         'limit_presentation': limit_presentation
     }
 
 def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None):
-    result_count = prompt_params.get('result_count', 20) if prompt_params else 20
+    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
     ranked_results = []
     ranked_embeddings = []
     
@@ -767,9 +772,9 @@ Articles:
             missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
             ranked_indices.extend(missing_indices)
             
-            ranked_results = [results[i] for i in ranked_indices[:result_count]]
-            ranked_embeddings = [embeddings[i] for i in ranked_indices[:result_count]]
-            logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices[:result_count]}")
+            ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
+            ranked_embeddings = [embeddings[i] for i in ranked_indices[:display_result_count]]
+            logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices[:display_result_count]}")
             return ranked_results, ranked_embeddings, ranked_indices
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Error parsing Grok ranking response: {str(e)}")
@@ -817,9 +822,9 @@ Articles:
     scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
     ranked_indices = [i for i, _, _ in scores]
     
-    ranked_results = [results[i] for i in ranked_indices[:result_count]]
-    ranked_embeddings = [embeddings[i] for i in ranked_indices[:result_count]]
-    logger.info(f"Fallback ranked {len(ranked_results)} results with indices {ranked_indices[:result_count]}")
+    ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
+    ranked_embeddings = [embeddings[i] for i in ranked_indices[:display_result_count]]
+    logger.info(f"Fallback ranked {len(ranked_results)} results with indices {ranked_indices[:display_result_count]}")
     return ranked_results, ranked_embeddings, ranked_indices
 
 def generate_summary(abstract, query, title=None, authors=None, journal=None, publication_date=None):
@@ -848,7 +853,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     
     # Apply year filter if specified and not fallback
     query_lower = query.lower()
-    result_count = prompt_params.get('result_count', 20) if prompt_params else 20
+    summary_result_count = prompt_params.get('summary_result_count', 20) if prompt_params else 20
     
     # Handle 'past week' filter for non-fallback results
     filtered_results = results
@@ -864,9 +869,9 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         ]
         logger.info(f"After past week filter ({start_date_str} to {end_date_str}): {len(filtered_results)} results")
     
-    # Ensure at least result_count results (or all available) are used for summarization
-    context_results = filtered_results[:result_count]
-    logger.info(f"Context results count: {len(context_results)}")
+    # Use summary_result_count for AI summary
+    context_results = filtered_results[:summary_result_count]
+    logger.info(f"Context results count for summary: {len(context_results)}")
     
     if not context_results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
@@ -950,7 +955,8 @@ def search():
             return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
         
         prompt_params = parse_prompt(selected_prompt_text)
-        result_count = prompt_params['result_count']
+        summary_result_count = prompt_params['summary_result_count']
+        display_result_count = prompt_params['display_result_count']
         limit_presentation = prompt_params['limit_presentation']
         
         api_key = os.environ.get('PUBMED_API_KEY')
@@ -999,10 +1005,10 @@ def search():
             ranked_fallback_results = []
             if results:
                 ranked_results, _, ranked_indices = grok_llm_ranking(query, results, [generate_embedding(f"{r['title']} {r['abstract'] or ''}") for r in results], intent, prompt_params)
-                results = [results[i] for i in ranked_indices]
+                results = [results[i] for i in ranked_indices[:display_result_count]]
             if fallback_results:
                 ranked_fallback_results, _, ranked_indices = grok_llm_ranking(query, fallback_results, [generate_embedding(f"{r['title']} {r['abstract'] or ''}") for r in fallback_results], intent, prompt_params)
-                fallback_results = [fallback_results[i] for i in ranked_indices]
+                fallback_results = [fallback_results[i] for i in ranked_indices[:display_result_count]]
             
             logger.info(f"Ranked results: {len(ranked_results)} primary, {len(ranked_fallback_results)} fallback")
             
@@ -1028,6 +1034,7 @@ def search():
                 prompt_text=selected_prompt_text,
                 prompt_output=prompt_output,
                 fallback_prompt_output=fallback_prompt_output,
+                summary_result_count=summary_result_count,
                 target_year=None,
                 username=current_user.email
             )

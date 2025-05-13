@@ -45,7 +45,7 @@
             <h2>Search Results{% if query %} for "{{ query }}"{% endif %}</h2>
             {% if prompt_output %}
                 <div class="card-body">
-                    <h3>AI Summary</h3>
+                    <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
                     {{ prompt_output|safe }}
                 </div>
             {% endif %}
@@ -70,7 +70,7 @@
             <h2>These results are relevant but outside your timeframe</h2>
             {% if fallback_prompt_output %}
                 <div class="card-body">
-                    <h3>AI Summary (Outside Timeframe)</h3>
+                    <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
                     {{ fallback_prompt_output|safe }}
                 </div>
             {% endif %}
