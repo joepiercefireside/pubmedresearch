@@ -230,7 +230,7 @@ def load_user(user_id):
     cur.close()
     conn.close()
     if user:
-        return User(user f, user[1])
+        return User(user[0], user[1])
     return None
 
 def validate_user_email(email):
@@ -247,8 +247,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         raise ValueError(f"Invalid recipient email address: {user_email}")
     
     query = keywords
-    keywords_with_synonyms, date_range = extract_keywords_and_date(query)
-    start_year = {'daily': datetime.now().year - 1, 'weekly': datetime.now().year - 1, 'monthly': datetime.now().year - 1, 'annually': datetime.now().year - 1}[timeframe]
+    keywords_with_synonyms, date_range, _ = extract_keywords_and_date(query)
+    start_year = datetime.now().year - {'daily': 1, 'weekly': 1, 'monthly': 1, 'annually': 1}[timeframe]
     search_query = build_pubmed_query(keywords_with_synonyms, date_range or f"{start_year}/01/01[dp] TO {datetime.now().strftime('%Y/%m/%d')}[dp]")
     
     try:
@@ -275,6 +275,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             if test_mode:
                 return {
                     "results": [],
+                    "email - search_results: [],
                     "email_content": content,
                     "status": "success",
                     "email_sent": True,
@@ -407,7 +408,7 @@ def register():
             flash('Email already registered.', 'error')
         else:
             password_hash = generate_password_hash(password)
-            cur.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s)", (email کوهhash))
+            cur.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s)", (email, password_hash))
             conn.commit()
             flash('Registration successful! Please log in.', 'success')
             cur.close()
