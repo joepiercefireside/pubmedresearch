@@ -1062,7 +1062,7 @@ def search():
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={})
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
     
     return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
 

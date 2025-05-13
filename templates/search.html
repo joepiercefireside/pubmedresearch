@@ -159,7 +159,8 @@
 
         function fetchAISummary() {
             const hasPrompt = {{ has_prompt|tojson }};
-            if (!hasPrompt) return;
+            const hasResults = {{ (results|length > 0 or fallback_results|length > 0)|tojson }};
+            if (!hasPrompt || !hasResults) return;
 
             const results = {{ results|tojson }};
             const fallbackResults = {{ fallback_results|tojson }};
@@ -217,11 +218,6 @@
                     `;
                 }
             });
-        }
-
-        // Trigger fetchAISummary on page load if has_prompt is true and results exist
-        if ({{ has_prompt|tojson }} && {{ results|length > 0|tojson }}) {
-            fetchAISummary();
         }
     });
 </script>
