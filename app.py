@@ -494,14 +494,16 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
 
 def build_pubmed_query(keywords_with_synonyms, date_range):
     query_parts = []
-    for keyword, synonyms in keywords_with_synonyms:
-        # Use [All Fields] for keyword and synonyms, except for 'diabetes' where MeSH is reliable
+    for keyword, _ in keywords_with_synonyms:  # Ignore synonyms for simplicity
         if keyword.lower() == "diabetes":
-            terms = [f'"{keyword}"[MeSH Terms]'] + [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms[:1]]  # Limit to 1 synonym
+            term_query = f'("{keyword}"[MeSH Terms] OR "{keyword}"[All Fields])'
         else:
-            terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms[:1]]  # Limit to 1 synonym
-        term_query = f"({' OR '.join(terms)})"
+            term_query = f'("{keyword}"[All Fields])'
         query_parts.append(term_query)
+    
+    # Convert date_range to use colon (:) for ESearch API
+    start_date, end_date = date_range.split(" TO ")
+    date_range = f"{start_date.replace('[dp]', '')}:{end_date.replace('[dp]', '')}[dp]"
     
     query = " AND ".join(query_parts) if query_parts else ""
     query = f"({query}) AND {date_range}" if query else date_range
