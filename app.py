@@ -266,7 +266,7 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
                 "max_tokens": 1000
             }
             logger.info(f"Sending async Grok API request: prompt={query[:50]}..., context_length={len(context)}")
-            async with session.post(url, headers=headers, json=data, timeout=60) as response:
+            async with session.post(url, headers=headers, json=data, timeout=120) as response:
                 response.raise_for_status()
                 response_json = await response.json()
                 response_text = response_json['choices'][0]['message']['content']
@@ -279,13 +279,17 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
 
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(7),
-    wait=tenacity.wait_exponential(multiplier=1, min=2, max=15),
+    wait=tenacity.wait_exponential(multiplier=1, min=2, max=30),
     retry=tenacity.retry_if_exception_type((requests.exceptions.RequestException, Exception)),
     before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
 )
 def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     loop = asyncio.get_event_loop()
-    return loop.run_until_complete(query_grok_api_async(query, context, prompt))
+    try:
+        return loop.run_until_complete(query_grok_api_async(query, context, prompt))
+    except Exception as e:
+        logger.error(f"Grok API call failed after retries: {str(e)}")
+        raise
 
 def get_db_connection():
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
@@ -571,23 +575,24 @@ Example output for "statins and heart disease":
             if not keywords:
                 logger.warning("No keywords extracted from Grok, using fallback")
                 keywords, intent = extract_keywords_fallback(query)
+            expanded_keywords = []
+            for kw in keywords:
+                mesh_synonyms = get_mesh_synonyms(kw, api_key=os.environ.get('PUBMED_API_KEY'))
+                synonyms = mesh_synonyms if mesh_synonyms else get_embedding_synonyms(kw)
+                if not synonyms and kw.lower() in BIOMEDICAL_VOCAB:
+                    synonyms = BIOMEDICAL_VOCAB[kw.lower()]
+                expanded_keywords.append((kw, synonyms))
+            return expanded_keywords, intent
         else:
             logger.warning("Grok API returned None, using fallback")
             keywords, intent = extract_keywords_fallback(query)
-        
-        expanded_keywords = []
-        for kw in keywords:
-            mesh_synonyms = get_mesh_synonyms(kw, api_key=os.environ.get('PUBMED_API_KEY'))
-            synonyms = mesh_synonyms if mesh_synonyms else get_embedding_synonyms(kw)
-            if not synonyms and kw.lower() in BIOMEDICAL_VOCAB:
-                synonyms = BIOMEDICAL_VOCAB[kw.lower()]
-            expanded_keywords.append((kw, synonyms))
-        
-        logger.info(f"Expanded keywords: {expanded_keywords}, Intent: {intent}")
-        return expanded_keywords, intent
+            expanded_keywords = [(kw, []) for kw in keywords]
+            return expanded_keywords, intent
     except Exception as e:
         logger.error(f"Error extracting intent with Grok: {str(e)}")
-        return extract_keywords_fallback(query)
+        keywords, intent = extract_keywords_fallback(query)
+        expanded_keywords = [(kw, []) for kw in keywords]
+        return expanded_keywords, intent
 
 def extract_keywords_fallback(query):
     query_lower = query.lower()
@@ -641,13 +646,23 @@ def extract_keywords_fallback(query):
 
 def build_pubmed_query(keywords_with_synonyms, intent):
     query_parts = []
-    for keyword, synonyms in keywords_with_synonyms:
-        if keyword.lower() == 'chronic inflammatory demyelinating polyneuropathy':
-            terms = ['cidp', 'chronic+inflammatory+demyelinating+polyneuropathy'] + synonyms
-        else:
-            terms = [keyword.replace(' ', '+')] + [syn.replace(' ', '+') for syn in synonyms]
-        term_query = f"({' OR '.join([f'{t}[MeSH Terms] OR {t}' for t in terms])})"
-        query_parts.append(term_query)
+    # Handle both list of tuples and flat list
+    if keywords_with_synonyms and isinstance(keywords_with_synonyms[0], tuple):
+        for keyword, synonyms in keywords_with_synonyms:
+            if keyword.lower() == 'chronic inflammatory demyelinating polyneuropathy':
+                terms = ['cidp', 'chronic+inflammatory+demyelinating+polyneuropathy'] + synonyms
+            else:
+                terms = [keyword.replace(' ', '+')] + [syn.replace(' ', '+') for syn in synonyms]
+            term_query = f"({' OR '.join([f'{t}[MeSH Terms] OR {t}' for t in terms])})"
+            query_parts.append(term_query)
+    else:
+        for keyword in keywords_with_synonyms:
+            if keyword.lower() == 'chronic inflammatory demyelinating polyneuropathy':
+                terms = ['cidp', 'chronic+inflammatory+demyelinating+polyneuropathy']
+            else:
+                terms = [keyword.replace(' ', '+')]
+            term_query = f"({' OR '.join([f'{t}[MeSH Terms] OR {t}' for t in terms])})"
+            query_parts.append(term_query)
     
     query = " OR ".join(query_parts) if query_parts else ""
     
@@ -960,7 +975,13 @@ def search():
         limit_presentation = prompt_params['limit_presentation']
         
         api_key = os.environ.get('PUBMED_API_KEY')
-        search_query = build_pubmed_query(keywords_with_synonyms, intent)
+        try:
+            search_query = build_pubmed_query(keywords_with_synonyms, intent)
+        except Exception as e:
+            logger.error(f"Error building PubMed query: {str(e)}")
+            update_search_progress(current_user.id, query, f"error: Query processing failed: {str(e)}")
+            return render_template('search.html', error=f"Query processing failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
+        
         try:
             update_search_progress(current_user.id, query, "executing search")
             esearch_result = esearch(search_query, retmax=20, api_key=api_key)
