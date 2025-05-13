@@ -45,12 +45,12 @@
             <h2>Search Results{% if query %} for "{{ query }}"{% endif %}</h2>
             {% if has_prompt %}
                 <div class="card-body" id="ai-summary">
-                    <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
                     <div class="loading">Working on AI Summary, this may take 30 to 40 seconds...</div>
                 </div>
             {% elif prompt_output is not none %}
                 <div class="card-body">
-                    <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
                     {{ prompt_output|safe }}
                 </div>
             {% endif %}
@@ -75,12 +75,12 @@
             <h2>These results are relevant but outside your timeframe</h2>
             {% if has_prompt %}
                 <div class="card-body" id="ai-fallback-summary">
-                    <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
                     <div class="loading">Working on AI Summary, this may take 30 to 40 seconds...</div>
                 </div>
             {% elif fallback_prompt_output is not none %}
                 <div class="card-body">
-                    <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
                     {{ fallback_prompt_output|safe }}
                 </div>
             {% endif %}
@@ -164,8 +164,8 @@
             const results = {{ results|tojson }};
             const fallbackResults = {{ fallback_results|tojson }};
             const promptText = {{ prompt_text|tojson }};
-            // Use provided prompt_params or default to empty object
             const promptParams = {{ prompt_params|tojson|default('{}') }};
+            const summaryResultCount = promptParams.summary_result_count || 20;
 
             const formData = new FormData();
             formData.append('query', '{{ query|default('') }}');
@@ -182,23 +182,23 @@
             .then(data => {
                 if (data.status === 'success') {
                     document.getElementById('ai-summary').innerHTML = `
-                        <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                        <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
                         ${data.prompt_output}
                     `;
                     if (data.fallback_prompt_output) {
                         document.getElementById('ai-fallback-summary').innerHTML = `
-                            <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                            <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
                             ${data.fallback_prompt_output}
                         `;
                     }
                 } else {
                     document.getElementById('ai-summary').innerHTML = `
-                        <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                        <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
                         <div class="alert alert-danger">${data.message}</div>
                     `;
                     if (document.getElementById('ai-fallback-summary')) {
                         document.getElementById('ai-fallback-summary').innerHTML = `
-                            <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                            <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
                             <div class="alert alert-danger">${data.message}</div>
                         `;
                     }
@@ -207,12 +207,12 @@
             .catch(error => {
                 console.error('Error fetching AI summary:', error);
                 document.getElementById('ai-summary').innerHTML = `
-                    <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
                     <div class="alert alert-danger">Failed to load AI summary.</div>
                 `;
                 if (document.getElementById('ai-fallback-summary')) {
                     document.getElementById('ai-fallback-summary').innerHTML = `
-                        <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                        <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
                         <div class="alert alert-danger">Failed to load AI summary.</div>
                     `;
                 }
