@@ -495,8 +495,12 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
 def build_pubmed_query(keywords_with_synonyms, date_range):
     query_parts = []
     for keyword, synonyms in keywords_with_synonyms:
-        terms = [f'"{keyword}"'] + [f'"{syn}"' for syn in synonyms]
-        term_query = f"({' OR '.join([f'{t}[MeSH Terms] OR {t}' for t in terms])})"
+        # Use [All Fields] for keyword and synonyms, except for 'diabetes' where MeSH is reliable
+        if keyword.lower() == "diabetes":
+            terms = [f'"{keyword}"[MeSH Terms]'] + [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms[:1]]  # Limit to 1 synonym
+        else:
+            terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms[:1]]  # Limit to 1 synonym
+        term_query = f"({' OR '.join(terms)})"
         query_parts.append(term_query)
     
     query = " AND ".join(query_parts) if query_parts else ""
