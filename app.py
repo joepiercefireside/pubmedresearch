@@ -20,10 +20,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
-from openai import OpenAI
 import traceback
-import openai
-import httpx.__version__
 import time
 import tenacity
 import email_validator
@@ -52,10 +49,6 @@ login_manager.login_view = 'login'
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Log dependency versions
-logger.info(f"openai version: {openai.__version__}")
-logger.info(f"httpx version: {httpx.__version__}")
 
 # Initialize embedding model and precompute vocabulary embeddings
 embedding_model = None
@@ -266,7 +259,7 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
                 "max_tokens": 1000
             }
             logger.info(f"Sending async Grok API request: prompt={query[:50]}..., context_length={len(context)}")
-            async with session.post(url, headers=headers, json=data, timeout=120) as response:
+            async with session.post(url, headers=headers, json=data, timeout=180) as response:
                 response.raise_for_status()
                 response_json = await response.json()
                 response_text = response_json['choices'][0]['message']['content']
@@ -275,11 +268,15 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
                 return response_text
     except Exception as e:
         logger.error(f"Async Grok API call failed: {str(e)}")
+        if isinstance(e, aiohttp.ClientResponseError):
+            logger.error(f"HTTP Status: {e.status}, Message: {e.message}")
+        elif isinstance(e, aiohttp.ClientConnectionError):
+            logger.error("Connection error, possibly network issue")
         return None
 
 @tenacity.retry(
-    stop=tenacity.stop_after_attempt(7),
-    wait=tenacity.wait_exponential(multiplier=1, min=2, max=30),
+    stop=tenacity.stop_after_attempt(3),
+    wait=tenacity.wait_exponential(multiplier=1, min=2, max=20),
     retry=tenacity.retry_if_exception_type((requests.exceptions.RequestException, Exception)),
     before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
 )
@@ -525,7 +522,7 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-def extract_keywords_and_intent(query):
+def extract_keywords_and_intent(query, search_older=False, start_year=None):
     intent_prompt = """
 Analyze the following medical research query and extract its intent and keywords for a PubMed API search.
 - Identify the core topic (e.g., disease, condition).
@@ -565,6 +562,20 @@ Example output for "statins and heart disease":
   }}
 }}
 """
+    today = datetime.now()
+    default_start_year = today.year - 5
+    if search_older and start_year:
+        try:
+            start_year = int(start_year)
+            if start_year < 1960 or start_year > today.year:
+                logger.warning(f"Invalid start year {start_year}, using default")
+                start_year = default_start_year
+        except ValueError:
+            logger.warning(f"Invalid start year format {start_year}, using default")
+            start_year = default_start_year
+    else:
+        start_year = default_start_year
+
     try:
         response = query_grok_api(query, "", prompt=intent_prompt.format(query))
         if response:
@@ -575,6 +586,10 @@ Example output for "statins and heart disease":
             if not keywords:
                 logger.warning("No keywords extracted from Grok, using fallback")
                 keywords, intent = extract_keywords_fallback(query)
+            if not intent['date'] and not (search_older and start_year):
+                intent['date'] = f"{default_start_year}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+            elif search_older and start_year:
+                intent['date'] = f"{start_year}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
             expanded_keywords = []
             for kw in keywords:
                 mesh_synonyms = get_mesh_synonyms(kw, api_key=os.environ.get('PUBMED_API_KEY'))
@@ -586,11 +601,19 @@ Example output for "statins and heart disease":
         else:
             logger.warning("Grok API returned None, using fallback")
             keywords, intent = extract_keywords_fallback(query)
+            if not intent['date'] and not (search_older and start_year):
+                intent['date'] = f"{default_start_year}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+            elif search_older and start_year:
+                intent['date'] = f"{start_year}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
             expanded_keywords = [(kw, []) for kw in keywords]
             return expanded_keywords, intent
     except Exception as e:
         logger.error(f"Error extracting intent with Grok: {str(e)}")
         keywords, intent = extract_keywords_fallback(query)
+        if not intent['date'] and not (search_older and start_year):
+            intent['date'] = f"{default_start_year}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+        elif search_older and start_year:
+            intent['date'] = f"{start_year}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
         expanded_keywords = [(kw, []) for kw in keywords]
         return expanded_keywords, intent
 
@@ -646,7 +669,6 @@ def extract_keywords_fallback(query):
 
 def build_pubmed_query(keywords_with_synonyms, intent):
     query_parts = []
-    # Handle both list of tuples and flat list
     if keywords_with_synonyms and isinstance(keywords_with_synonyms[0], tuple):
         for keyword, synonyms in keywords_with_synonyms:
             if keyword.lower() == 'chronic inflammatory demyelinating polyneuropathy':
@@ -771,6 +793,11 @@ def parse_prompt(prompt_text):
 
 def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None):
     display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    # Skip Grok ranking for small result sets to improve performance
+    if len(results) < 5:
+        logger.info(f"Skipping Grok ranking for {len(results)} results, using embedding-based ranking")
+        return embedding_based_ranking(query, results, embeddings, intent, prompt_params)
+    
     ranked_results = []
     ranked_embeddings = []
     
@@ -824,8 +851,10 @@ Articles:
         return ranked_results, ranked_embeddings, ranked_indices
     except Exception as e:
         logger.error(f"Grok ranking failed: {str(e)}")
-    
-    logger.info("Falling back to embedding-based ranking")
+        return embedding_based_ranking(query, results, embeddings, intent, prompt_params)
+
+def embedding_based_ranking(query, results, embeddings, intent=None, prompt_params=None):
+    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
     query_embedding = generate_embedding(query)
     current_year = datetime.now().year
     scores = []
@@ -864,7 +893,7 @@ Articles:
     
     ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
     ranked_embeddings = [embeddings[i] for i in ranked_indices[:display_result_count]]
-    logger.info(f"Fallback ranked {len(ranked_results)} results with indices {ranked_indices[:display_result_count]}")
+    logger.info(f"Embedding-based ranked {len(ranked_results)} results with indices {ranked_indices[:display_result_count]}")
     return ranked_results, ranked_embeddings, ranked_indices
 
 def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
@@ -944,6 +973,8 @@ def search():
     prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
     prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
     query = request.args.get('query', request.form.get('query', ''))
+    search_older = request.form.get('search_older', 'off') == 'on'
+    start_year = request.form.get('start_year', None)
 
     selected_prompt_text = prompt_text
     if prompt_id and not prompt_text:
@@ -955,19 +986,19 @@ def search():
             logger.warning(f"Prompt ID {prompt_id} not found in prompts")
             selected_prompt_text = ''
 
-    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}...")
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}")
 
     if request.method == 'POST':
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
         
         update_search_progress(current_user.id, query, "contacting PubMed")
         
-        keywords_with_synonyms, intent = extract_keywords_and_intent(query)
+        keywords_with_synonyms, intent = extract_keywords_and_intent(query, search_older, start_year)
         if not keywords_with_synonyms:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
         
         prompt_params = parse_prompt(selected_prompt_text)
         summary_result_count = prompt_params['summary_result_count']
@@ -980,7 +1011,7 @@ def search():
         except Exception as e:
             logger.error(f"Error building PubMed query: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Query processing failed: {str(e)}")
-            return render_template('search.html', error=f"Query processing failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
+            return render_template('search.html', error=f"Query processing failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
         
         try:
             update_search_progress(current_user.id, query, "executing search")
@@ -1016,7 +1047,7 @@ def search():
             if not results and not fallback_results:
                 logger.info("No results with initial or fallback query")
                 update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
             
             update_search_progress(current_user.id, query, "ranking results")
             embeddings = []
@@ -1078,14 +1109,16 @@ def search():
                 target_year=None,
                 username=current_user.email,
                 has_prompt=bool(selected_prompt_text),
-                prompt_params=prompt_params
+                prompt_params=prompt_params,
+                search_older=search_older,
+                start_year=start_year
             )
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
     
-    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20)
+    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=False, start_year=None)
 
 @app.route('/search_summary', methods=['POST'])
 @login_required

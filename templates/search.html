@@ -6,8 +6,23 @@
     <div class="card">
         <form method="POST" id="searchForm" action="{{ url_for('search') }}">
             <div class="mb-3">
-                <label for="query" class="form-label">Search Query</label>
-                <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" placeholder="Enter your search query (e.g., diabetes treatments in 2025)" required>
+                <label for="query" class="form-label">Search Query (default limited to past 5 years)</label>
+                <div class="d-flex align-items-center">
+                    <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" placeholder="Enter your search query (e.g., diabetes treatments in 2025)" required>
+                    <div class="ms-3">
+                        <input type="checkbox" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleYearDropdown()">
+                        <label for="search_older" class="ms-1">Search Older Articles</label>
+                    </div>
+                </div>
+                <div id="year_dropdown" class="mt-2" {% if not search_older %}style="display: none;"{% endif %}>
+                    <select class="form-control" id="start_year" name="start_year">
+                        <option value="">Select start year</option>
+                        {% for year in range(2025, 1959, -1) %}
+                            <option value="{{ year }}" {% if start_year == year|string %}selected{% endif %}>{{ year }}</option>
+                        {% endfor %}
+                    </select>
+                    <small id="year_warning" class="text-muted" style="display: none;">Larger date ranges may take more time</small>
+                </div>
             </div>
             <div class="mb-3">
                 <label for="prompt_id" class="form-label">Select Prompt (Optional)</label>
@@ -23,6 +38,9 @@
                 <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter custom prompt (e.g., Summarize the top 3 results)">{{ prompt_text|default('') }}</textarea>
             </div>
             <button type="submit" class="btn btn-primary">Search</button>
+            <div id="search_spinner" class="spinner-border text-primary ms-2" role="status" style="display: none;">
+                <span class="visually-hidden">Loading...</span>
+            </div>
         </form>
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -119,6 +137,10 @@
         background-color: #005580;
         border-color: #005580;
     }
+    .spinner-border {
+        width: 1.5rem;
+        height: 1.5rem;
+    }
 </style>
 
 <script>
@@ -136,9 +158,23 @@
         {% endfor %}
     }
 
+    function toggleYearDropdown() {
+        const searchOlder = document.getElementById('search_older').checked;
+        const yearDropdown = document.getElementById('year_dropdown');
+        const yearWarning = document.getElementById('year_warning');
+        yearDropdown.style.display = searchOlder ? 'block' : 'none';
+        yearWarning.style.display = searchOlder && document.getElementById('start_year').value ? 'block' : 'none';
+    }
+
+    document.getElementById('start_year')?.addEventListener('change', function() {
+        const yearWarning = document.getElementById('year_warning');
+        yearWarning.style.display = this.value ? 'block' : 'none';
+    });
+
     document.addEventListener('DOMContentLoaded', function() {
         const form = document.getElementById('searchForm');
         form.addEventListener('submit', function() {
+            document.getElementById('search_spinner').style.display = 'inline-block';
             updateSearchProgress('contacting PubMed');
         });
 
@@ -149,6 +185,7 @@
                 const data = JSON.parse(event.data);
                 console.log('Search progress:', data.status);
                 if (data.status.includes('error') || data.status === 'complete' || data.status === 'awaiting_summary') {
+                    document.getElementById('search_spinner').style.display = 'none';
                     eventSource.close();
                     if (data.status === 'awaiting_summary') {
                         fetchAISummary();
@@ -160,7 +197,10 @@
         function fetchAISummary() {
             const hasPrompt = {{ has_prompt|tojson }};
             const hasResults = {{ (results|length > 0 or fallback_results|length > 0)|tojson }};
-            if (!hasPrompt || !hasResults) return;
+            if (!hasPrompt || !hasResults) {
+                document.getElementById('search_spinner').style.display = 'none';
+                return;
+            }
 
             const results = {{ results|tojson }};
             const fallbackResults = {{ fallback_results|tojson }};
@@ -181,6 +221,7 @@
             })
             .then(response => response.json())
             .then(data => {
+                document.getElementById('search_spinner').style.display = 'none';
                 if (data.status === 'success') {
                     document.getElementById('ai-summary').innerHTML = `
                         <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
@@ -206,6 +247,7 @@
                 }
             })
             .catch(error => {
+                document.getElementById('search_spinner').style.display = 'none';
                 console.error('Error fetching AI summary:', error);
                 document.getElementById('ai-summary').innerHTML = `
                     <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
