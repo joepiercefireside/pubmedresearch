@@ -32,6 +32,9 @@ import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk import pos_tag
+import asyncio
+import aiohttp
+import hashlib
 
 # Download NLTK data
 nltk.download('punkt')
@@ -54,8 +57,9 @@ logger = logging.getLogger(__name__)
 logger.info(f"openai version: {openai.__version__}")
 logger.info(f"httpx version: {httpx.__version__}")
 
-# Initialize embedding model for synonym expansion and ranking
+# Initialize embedding model and precompute vocabulary embeddings
 embedding_model = None
+vocab_embeddings = {}
 
 # Initialize scheduler
 scheduler = BackgroundScheduler()
@@ -67,7 +71,7 @@ if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
-# Initialize SQLite database for search progress, synonym cache, and Grok response cache
+# Initialize SQLite database for search progress, synonym cache, Grok response cache, and embeddings
 def init_progress_db():
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
@@ -77,6 +81,8 @@ def init_progress_db():
                  (keyword TEXT PRIMARY KEY, synonyms TEXT, timestamp REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
                  (query TEXT PRIMARY KEY, response TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS embedding_cache
+                 (pmid TEXT PRIMARY KEY, embedding BLOB, timestamp REAL)''')
     conn.commit()
     conn.close()
 
@@ -113,10 +119,29 @@ def get_cached_grok_response(query):
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
     c.execute("SELECT response, timestamp FROM grok_cache WHERE query = ? AND timestamp > ?",
-              (query, time.time() - 86400))  # Cache valid for 24 hours
+              (query, time.time() - 604800))  # Cache valid for 7 days
     result = c.fetchone()
     conn.close()
     return result[0] if result else None
+
+def cache_embedding(pmid, embedding):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO embedding_cache (pmid, embedding, timestamp) VALUES (?, ?, ?)",
+              (pmid, embedding.tobytes(), time.time()))
+    conn.commit()
+    conn.close()
+
+def get_cached_embedding(pmid):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = ? AND timestamp > ?",
+              (pmid, time.time() - 604800))
+    result = c.fetchone()
+    conn.close()
+    if result:
+        return np.frombuffer(result[0])
+    return None
 
 def load_embedding_model():
     global embedding_model
@@ -125,6 +150,13 @@ def load_embedding_model():
         embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
         logger.info("Model loaded.")
     return embedding_model
+
+def precompute_vocab_embeddings():
+    global vocab_embeddings
+    model = load_embedding_model()
+    for term in BIOMEDICAL_VOCAB:
+        vocab_embeddings[term] = model.encode(term, convert_to_numpy=True)
+    logger.info("Precomputed embeddings for BIOMEDICAL_VOCAB")
 
 def generate_embedding(text):
     model = load_embedding_model()
@@ -138,30 +170,28 @@ BIOMEDICAL_VOCAB = {
     "disease": ["illness", "disorder", "condition", "sickness", "pathology"],
     "statins": ["HMG-CoA reductase inhibitors", "lipid-lowering drugs", "atorvastatin", "simvastatin", "rosuvastatin"],
     "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction", "atherosclerosis", "cardiac disorder"],
-    # Add more terms as needed
 }
 
+precompute_vocab_embeddings()
+
 def get_embedding_synonyms(keyword, top_n=5):
-    """Retrieve synonyms using word embeddings from a precomputed biomedical vocabulary."""
     model = load_embedding_model()
     keyword_embedding = model.encode(keyword)
     synonyms = []
     for vocab_term, vocab_synonyms in BIOMEDICAL_VOCAB.items():
-        term_embedding = model.encode(vocab_term)
+        term_embedding = vocab_embeddings.get(vocab_term)
         similarity = 1 - cosine(keyword_embedding, term_embedding)
-        if similarity > 0.7:  # Threshold for relevance
+        if similarity > 0.7:
             synonyms.extend(vocab_synonyms)
-    # Remove duplicates and limit to top_n
     synonyms = list(set(synonyms))[:top_n]
     logger.info(f"Embedding synonyms for '{keyword}': {synonyms}")
     return synonyms
 
 def get_mesh_synonyms(keyword, api_key=None):
-    """Retrieve MeSH synonyms using NCBI E-Utilities."""
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
     c.execute("SELECT synonyms, timestamp FROM synonym_cache WHERE keyword = ? AND timestamp > ?",
-              (keyword, time.time() - 86400))  # Cache valid for 24 hours
+              (keyword, time.time() - 604800))
     cached = c.fetchone()
     if cached:
         conn.close()
@@ -184,7 +214,6 @@ def get_mesh_synonyms(keyword, api_key=None):
         result = response.json()
         if 'esearchresult' in result and 'idlist' in result['esearchresult'] and result['esearchresult']['idlist']:
             uid = result['esearchresult']['idlist'][0]
-            # Fetch MeSH descriptor details
             url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
             params = {
                 "db": "mesh",
@@ -198,9 +227,8 @@ def get_mesh_synonyms(keyword, api_key=None):
             if str(uid) in summary['result']:
                 terms = summary['result'][str(uid)].get('ds_EntryTerms', [])
                 synonyms = [term.lower() for term in terms if term.lower() != keyword.lower()]
-                synonyms = list(set(synonyms))[:5]  # Limit to 5 synonyms
+                synonyms = list(set(synonyms))[:5]
         logger.info(f"MeSH synonyms for '{keyword}': {synonyms}")
-        # Cache synonyms
         c.execute("INSERT OR REPLACE INTO synonym_cache (keyword, synonyms, timestamp) VALUES (?, ?, ?)",
                   (keyword, json.dumps(synonyms), time.time()))
         conn.commit()
@@ -210,17 +238,10 @@ def get_mesh_synonyms(keyword, api_key=None):
         conn.close()
     return synonyms
 
-# xAI Grok API call with enhanced retries
-@tenacity.retry(
-    stop=tenacity.stop_after_attempt(7),  # Increased retries
-    wait=tenacity.wait_exponential(multiplier=1, min=2, max=15),
-    retry=tenacity.retry_if_exception_type((requests.exceptions.RequestException, Exception)),
-    before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
-)
-def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
+async def query_grok_api_async(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
-        # Check cache first
-        cached_response = get_cached_grok_response(query + prompt)
+        cache_key = hashlib.md5((query + context + prompt).encode()).hexdigest()
+        cached_response = get_cached_grok_response(cache_key)
         if cached_response:
             logger.info(f"Using cached Grok response for query: {query[:50]}...")
             return cached_response
@@ -230,28 +251,7 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
             logger.error("XAI_API_KEY not set")
             return "Error: xAI API key not configured"
         
-        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        logger.info(f"Sending Grok API request: prompt={query[:50]}..., context_length={len(context)}")
-        
-        completion = client.chat.completions.create(
-            model="grok-3",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
-            ],
-            max_tokens=1000,
-            timeout=60  # Increased timeout
-        )
-        response = completion.choices[0].message.content
-        logger.info(f"Grok API response received: length={len(response)}")
-        
-        # Cache response
-        cache_grok_response(query + prompt, response)
-        return response
-    except Exception as e:
-        logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
-        # Fallback: Basic requests-based API call
-        try:
+        async with aiohttp.ClientSession() as session:
             url = "https://api.x.ai/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -265,17 +265,28 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
                 ],
                 "max_tokens": 1000
             }
-            response = requests.post(url, headers=headers, json=data, proxies=None, timeout=60)
-            response.raise_for_status()
-            response_text = response.json()['choices'][0]['message']['content']
-            logger.info(f"Fallback Grok API response received: length={len(response_text)}")
-            cache_grok_response(query + prompt, response_text)
-            return response_text
-        except Exception as fallback_e:
-            logger.error(f"Fallback API call failed: {str(fallback_e)}")
-            return None  # Return None to trigger fallback logic
+            logger.info(f"Sending async Grok API request: prompt={query[:50]}..., context_length={len(context)}")
+            async with session.post(url, headers=headers, json=data, timeout=60) as response:
+                response.raise_for_status()
+                response_json = await response.json()
+                response_text = response_json['choices'][0]['message']['content']
+                logger.info(f"Async Grok API response received: length={len(response_text)}")
+                cache_grok_response(cache_key, response_text)
+                return response_text
+    except Exception as e:
+        logger.error(f"Async Grok API call failed: {str(e)}")
+        return None
 
-# Database connection
+@tenacity.retry(
+    stop=tenacity.stop_after_attempt(7),
+    wait=tenacity.wait_exponential(multiplier=1, min=2, max=15),
+    retry=tenacity.retry_if_exception_type((requests.exceptions.RequestException, Exception)),
+    before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
+)
+def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(query_grok_api_async(query, context, prompt))
+
 def get_db_connection():
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
     return conn
@@ -310,7 +321,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     if not validate_user_email(user_email):
         raise ValueError(f"Invalid recipient email address: {user_email}")
     
-    # Parse keywords as a query to leverage synonym expansion
     query = keywords
     keywords_with_synonyms, intent = extract_keywords_and_intent(query)
     intent['date'] = {
@@ -356,7 +366,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         efetch_xml = efetch(pmids, api_key=api_key)
         results = parse_efetch_xml(efetch_xml)
         
-        # Prepare email content
         context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
         output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
         
@@ -566,13 +575,10 @@ Example output for "statins and heart disease":
             logger.warning("Grok API returned None, using fallback")
             keywords, intent = extract_keywords_fallback(query)
         
-        # Expand keywords with synonyms
         expanded_keywords = []
         for kw in keywords:
             mesh_synonyms = get_mesh_synonyms(kw, api_key=os.environ.get('PUBMED_API_KEY'))
-            embedding_synonyms = get_embedding_synonyms(kw)
-            synonyms = list(set(mesh_synonyms + embedding_synonyms))[:5]
-            # Fallback synonyms for common terms
+            synonyms = mesh_synonyms if mesh_synonyms else get_embedding_synonyms(kw)
             if not synonyms and kw.lower() in BIOMEDICAL_VOCAB:
                 synonyms = BIOMEDICAL_VOCAB[kw.lower()]
             expanded_keywords.append((kw, synonyms))
@@ -584,16 +590,11 @@ Example output for "statins and heart disease":
         return extract_keywords_fallback(query)
 
 def extract_keywords_fallback(query):
-    """Fallback keyword extraction using NLTK for robust phrase detection."""
     query_lower = query.lower()
-    # Tokenize and tag parts of speech
     tokens = word_tokenize(query)
     tagged = pos_tag(tokens)
-    
-    # Define stop words
     stop_words = set(stopwords.words('english')).union({'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to'})
     
-    # Extract noun phrases and significant terms
     keywords = []
     current_phrase = []
     for word, tag in tagged:
@@ -606,17 +607,12 @@ def extract_keywords_fallback(query):
     if current_phrase:
         keywords.append(' '.join(current_phrase))
     
-    # Remove empty or single-character keywords
     keywords = [kw for kw in keywords if len(kw) > 1]
-    
-    # Default to query terms if no keywords found
     if not keywords:
         keywords = [word for word in query_lower.split() if word not in stop_words and len(word) > 1]
     
-    # Limit to 5 keywords to avoid overly broad queries
     keywords = keywords[:5]
     
-    # Parse intent
     intent = {'topic': None, 'focus': None, 'date': None, 'author': None}
     today = datetime.now()
     if 'past week' in query_lower:
@@ -638,7 +634,6 @@ def extract_keywords_fallback(query):
     elif 'review' in query_lower or 'meta-analysis' in query_lower:
         intent['focus'] = 'review'
     
-    # Set topic to the first meaningful keyword
     intent['topic'] = keywords[0] if keywords else None
     
     logger.info(f"Fallback keywords: {keywords}, Intent: {intent}")
@@ -654,10 +649,8 @@ def build_pubmed_query(keywords_with_synonyms, intent):
         term_query = f"({' OR '.join([f'{t}[MeSH Terms] OR {t}' for t in terms])})"
         query_parts.append(term_query)
     
-    # Use OR for non-essential terms to avoid over-restriction
     query = " OR ".join(query_parts) if query_parts else ""
     
-    # Apply focus terms if specified
     if intent.get('focus') and intent['focus'] in ['treatment', 'diagnosis', 'prevention', 'review', 'relationship']:
         focus_terms = {
             'treatment': '(treatment OR therapy OR therapeutic)',
@@ -668,11 +661,9 @@ def build_pubmed_query(keywords_with_synonyms, intent):
         }
         query = f"({query}) AND {focus_terms[intent['focus']]}" if query else focus_terms[intent['focus']]
     
-    # Apply author if specified
     if intent.get('author'):
         query = f"({query}) AND {intent['author']}[au]" if query else f"{intent['author']}[au]"
     
-    # Apply date if specified
     if intent.get('date'):
         query = f"({query}) {intent['date']}" if query else intent['date']
     
@@ -746,17 +737,13 @@ def parse_prompt(prompt_text):
     
     prompt_text_lower = prompt_text.lower()
     
-    # Extract number of results for AI summary
     summary_result_count = 20
     if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
-        summary_result_count = min(int(match.group(1)), 20)  # Cap at 20 due to PubMed API
+        summary_result_count = min(int(match.group(1)), 20)
     elif 'top' in prompt_text_lower:
-        summary_result_count = 3  # Default for "top"
+        summary_result_count = 3
     
-    # Always display up to 20 results
     display_result_count = 20
-    
-    # Check for limiting presentation (only for display, not context)
     limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
     
     logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
@@ -773,11 +760,10 @@ def grok_llm_ranking(query, results, embeddings, intent=None, prompt_params=None
     ranked_embeddings = []
     
     try:
-        # Prepare context for Grok
         articles_context = []
         for i, result in enumerate(results):
-            article_text = f"Title: {result['title']}\nAbstract: {result['abstract'] or ''}\nAuthors: {result['authors']}\nJournal: {result['journal']}\nDate: {result['publication_date']}"
-            articles_context.append(f"Article {i+1}: {article_text}")
+            article_text = f"Article {i+1}: Title: {result['title']}\nAbstract: {result['abstract'] or ''}\nAuthors: {result['authors']}\nJournal: {result['journal']}\nDate: {result['publication_date']}"
+            articles_context.append(article_text)
         
         context = "\n\n".join(articles_context)
         ranking_prompt = f"""
@@ -793,21 +779,18 @@ Ensure the response is valid JSON. Example:
 Articles:
 {context}
 """
-        
+        cache_key = hashlib.md5((query + context + ranking_prompt).encode()).hexdigest()
         response = query_grok_api(query, context, prompt=ranking_prompt)
         if not response:
             raise ValueError("Grok API returned None")
         
         logger.info(f"Grok ranking response: {response[:200]}...")
-        
-        # Parse Grok's JSON response
         ranking = json.loads(response)
         if isinstance(ranking, dict) and 'articles' in ranking:
             ranking = ranking['articles']
         if not isinstance(ranking, list):
             raise ValueError("Grok response is not a list")
         
-        # Convert 1-based indices to 0-based
         ranked_indices = []
         for item in ranking:
             if isinstance(item, dict) and 'index' in item:
@@ -817,7 +800,6 @@ Articles:
                     if 0 <= index < len(results):
                         ranked_indices.append(index)
         
-        # Add missing indices
         missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
         ranked_indices.extend(missing_indices)
         
@@ -828,7 +810,6 @@ Articles:
     except Exception as e:
         logger.error(f"Grok ranking failed: {str(e)}")
     
-    # Fallback: Use embedding-based ranking with secondary date sorting
     logger.info("Falling back to embedding-based ranking")
     query_embedding = generate_embedding(query)
     current_year = datetime.now().year
@@ -871,23 +852,6 @@ Articles:
     logger.info(f"Fallback ranked {len(ranked_results)} results with indices {ranked_indices[:display_result_count]}")
     return ranked_results, ranked_embeddings, ranked_indices
 
-def generate_summary(abstract, query, title=None, authors=None, journal=None, publication_date=None):
-    if not abstract and not title:
-        return {"text": "No content available to summarize.", "metadata": {}, "embedding": None}
-    text = f"{title} {abstract or ''} {authors or ''} {journal or ''}".strip()
-    embedding = generate_embedding(text) if text else None
-    summary_text = abstract[:300] if abstract else f"Title: {title}"
-    summary = {
-        "text": summary_text,
-        "metadata": {
-            "authors": authors or "Unknown",
-            "journal": journal or "Unknown",
-            "publication_date": str(publication_date) if publication_date else "Unknown"
-        },
-        "embedding": embedding
-    }
-    return summary
-
 def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
     if not results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''}."
@@ -917,8 +881,8 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
-    
-    output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
+    cache_key = hashlib.md5((query + context + prompt_text).encode()).hexdigest()
+    output = query_grok_api(prompt_text, context, prompt=prompt_text)
     if not output:
         output = "AI summary unavailable due to API error."
     
@@ -981,14 +945,14 @@ def search():
     if request.method == 'POST':
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text))
         
         update_search_progress(current_user.id, query, "contacting PubMed")
         
         keywords_with_synonyms, intent = extract_keywords_and_intent(query)
         if not keywords_with_synonyms:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text))
         
         prompt_params = parse_prompt(selected_prompt_text)
         summary_result_count = prompt_params['summary_result_count']
@@ -1031,30 +995,53 @@ def search():
             if not results and not fallback_results:
                 logger.info("No results with initial or fallback query")
                 update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text))
             
             update_search_progress(current_user.id, query, "ranking results")
+            embeddings = []
+            texts = []
+            for result in results:
+                embedding = get_cached_embedding(result['id'])
+                if embedding is None:
+                    texts.append(f"{result['title']} {result['abstract'] or ''}")
+                else:
+                    embeddings.append(embedding)
+            
+            if texts:
+                model = load_embedding_model()
+                new_embeddings = model.encode(texts, convert_to_numpy=True)
+                for i, (result, emb) in enumerate(zip(results[len(embeddings):], new_embeddings)):
+                    cache_embedding(result['id'], emb)
+                    embeddings.append(emb)
+            
             ranked_results = []
             ranked_fallback_results = []
             if results:
-                ranked_results, _, ranked_indices = grok_llm_ranking(query, results, [generate_embedding(f"{r['title']} {r['abstract'] or ''}") for r in results], intent, prompt_params)
+                ranked_results, _, ranked_indices = grok_llm_ranking(query, results, embeddings, intent, prompt_params)
                 results = [results[i] for i in ranked_indices[:display_result_count]]
             if fallback_results:
-                ranked_fallback_results, _, ranked_indices = grok_llm_ranking(query, fallback_results, [generate_embedding(f"{r['title']} {r['abstract'] or ''}") for r in fallback_results], intent, prompt_params)
+                embeddings = []
+                texts = []
+                for result in fallback_results:
+                    embedding = get_cached_embedding(result['id'])
+                    if embedding is None:
+                        texts.append(f"{result['title']} {result['abstract'] or ''}")
+                    else:
+                        embeddings.append(embedding)
+                
+                if texts:
+                    model = load_embedding_model()
+                    new_embeddings = model.encode(texts, convert_to_numpy=True)
+                    for i, (result, emb) in enumerate(zip(fallback_results[len(embeddings):], new_embeddings)):
+                        cache_embedding(result['id'], emb)
+                        embeddings.append(emb)
+                
+                ranked_fallback_results, _, ranked_indices = grok_llm_ranking(query, fallback_results, embeddings, intent, prompt_params)
                 fallback_results = [fallback_results[i] for i in ranked_indices[:display_result_count]]
             
             logger.info(f"Ranked results: {len(ranked_results)} primary, {len(ranked_fallback_results)} fallback")
             
-            update_search_progress(current_user.id, query, "creating AI response")
-            prompt_output = generate_prompt_output(query, ranked_results, selected_prompt_text, prompt_params)
-            fallback_prompt_output = generate_prompt_output(query, ranked_fallback_results, selected_prompt_text, prompt_params, is_fallback=True) if ranked_fallback_results else ''
-            
-            if prompt_output.startswith("Fallback:"):
-                flash("AI summarization failed for primary results, displaying raw results.", "warning")
-            if fallback_prompt_output and fallback_prompt_output.startswith("Fallback:"):
-                flash("AI summarization failed for fallback results, displaying raw results.", "warning")
-            
-            update_search_progress(current_user.id, query, "complete")
+            update_search_progress(current_user.id, query, "complete" if not selected_prompt_text else "awaiting_summary")
             
             return render_template(
                 'search.html', 
@@ -1064,18 +1051,52 @@ def search():
                 prompts=prompts, 
                 prompt_id=prompt_id,
                 prompt_text=selected_prompt_text,
-                prompt_output=prompt_output,
-                fallback_prompt_output=fallback_prompt_output,
+                prompt_output='' if selected_prompt_text else None,
+                fallback_prompt_output='' if selected_prompt_text else None,
                 summary_result_count=summary_result_count,
                 target_year=None,
-                username=current_user.email
+                username=current_user.email,
+                has_prompt=bool(selected_prompt_text)
             )
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text))
     
-    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email)
+    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text))
+
+@app.route('/search_summary', methods=['POST'])
+@login_required
+def search_summary():
+    query = request.form.get('query', '')
+    prompt_text = request.form.get('prompt_text', '')
+    results = json.loads(request.form.get('results', '[]'))
+    fallback_results = json.loads(request.form.get('fallback_results', '[]'))
+    prompt_params = json.loads(request.form.get('prompt_params', '{}'))
+    
+    try:
+        prompt_output = generate_prompt_output(query, results, prompt_text, prompt_params)
+        fallback_prompt_output = generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results else ''
+        
+        if prompt_output.startswith("Fallback:"):
+            flash("AI summarization failed for primary results.", "warning")
+        if fallback_prompt_output and fallback_prompt_output.startswith("Fallback:"):
+            flash("AI summarization failed for fallback results.", "warning")
+        
+        update_search_progress(current_user.id, query, "complete")
+        
+        return jsonify({
+            'status': 'success',
+            'prompt_output': prompt_output,
+            'fallback_prompt_output': fallback_prompt_output
+        })
+    except Exception as e:
+        logger.error(f"Error generating AI summary: {str(e)}")
+        update_search_progress(current_user.id, query, f"error: AI summary failed: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f"AI summary failed: {str(e)}"
+        })
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
