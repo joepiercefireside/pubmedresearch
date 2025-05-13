@@ -46,7 +46,7 @@
             {% if has_prompt %}
                 <div class="card-body" id="ai-summary">
                     <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
-                    <div class="loading">Working on AI Summary, this may take 30 to 45 seconds...</div>
+                    <div class="loading">Working on AI Summary, this may take 30 to 40 seconds...</div>
                 </div>
             {% elif prompt_output is not none %}
                 <div class="card-body">
@@ -76,7 +76,7 @@
             {% if has_prompt %}
                 <div class="card-body" id="ai-fallback-summary">
                     <h3>AI Summary {% if summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
-                    <div class="loading">Working on AI Summary, this may take 30 to 45 seconds...</div>
+                    <div class="loading">Working on AI Summary, this may take 30 to 40 seconds...</div>
                 </div>
             {% elif fallback_prompt_output is not none %}
                 <div class="card-body">
@@ -164,11 +164,11 @@
             const results = {{ results|tojson }};
             const fallbackResults = {{ fallback_results|tojson }};
             const promptText = {{ prompt_text|tojson }};
-            const promptParams = {{ prompt_params|tojson }};
-            const query = {{ query|tojson }};
+            // Use provided prompt_params or default to empty object
+            const promptParams = {{ prompt_params|tojson|default('{}') }};
 
             const formData = new FormData();
-            formData.append('query', query);
+            formData.append('query', '{{ query|default('') }}');
             formData.append('prompt_text', promptText);
             formData.append('results', JSON.stringify(results));
             formData.append('fallback_results', JSON.stringify(fallbackResults));
@@ -217,6 +217,11 @@
                     `;
                 }
             });
+        }
+
+        // Trigger fetchAISummary on page load if has_prompt is true and results exist
+        if ({{ has_prompt|tojson }} && {{ results|length > 0|tojson }}) {
+            fetchAISummary();
         }
     });
 </script>
