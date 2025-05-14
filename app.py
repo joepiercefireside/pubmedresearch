@@ -400,7 +400,7 @@ def register():
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
-            flash('Email already registered.', 'error')
+            flash('Email already registered.", 'error')
         else:
             password_hash = generate_password_hash(password)
             cur.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s)", (email, password_hash))
@@ -701,8 +701,15 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
-    output = f"Fallback: Unable to generate AI summary. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
-    logger.warning("Using fallback summary due to Grok API unreliability")
+    cache_key = hashlib.md5((query + context + prompt_text).encode()).hexdigest()
+    try:
+        output = query_grok_api(prompt_text, context, prompt=prompt_text)
+        if not output:
+            logger.warning("Grok API returned None for summary, using fallback")
+            output = f"Fallback: Unable to generate AI summary. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
+    except Exception as e:
+        logger.error(f"Error generating AI summary: {str(e)}", exc_info=True)
+        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
     
     paragraphs = output.split('\n\n')
     formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
@@ -722,7 +729,10 @@ def search_progress():
             while True:
                 status, timestamp = get_search_progress(current_user.id, query)
                 if status and status != last_status:
-                    yield f"data: {{'status': '{status}'}}\n\n"
+                    if status == "awaiting_summary":
+                        yield f"data: {{'status': 'Generating AI response, this may take 30 to 40 seconds'}}\n\n"
+                    else:
+                        yield f"data: {{'status': '{status}'}}\n\n"
                     last_status = status
                 if status in ["complete", "error"]:
                     break
@@ -1213,4 +1223,4 @@ def test_email():
 schedule_notification_rules()
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=10000)
