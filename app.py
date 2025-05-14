@@ -32,7 +32,6 @@ from nltk import pos_tag
 import asyncio
 import aiohttp
 import hashlib
-import timeout_decorator
 
 # Download NLTK data
 nltk.download('punkt')
@@ -201,11 +200,10 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
             logger.error("Grok API request timed out")
         return None
 
-@timeout_decorator.timeout(35, timeout_exception=TimeoutError)
-def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
-    loop = asyncio.get_event_loop()
+async def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
-        return loop.run_until_complete(query_grok_api_async(query, context, prompt))
+        async with asyncio.timeout(35):
+            return await query_grok_api_async(query, context, prompt)
     except Exception as e:
         logger.error(f"Grok API call failed: {str(e)}", exc_info=True)
         return None
