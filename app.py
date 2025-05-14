@@ -698,7 +698,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     logger.info(f"Context results count for summary: {len(context_results)}")
     
     if not context_results:
-        return f"No results HEARTBEAT for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
+        return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
     cache_key = hashlib.md5((query + context + prompt_text).encode()).hexdigest()
@@ -853,7 +853,7 @@ def search():
                 summary_result_count=summary_result_count,
                 target_year=None,
                 username=current_user.email,
-                has_prompt= arous_prompt=bool(selected_prompt_text),
+                has_prompt=bool(selected_prompt_text),
                 prompt_params=prompt_params,
                 search_older=search_older,
                 start_year=start_year
@@ -1173,7 +1173,7 @@ def test_notification(id):
     rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
     try:
         test_result = run_notification_rule(
-            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_formatsem user_email, test_mode=True
+            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=True
         )
         return jsonify(test_result)
     except Exception as e:
