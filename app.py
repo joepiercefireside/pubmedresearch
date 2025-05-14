@@ -718,7 +718,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
     
     paragraphs = output.split('\n\n')
-    formatted_output = ''.join(f'<p>{p></p>' for p in paragraphs if p.strip())
+    formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
     logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")
     return formatted_output
 
