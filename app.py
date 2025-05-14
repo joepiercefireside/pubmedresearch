@@ -658,8 +658,10 @@ def embedding_based_ranking(query, results, prompt_params=None):
     texts = []
     for result in results:
         embedding = get_cached_embedding(result['id'])
-        if embedding is None:
+        if embedding is None or embedding.shape[0] != query_embedding.shape[0]:
             texts.append(f"{result['title']} {result['abstract'] or ''}")
+            if embedding is not None:
+                logger.warning(f"Invalid embedding shape for PMID={result['id']}: {embedding.shape[0]} != {query_embedding.shape[0]}")
         else:
             embeddings.append(embedding)
     
@@ -672,7 +674,11 @@ def embedding_based_ranking(query, results, prompt_params=None):
     
     scores = []
     for i, (emb, result) in enumerate(zip(embeddings, results)):
-        similarity = 1 - cosine(query_embedding, emb) if emb is not None else 0.0
+        try:
+            similarity = 1 - cosine(query_embedding, emb) if emb is not None else 0.0
+        except ValueError as e:
+            logger.error(f"Cosine similarity error for PMID={result['id']}: {str(e)}")
+            similarity = 0.0
         pub_year = int(result['publication_date']) if result['publication_date'].isdigit() else 2000
         recency_bonus = (pub_year - 2000) / (current_year - 2000)
         weighted_score = (0.8 * similarity) + (0.2 * recency_bonus)
