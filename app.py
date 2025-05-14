@@ -166,7 +166,7 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
         api_key = os.environ.get('XAI_API_KEY')
         if not api_key:
             logger.error("XAI_API_KEY not set")
-            return "Error: xAI API key not configured"
+            return None
         
         async with aiohttp.ClientSession() as session:
             url = "https://api.x.ai/v1/chat/completions"
@@ -183,7 +183,7 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
                 "max_tokens": 1000
             }
             logger.info(f"Sending async Grok API request: prompt={query[:50]}..., context_length={len(context)}")
-            async with session.post(url, headers=headers, json=data, timeout=300) as response:
+            async with session.post(url, headers=headers, json=data, timeout=30) as response:
                 response.raise_for_status()
                 response_json = await response.json()
                 response_text = response_json['choices'][0]['message']['content']
@@ -191,11 +191,13 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
                 cache_grok_response(cache_key, response_text)
                 return response_text
     except Exception as e:
-        logger.error(f"Async Grok API call failed: {str(e)}")
+        logger.error(f"Async Grok API call failed: {str(e)}", exc_info=True)
         if isinstance(e, aiohttp.ClientResponseError):
             logger.error(f"HTTP Status: {e.status}, Message: {e.message}")
         elif isinstance(e, aiohttp.ClientConnectionError):
             logger.error("Connection error, possibly network issue")
+        elif isinstance(e, asyncio.TimeoutError):
+            logger.error("Grok API request timed out")
         return None
 
 @tenacity.retry(
@@ -712,11 +714,11 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
             logger.warning("Grok API returned None for summary, using fallback")
             output = f"Fallback: Unable to generate AI summary. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
     except Exception as e:
-        logger.error(f"Error generating AI summary: {str(e)}")
+        logger.error(f"Error generating AI summary: {str(e)}", exc_info=True)
         output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
     
     paragraphs = output.split('\n\n')
-    formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
+    formatted_output = ''.join(f'<p>{p></p>' for p in paragraphs if p.strip())
     logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")
     return formatted_output
 
