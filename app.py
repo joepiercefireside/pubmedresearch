@@ -32,6 +32,7 @@ from nltk import pos_tag
 import asyncio
 import aiohttp
 import hashlib
+import timeout_decorator
 
 # Download NLTK data
 nltk.download('punkt')
@@ -200,19 +201,14 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
             logger.error("Grok API request timed out")
         return None
 
-@tenacity.retry(
-    stop=tenacity.stop_after_attempt(2),
-    wait=tenacity.wait_exponential(multiplier=1, min=2, max=15),
-    retry=tenacity.retry_if_exception_type((requests.exceptions.RequestException, Exception)),
-    before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
-)
+@timeout_decorator.timeout(35, timeout_exception=TimeoutError)
 def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
     loop = asyncio.get_event_loop()
     try:
         return loop.run_until_complete(query_grok_api_async(query, context, prompt))
     except Exception as e:
-        logger.error(f"Grok API call failed after retries: {str(e)}")
-        raise
+        logger.error(f"Grok API call failed: {str(e)}", exc_info=True)
+        return None
 
 def get_db_connection():
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
@@ -707,15 +703,8 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
-    cache_key = hashlib.md5((query + context + prompt_text).encode()).hexdigest()
-    try:
-        output = query_grok_api(prompt_text, context, prompt=prompt_text)
-        if not output:
-            logger.warning("Grok API returned None for summary, using fallback")
-            output = f"Fallback: Unable to generate AI summary. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
-    except Exception as e:
-        logger.error(f"Error generating AI summary: {str(e)}", exc_info=True)
-        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
+    output = f"Fallback: Unable to generate AI summary. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
+    logger.warning("Using fallback summary due to Grok API unreliability")
     
     paragraphs = output.split('\n\n')
     formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
@@ -778,14 +767,14 @@ def search():
     if request.method == 'POST':
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], ranked_results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
         
         update_search_progress(current_user.id, query, "contacting PubMed")
         
         keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
         if not keywords_with_synonyms:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], ranked_results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
         
         prompt_params = parse_prompt(selected_prompt_text)
         summary_result_count = prompt_params['summary_result_count']
@@ -797,7 +786,7 @@ def search():
         except Exception as e:
             logger.error(f"Error building PubMed query: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Query processing failed: {str(e)}")
-            return render_template('search.html', error=f"Query processing failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error=f"Query processing failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], ranked_results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
         
         try:
             update_search_progress(current_user.id, query, "executing search")
@@ -831,24 +820,22 @@ def search():
             if not primary_results and not fallback_results:
                 logger.info("No results found")
                 update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], ranked_results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
             
             update_search_progress(current_user.id, query, "ranking results")
             ranked_results = []
-            ranked_fallback_results = []
             if primary_results:
-                ranked_results = rank_results(query, primary_results, prompt_params)
-            if fallback_results and not primary_results:
-                ranked_fallback_results = rank_results(query, fallback_results, prompt_params)
+                ranked_results = embedding_based_ranking(query, primary_results, {'display_result_count': 10})  # Top 10 for AI ranking
             
-            logger.info(f"Ranked results: {len(ranked_results)} primary, {len(ranked_fallback_results)} fallback")
+            logger.info(f"Ranked results: {len(ranked_results)} primary, {len(fallback_results)} fallback")
             
             update_search_progress(current_user.id, query, "complete" if not selected_prompt_text else "awaiting_summary")
             
             return render_template(
                 'search.html', 
-                results=ranked_results,
-                fallback_results=ranked_fallback_results,
+                results=primary_results,  # Initial unranked results
+                ranked_results=ranked_results,  # Top 10 AI-ranked
+                fallback_results=fallback_results,
                 query=query, 
                 prompts=prompts, 
                 prompt_id=prompt_id,
@@ -866,9 +853,9 @@ def search():
         except Exception as e:
             logger.error(f"PubMed API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], ranked_results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=search_older, start_year=start_year)
     
-    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=False, start_year=None)
+    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], ranked_results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=20, search_older=False, start_year=None)
 
 @app.route('/search_summary', methods=['POST'])
 @login_required
@@ -884,9 +871,9 @@ def search_summary():
         fallback_prompt_output = generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results else ''
         
         if prompt_output.startswith("Fallback:"):
-            flash("AI summarization failed for primary results.", "warning")
+            flash("AI summarization used fallback.", "warning")
         if fallback_prompt_output and fallback_prompt_output.startswith("Fallback:"):
-            flash("AI summarization failed for fallback results.", "warning")
+            flash("AI summarization used fallback for fallback results.", "warning")
         
         update_search_progress(current_user.id, query, "complete")
         
@@ -901,6 +888,22 @@ def search_summary():
         return jsonify({
             'status': 'error',
             'message': f"AI summary failed: {str(e)}"
+        })
+
+@app.route('/test_grok', methods=['GET'])
+@login_required
+def test_grok():
+    try:
+        response = query_grok_api("Test query", "Test context", "Return a simple response.")
+        return jsonify({
+            'status': 'success',
+            'response': response or "No response from Grok API"
+        })
+    except Exception as e:
+        logger.error(f"Grok API test failed: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
         })
 
 @app.route('/prompt', methods=['GET', 'POST'])
