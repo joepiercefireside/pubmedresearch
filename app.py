@@ -139,11 +139,15 @@ def get_cached_embedding(pmid):
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
     c.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = ? AND timestamp > ?",
-              (pmid, time.time() - 604800))
+              (pmid, time.time() - 604800))  # Cache valid for 7 days
     result = c.fetchone()
     conn.close()
     if result:
-        return np.frombuffer(result[0])
+        embedding = np.frombuffer(result[0], dtype=np.float32)
+        if embedding.shape[0] != 384:
+            logger.warning(f"Invalid embedding dimension for PMID {pmid}: expected 384, got {embedding.shape[0]}")
+            return None
+        return embedding
     return None
 
 def load_embedding_model():
@@ -156,7 +160,11 @@ def load_embedding_model():
 
 def generate_embedding(text):
     model = load_embedding_model()
-    return model.encode(text, convert_to_numpy=True)
+    embedding = model.encode(text, convert_to_numpy=True)
+    if embedding.shape[0] != 384:
+        logger.error(f"Generated embedding has incorrect dimension: {embedding.shape[0]}")
+        return None
+    return embedding
 
 async def query_grok_api_async(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
@@ -462,10 +470,10 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
             current_phrase.append(word.lower())
         else:
             if current_phrase:
-                keywords.append('+'.join(current_phrase))
+                keywords.append(' '.join(current_phrase))
                 current_phrase = []
     if current_phrase:
-        keywords.append('+'.join(current_phrase))
+        keywords.append(' '.join(current_phrase))
     
     # Fallback to single words if no phrases detected
     if not keywords:
@@ -656,6 +664,9 @@ Articles:
 def embedding_based_ranking(query, results, prompt_params=None):
     display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
     query_embedding = generate_embedding(query)
+    if query_embedding is None:
+        logger.error("Failed to generate query embedding")
+        return []
     current_year = datetime.now().year
     
     embeddings = []
@@ -671,12 +682,19 @@ def embedding_based_ranking(query, results, prompt_params=None):
         model = load_embedding_model()
         new_embeddings = model.encode(texts, convert_to_numpy=True)
         for i, (result, emb) in enumerate(zip(results[len(embeddings):], new_embeddings)):
-            cache_embedding(result['id'], emb)
-            embeddings.append(emb)
+            if emb.shape[0] == 384:
+                cache_embedding(result['id'], emb)
+                embeddings.append(emb)
+            else:
+                logger.error(f"Generated embedding for PMID {result['id']} has incorrect dimension: {emb.shape[0]}")
+                embeddings.append(None)
     
     scores = []
     for i, (emb, result) in enumerate(zip(embeddings, results)):
-        similarity = 1 - cosine(query_embedding, emb) if emb is not None else 0.0
+        if emb is not None and emb.shape[0] == 384:
+            similarity = 1 - cosine(query_embedding, emb)
+        else:
+            similarity = 0.0
         pub_year = int(result['publication_date']) if result['publication_date'].isdigit() else 2000
         recency_bonus = (pub_year - 2000) / (current_year - 2000)
         weighted_score = (0.8 * similarity) + (0.2 * recency_bonus)
