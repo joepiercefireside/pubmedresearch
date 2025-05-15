@@ -615,7 +615,7 @@ Articles:
 {context}
 """
         cache_key = hashlib.md5((query + context + ranking_prompt).encode()).hexdigest()
-        response = query_grok_api(query, context, prompt=ranking_prompt)
+        response = asyncio.run(query_grok_api(query, context, prompt=ranking_prompt))
         if not response:
             raise ValueError("Grok API returned None")
         
@@ -994,7 +994,7 @@ def delete_prompt(id):
     if not prompt:
         cur.close()
         conn.close()
-        flash('Prompt not found or k you do not have permission to delete it.', 'error')
+        flash('Prompt not found or you do not have permission to delete it.', 'error')
         return redirect(url_for('prompt'))
     
     try:
@@ -1012,7 +1012,7 @@ def delete_prompt(id):
 
 @app.route('/notifications', methods=['GET', 'POST'])
 @login_required
-async def notifications():
+def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
@@ -1087,7 +1087,7 @@ def edit_notification(id):
         timeframe = request.form.get('timeframe')
         prompt_text = request.form.get('prompt_text')
         email_format = request.form.get('email_format')
-                 
+        
         if not all([rule_name, keywords, timeframe, email_format]):
             flash('All fields except prompt text are required.', 'error')
         elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
@@ -1172,9 +1172,12 @@ def test_notification(id):
     
     rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
     try:
-        test_result = run_notification_rule(
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        test_result = loop.run_until_complete(run_notification_rule(
             rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=True
-        )
+        ))
+        loop.close()
         return jsonify(test_result)
     except Exception as e:
         logger.error(f"Error testing notification rule {rule_id}: {str(e)}")
