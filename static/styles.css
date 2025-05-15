@@ -214,3 +214,17 @@ nav ul li a:hover {
     border-radius: 6px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
+
+/* Specific styling for the search button */
+.search-form .btn {
+    background-color: #00689B !important;
+    color: white !important;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.search-form .btn:hover {
+    background-color: #005f8a !important;
+}

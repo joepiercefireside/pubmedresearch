@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PubMedResearcher - Search</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=4">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM" crossorigin="anonymous">
     <style>
         .spinner {
@@ -20,19 +20,10 @@
         .summary-generating {
             color: #007bff;
             font-style: italic;
-            animation: flash 1s infinite;
-        }
-        .nav-link, .navbar-brand {
-            color: #fff !important;
-            font-family: Arial, sans-serif !important;
+            display: none;
         }
         @keyframes spinner-border {
             to { transform: rotate(360deg); }
-        }
-        @keyframes flash {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
         }
     </style>
 </head>
@@ -75,7 +66,7 @@
     </nav>
 
     <div class="container">
-        <div class="card">
+        <div class="card search-form">
             <h2>Search PubMed</h2>
             <form method="POST" action="{{ url_for('search') }}">
                 <div class="mb-3">
@@ -119,17 +110,12 @@
             <div class="card summary-section">
                 <h3>AI Summary</h3>
                 <div id="summary-loading" class="spinner"></div>
-                <div id="summary-message" class="summary-generating"></div>
-                <div id="summary-content">
-                    {% if prompt_output %}
-                        {{ prompt_output|safe }}
-                    {% endif %}
-                    {% if fallback_prompt_output %}
-                        <h4>Fallback Summary</h4>
-                        {{ fallback_prompt_output|safe }}
-                    {% endif %}
-                </div>
+                <div id="summary-message" class="summary-generating">Generating AI response, this may take 30 to 40 seconds</div>
+                <div id="summary-content"></div>
             </div>
+            <script>
+                fetchSummary(); // Call immediately when has_prompt is True
+            </script>
         {% endif %}
 
         <div class="results-section">
@@ -198,62 +184,41 @@
             }
         });
 
-        {% if has_prompt %}
-            function pollProgress() {
-                const source = new EventSource('{{ url_for('search_progress') }}?query={{ query|urlencode }}');
-                const messageDiv = document.getElementById('summary-message');
-                
-                source.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    messageDiv.textContent = data.status;
-                    if (data.status === 'complete' || data.status.startsWith('error')) {
-                        source.close();
-                        messageDiv.classList.remove('summary-generating');
-                        fetchSummary();
+        function fetchSummary() {
+            const formData = new FormData();
+            formData.append('query', '{{ query|default('')|e }}');
+            formData.append('prompt_text', document.getElementById('prompt_text').value);
+            formData.append('results', JSON.stringify({{ results|tojson }}));
+            formData.append('fallback_results', JSON.stringify({{ fallback_results|tojson }}));
+            formData.append('prompt_params', JSON.stringify({{ prompt_params|tojson }}));
+
+            document.getElementById('summary-loading').style.display = 'inline-block';
+            document.getElementById('summary-message').style.display = 'block';
+
+            fetch('{{ url_for('search_summary') }}', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('summary-loading').style.display = 'none';
+                document.getElementById('summary-message').style.display = 'none';
+                const summaryContent = document.getElementById('summary-content');
+                if (data.status === 'success') {
+                    summaryContent.innerHTML = data.prompt_output;
+                    if (data.fallback_prompt_output) {
+                        summaryContent.innerHTML += '<h4>Fallback Summary</h4>' + data.fallback_prompt_output;
                     }
-                };
-                source.onerror = function() {
-                    messageDiv.textContent = 'Error fetching progress';
-                    messageDiv.classList.remove('summary-generating');
-                    source.close();
-                };
-            }
-
-            function fetchSummary() {
-                const formData = new FormData();
-                formData.append('query', '{{ query|default('')|e }}');
-                formData.append('prompt_text', document.getElementById('prompt_text').value);
-                formData.append('results', JSON.stringify({{ results|tojson }}));
-                formData.append('fallback_results', JSON.stringify({{ fallback_results|tojson }}));
-                formData.append('prompt_params', JSON.stringify({{ prompt_params|tojson }}));
-
-                document.getElementById('summary-loading').style.display = 'inline-block';
-
-                fetch('{{ url_for('search_summary') }}', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('summary-loading').style.display = 'none';
-                    const summaryContent = document.getElementById('summary-content');
-                    if (data.status === 'success') {
-                        summaryContent.innerHTML = data.prompt_output;
-                        if (data.fallback_prompt_output) {
-                            summaryContent.innerHTML += '<h4>Fallback Summary</h4>' + data.fallback_prompt_output;
-                        }
-                    } else {
-                        summaryContent.innerHTML = '<p class="error-message">Error generating summary: ' + data.message + '</p>';
-                    }
-                })
-                .catch(error => {
-                    document.getElementById('summary-loading').style.display = 'none';
-                    document.getElementById('summary-content').innerHTML = '<p class="error-message">Failed to load summary: ' + error + '</p>';
-                });
-            }
-
-            pollProgress();
-        {% endif %}
+                } else {
+                    summaryContent.innerHTML = '<p class="error-message">Error generating summary: ' + data.message + '</p>';
+                }
+            })
+            .catch(error => {
+                document.getElementById('summary-loading').style.display = 'none';
+                document.getElementById('summary-message').style.display = 'none';
+                document.getElementById('summary-content').innerHTML = '<p class="error-message">Failed to load summary: ' + error + '</p>';
+            });
+        }
     </script>
 </body>
 </html>
