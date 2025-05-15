@@ -71,6 +71,9 @@ BIOMEDICAL_VOCAB = {
     "disease": ["disorder", "condition", "pathology"],
     "statins": ["HMG-CoA reductase inhibitors", "atorvastatin", "simvastatin"],
     "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction"],
+    "cardiovascular": ["heart-related", "circulatory"],
+    "blood pressure": ["hypertension", "BP"],
+    "hypertension": ["high blood pressure", "elevated BP"]
 }
 
 # Initialize SQLite database for search progress and cache
@@ -446,28 +449,34 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     tagged = pos_tag(tokens)
     stop_words = set(stopwords.words('english')).union({'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to'})
     
+    # Improved phrase detection
     keywords = []
     current_phrase = []
     for word, tag in tagged:
-        if word.lower() not in stop_words and (tag.startswith('NN') or tag.startswith('JJ')):
+        if word.lower() in stop_words:
+            if current_phrase:
+                keywords.append('+'.join(current_phrase))
+                current_phrase = []
+            continue
+        if tag.startswith('NN') or tag.startswith('JJ'):  # Nouns or adjectives
             current_phrase.append(word.lower())
         else:
             if current_phrase:
-                keywords.append(' '.join(current_phrase))
+                keywords.append('+'.join(current_phrase))
                 current_phrase = []
     if current_phrase:
-        keywords.append(' '.join(current_phrase))
+        keywords.append('+'.join(current_phrase))
     
-    keywords = [kw for kw in keywords if len(kw) > 1]
+    # Fallback to single words if no phrases detected
     if not keywords:
         keywords = [word for word in query_lower.split() if word not in stop_words and len(word) > 1]
     
-    keywords = keywords[:5]
+    keywords = keywords[:5]  # Limit to 5 keywords/phrases
     
     # Get synonyms
     keywords_with_synonyms = []
     for kw in keywords:
-        synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:3]  # Limit to 3 synonyms
+        synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:2]  # Limit to 2 synonyms
         keywords_with_synonyms.append((kw, synonyms))
     
     today = datetime.now()
@@ -486,26 +495,23 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     elif 'past week' in query_lower:
         date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
     else:
-        start_year_int = int(start_year) if start_year and search_older else default_start_year
+        start_year_int = int(start_year) if search_older and start_year else default_start_year
         date_range = f"{start_year_int}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
     
     logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
-    return keywords_with_synonyms, date_range, start_year_int if start_year and search_older else default_start_year
+    return keywords_with_synonyms, date_range, start_year_int if search_older and start_year else default_start_year
 
 def build_pubmed_query(keywords_with_synonyms, date_range):
     query_parts = []
     for keyword, synonyms in keywords_with_synonyms:
-        # Use [All Fields] for keyword and synonyms, except for 'diabetes' where MeSH is reliable
-        if keyword.lower() == "diabetes":
-            terms = [f'"{keyword}"[MeSH Terms]'] + [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms[:1]]  # Limit to 1 synonym
-        else:
-            terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms[:1]]  # Limit to 1 synonym
-        term_query = f"({' OR '.join(terms)})"
-        query_parts.append(term_query)
+        terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms]
+        term_query = " OR ".join(terms)
+        query_parts.append(f"({term_query})")
     
     query = " AND ".join(query_parts) if query_parts else ""
     query = f"({query}) AND {date_range}" if query else date_range
     
+    logger.info(f"Built PubMed query: {query}")
     return query
 
 @sleep_and_retry
