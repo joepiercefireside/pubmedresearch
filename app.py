@@ -893,9 +893,13 @@ def search_summary():
     fallback_results = json.loads(request.form.get('fallback_results', '[]'))
     prompt_params = json.loads(request.form.get('prompt_params', '{}'))
     
+    logger.info(f"Received summary request for query: {query[:50]}... with prompt: {prompt_text[:50]}...")
+    
     try:
         prompt_output = generate_prompt_output(query, results, prompt_text, prompt_params)
         fallback_prompt_output = generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results else ''
+        
+        logger.info(f"Summary generated: prompt_output length={len(prompt_output)}, fallback_output length={len(fallback_prompt_output) if fallback_prompt_output else 0}")
         
         if prompt_output.startswith("Fallback:"):
             flash("AI summarization failed for primary results.", "warning")
