@@ -455,7 +455,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     for word, tag in tagged:
         if word.lower() in stop_words:
             if current_phrase:
-                keywords.append('+'.join(current_phrase))
+                keywords.append(' '.join(current_phrase))
                 current_phrase = []
             continue
         if tag.startswith('NN') or tag.startswith('JJ'):  # Nouns or adjectives
@@ -486,17 +486,17 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     # Check for explicit date range in query
     if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
         start_year = int(since_match.group(1))
-        date_range = f"{start_year}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+        date_range = f"{start_year}/01/01[dp]:{today.strftime('%Y/%m/%d')}[dp]"
     elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
         year = int(year_match.group(1))
-        date_range = f"{year}/01/01[dp] TO {year}/12/31[dp]"
+        date_range = f"{year}/01/01[dp]:{year}/12/31[dp]"
     elif 'past year' in query_lower:
-        date_range = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+        date_range = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
     elif 'past week' in query_lower:
-        date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+        date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
     else:
         start_year_int = int(start_year) if search_older and start_year else default_start_year
-        date_range = f"{start_year_int}/01/01[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+        date_range = f"{start_year_int}/01/01[dp]:{today.strftime('%Y/%m/%d')}[dp]"
     
     logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
     return keywords_with_synonyms, date_range, start_year_int if search_older and start_year else default_start_year
