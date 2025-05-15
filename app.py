@@ -237,7 +237,7 @@ def validate_user_email(email):
         logger.error(f"Invalid email address: {email}, error: {str(e)}")
         return False
 
-def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=False):
+async def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=False):
     logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, test_mode: {test_mode}, recipient: {user_email}")
     if not validate_user_email(user_email):
         raise ValueError(f"Invalid recipient email address: {user_email}")
@@ -282,14 +282,14 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         results = parse_efetch_xml(efetch_xml)
         
         context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
-        output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
+        output = await query_grok_api(prompt_text or "Summarize the provided research articles.", context)
         
         if email_format == "list":
             content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100] or 'No abstract'}..." for r in results])
         elif email_format == "detailed":
             content = "\n".join([f"Title: {r['title']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}\nAbstract: {r['abstract'] or 'No abstract'}\n" for r in results])
         else:
-            content = output
+            content = output if output else "No summary generated."
         
         if not sg:
             raise Exception("SendGrid API key not configured. Please contact support.")
@@ -687,7 +687,7 @@ def embedding_based_ranking(query, results, prompt_params=None):
     logger.info(f"Embedding-based ranked {len(ranked_results)} results with indices {ranked_indices[:display_result_count]}")
     return ranked_results
 
-def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
+async def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
     if not results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''}."
     
@@ -703,7 +703,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
     cache_key = hashlib.md5((query + context + prompt_text).encode()).hexdigest()
     try:
-        output = query_grok_api(prompt_text, context, prompt=prompt_text)
+        output = await query_grok_api(prompt_text, context, prompt=prompt_text)
         if not output:
             logger.warning("Grok API returned None for summary, using fallback")
             output = f"Fallback: Unable to generate AI summary. Top {summary_result_count} results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
@@ -867,7 +867,7 @@ def search():
 
 @app.route('/search_summary', methods=['POST'])
 @login_required
-def search_summary():
+async def search_summary():
     query = request.form.get('query', '')
     prompt_text = request.form.get('prompt_text', '')
     results = json.loads(request.form.get('results', '[]'))
@@ -875,8 +875,8 @@ def search_summary():
     prompt_params = json.loads(request.form.get('prompt_params', '{}'))
     
     try:
-        prompt_output = generate_prompt_output(query, results, prompt_text, prompt_params)
-        fallback_prompt_output = generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results else ''
+        prompt_output = await generate_prompt_output(query, results, prompt_text, prompt_params)
+        fallback_prompt_output = await generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results else ''
         
         if prompt_output.startswith("Fallback:"):
             flash("AI summarization used fallback.", "warning")
@@ -900,9 +900,9 @@ def search_summary():
 
 @app.route('/test_grok', methods=['GET'])
 @login_required
-def test_grok():
+async def test_grok():
     try:
-        response = query_grok_api("Test query", "Test context", "Return a simple response.")
+        response = await query_grok_api("Test query", "Test context", "Return a simple response.")
         return jsonify({
             'status': 'success',
             'response': response or "No response from Grok API"
@@ -994,7 +994,7 @@ def delete_prompt(id):
     if not prompt:
         cur.close()
         conn.close()
-        flash('Prompt not found or you do not have permission to delete it.', 'error')
+        flash('Prompt not found or k you do not have permission to delete it.', 'error')
         return redirect(url_for('prompt'))
     
     try:
@@ -1012,7 +1012,7 @@ def delete_prompt(id):
 
 @app.route('/notifications', methods=['GET', 'POST'])
 @login_required
-def notifications():
+async def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
     if request.method == 'POST':
@@ -1087,7 +1087,7 @@ def edit_notification(id):
         timeframe = request.form.get('timeframe')
         prompt_text = request.form.get('prompt_text')
         email_format = request.form.get('email_format')
-        
+                 
         if not all([rule_name, keywords, timeframe, email_format]):
             flash('All fields except prompt text are required.', 'error')
         elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
