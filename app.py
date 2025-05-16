@@ -455,7 +455,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     query_lower = query.lower()
     tokens = word_tokenize(query)
     tagged = pos_tag(tokens)
-    stop_words = set(stopwords.words('english')).union({'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to'})
+    stop_words = set(stopwords.words('english')).union({'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to', 'available'})
     
     # Improved phrase detection
     keywords = []
@@ -475,11 +475,16 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     if current_phrase:
         keywords.append(' '.join(current_phrase))
     
-    # Fallback to single words if no phrases detected
-    if not keywords:
-        keywords = [word for word in query_lower.split() if word not in stop_words and len(word) > 1]
+    # Split multi-word phrases into individual words
+    split_keywords = []
+    for kw in keywords:
+        if ' ' in kw:
+            split_keywords.extend(kw.split())
+        else:
+            split_keywords.append(kw)
     
-    keywords = keywords[:5]  # Limit to 5 keywords/phrases
+    # Remove duplicates and limit to 5 keywords
+    keywords = list(set(split_keywords))[:5]
     
     # Get synonyms
     keywords_with_synonyms = []
