@@ -1,202 +1,169 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import psycopg2
-from psycopg2.extras import execute_values
 from werkzeug.security import generate_password_hash, check_password_hash
+import re
 import os
 import logging
-import asyncio
-from transformers import AutoTokenizer, AutoModel
-import torch
+import json
+import requests
+import sqlite3
+from xml.etree import ElementTree
+from ratelimit import limits, sleep_and_retry
+from sentence_transformers import SentenceTransformer
 import numpy as np
 from scipy.spatial.distance import cosine
-import urllib.parse
-import sqlite3
-import json
-import psutil
-from playwright.async_api import async_playwright
-from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from datetime import datetime, timedelta
+from collections import Counter
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import sendgrid
+from sendgrid.helpers.mail import Mail, Email, To, Content
 import traceback
-from openai import OpenAI
-import tenacity
 import time
-import pdfplumber
-import aiohttp
-import re
-import io
-from heapq import heappush, heappop
-import threading
-import concurrent.futures
+import tenacity
+import email_validator
+from email_validator import validate_email, EmailNotValidError
+import nltk
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk import pos_tag
+import hashlib
+from openai import OpenAI
+
+# Download NLTK data
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('averaged_perceptron_tagger')
+
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key')
-app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize embedding model and tokenizer lazily
-tokenizer = None
-model = None
+# Initialize embedding model
+embedding_model = None
 
-# Initialize SQLite database for progress tracking
+# Initialize scheduler
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+# SendGrid client
+sendgrid_api_key = os.environ.get('SENDGRID_API_KEY', '').strip()
+if not sendgrid_api_key:
+    logger.error("SENDGRID_API_KEY not set in environment variables")
+sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
+
+# Biomedical vocabulary for synonyms
+BIOMEDICAL_VOCAB = {
+    "diabetes": ["Diabetes Mellitus", "insulin resistance", "type 2 diabetes"],
+    "weight loss": ["obesity", "body weight reduction", "fat loss"],
+    "treatment": ["therapy", "intervention", "management"],
+    "disease": ["disorder", "condition", "pathology"],
+    "statins": ["HMG-CoA reductase inhibitors", "atorvastatin", "simvastatin"],
+    "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction"],
+    "cardiovascular": ["heart-related", "circulatory"],
+    "blood pressure": ["hypertension", "BP"],
+    "hypertension": ["high blood pressure", "elevated BP"]
+}
+
+# Initialize SQLite database for search progress and cache
 def init_progress_db():
-    conn = sqlite3.connect('progress.db')
+    conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS progress
-                 (user_id TEXT, url TEXT, library_id INTEGER, links_found INTEGER, links_scanned INTEGER, items_crawled INTEGER, status TEXT, current_url TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS search_progress
+                 (user_id TEXT, query TEXT, status TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
+                 (query TEXT PRIMARY KEY, response TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS embedding_cache
+                 (pmid TEXT PRIMARY KEY, embedding BLOB, timestamp REAL)''')
     conn.commit()
     conn.close()
 
 init_progress_db()
 
-@tenacity.retry(stop=tenacity.stop_after_attempt(3), wait=tenacity.wait_exponential(multiplier=1, min=4, max=10))
-async def load_embedding_model():
-    global tokenizer, model
-    if tokenizer is None or model is None:
-        logger.info("Loading all-MiniLM-L6-v2 model...")
-        try:
-            os.environ["TOKENIZERS_PARALLELISM"] = "false"
-            tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/tmp/hf_cache')
-            model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/tmp/hf_cache')
-            logger.info("all-MiniLM-L6-v2 model loaded.")
-        except Exception as e:
-            logger.error(f"Failed to load model: {str(e)}\n{traceback.format_exc()}")
-            try:
-                os.environ["HF_HUB_DISABLE_XET"] = "1"
-                tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/tmp/hf_cache')
-                model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/tmp/hf_cache')
-                logger.info("Fallback: all-MiniLM-L6-v2 model loaded without hf_xet.")
-            except Exception as e2:
-                logger.error(f"Fallback failed: {str(e2)}\n{traceback.format_exc()}")
-                raise
-    return tokenizer, model
+def update_search_progress(user_id, query, status):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO search_progress (user_id, query, status, timestamp) VALUES (?, ?, ?, ?)",
+              (user_id, query, status, time.time()))
+    conn.commit()
+    conn.close()
+    logger.info(f"Search progress updated: user={user_id}, query={query}, status={status}")
 
-async def unload_embedding_model():
-    global tokenizer, model
-    tokenizer = None
-    model = None
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    logger.info("Unloaded all-MiniLM-L6-v2 model to free memory.")
+def get_search_progress(user_id, query):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT status, timestamp FROM search_progress WHERE user_id = ? AND query = ? ORDER BY timestamp DESC LIMIT 1",
+              (user_id, query))
+    result = c.fetchone()
+    conn.close()
+    return result if result else (None, None)
 
-def get_db_connection():
-    try:
-        conn = psycopg2.connect(os.environ['DATABASE_URL'])
-        logger.info("Database connection established.")
-        return conn
-    except KeyError as e:
-        logger.error(f"Missing DATABASE_URL: {e}")
-        raise
-    except psycopg2.Error as e:
-        logger.error(f"Database connection failed: {e}")
-        raise
+def cache_grok_response(query, response):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO grok_cache (query, response, timestamp) VALUES (?, ?, ?)",
+              (query, response, time.time()))
+    conn.commit()
+    conn.close()
+    logger.info(f"Cached Grok response for query: {query[:50]}...")
 
-class User(UserMixin):
-    def __init__(self, id, email):
-        self.id = id
-        self.email = email
+def get_cached_grok_response(query):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT response, timestamp FROM grok_cache WHERE query = ? AND timestamp > ?",
+              (query, time.time() - 604800))  # Cache valid for 7 days
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else None
 
-@login_manager.user_loader
-def load_user(user_id):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, email FROM users WHERE id = %s", (int(user_id),))
-        user = cur.fetchone()
-        cur.close()
-        conn.close()
-        if user:
-            logger.info(f"User loaded: ID {user_id}")
-            return User(user[0], user[1])
-        logger.warning(f"No user found for ID {user_id}")
-        return None
-    except Exception as e:
-        logger.error(f"Error loading user {user_id}: {e}")
-        return None
+def cache_embedding(pmid, embedding):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO embedding_cache (pmid, embedding, timestamp) VALUES (?, ?, ?)",
+              (pmid, embedding.tobytes(), time.time()))
+    conn.commit()
+    conn.close()
 
-def clean_content(html):
-    try:
-        soup = BeautifulSoup(html, 'html.parser')
-        for element in soup(['script', 'style', 'header', 'footer', 'nav', 'img', 'video', 'audio']):
-            element.decompose()
-        text = soup.get_text(separator=' ', strip=True)
-        return ' '.join(text.split())[:1000]
-    except Exception as e:
-        logger.error(f"Error cleaning content: {e}\n{traceback.format_exc()}")
-        return ""
-
-async def extract_pdf_text(url):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200 or 'application/pdf' not in response.headers.get('Content-Type', ''):
-                    return None
-                pdf_data = await response.read()
-                with pdfplumber.open(io.BytesIO(pdf_data)) as pdf:
-                    text = ''
-                    for page in pdf.pages:
-                        text += page.extract_text() or ''
-                    return ' '.join(text.split())[:1000] if text else None
-    except Exception as e:
-        logger.error(f"Error extracting PDF text from {url}: {e}\n{traceback.format_exc()}")
-        return None
-
-async def analyze_page_for_links(page):
-    try:
-        api_key = os.environ.get('XAI_API_KEY')
-        if not api_key:
-            logger.error("XAI_API_KEY not set")
-            return []
-        
-        html = await page.content()
-        prompt = """
-        Analyze the provided HTML to identify interactive elements (e.g., buttons, links, dynamic lists, endless scroll triggers, images with onclick events) that could lead to pages with textual content when clicked or scrolled. Prioritize buttons with labels like 'Browse', 'Learn More', 'Resources', or links within dynamic lists. Suggest specific actions (e.g., click selectors, scroll) to uncover more links, including multi-step paths (e.g., click a button to load a page, then click image links). Return a JSON list of actions, each with 'type' ('click' or 'scroll'), 'selector' (CSS selector for click or empty for scroll), and 'priority' (1 for high, 2 for medium, 3 for low). Ensure the response is valid JSON.
-        Example response: [
-            {"type": "click", "selector": "button.browse", "priority": 1},
-            {"type": "scroll", "selector": "", "priority": 2}
-        ]
-        """
-        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        completion = client.chat.completions.create(
-            model="grok-3-latest",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"HTML: {html[:4000]}"}
-            ],
-            max_tokens=1000
-        )
-        raw_response = completion.choices[0].message.content
-        logger.debug(f"Grok API raw response: {raw_response}")
-        try:
-            actions = json.loads(raw_response)
-            if not isinstance(actions, list):
-                logger.error("Grok API response is not a list")
-                return []
-            return sorted(actions, key=lambda x: x.get('priority', 3))
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse Grok API response as JSON: {raw_response}")
-            return []
-    except Exception as e:
-        logger.error(f"Error analyzing page for links: {str(e)}\n{traceback.format_exc()}")
-        return []
-
-async def generate_embedding(text, tokenizer, model):
-    try:
-        process = psutil.Process()
-        logger.info(f"Memory usage before embedding: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-        with torch.no_grad():
-            outputs = model(**inputs)
-        embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-        logger.info(f"Memory usage after embedding: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+def get_cached_embedding(pmid):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = ? AND timestamp > ?",
+              (pmid, time.time() - 604800))  # Cache valid for 7 days
+    result = c.fetchone()
+    conn.close()
+    if result:
+        embedding = np.frombuffer(result[0], dtype=np.float32)
+        if embedding.shape[0] != 384:
+            logger.warning(f"Invalid embedding dimension for PMID {pmid}: expected 384, got {embedding.shape[0]}")
+            return None
         return embedding
-    except Exception as e:
-        logger.error(f"Error generating embedding: {str(e)}\n{traceback.format_exc()}")
+    return None
+
+def load_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        logger.info("Loading sentence-transformers model...")
+        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Model loaded.")
+    return embedding_model
+
+def generate_embedding(text):
+    model = load_embedding_model()
+    embedding = model.encode(text, convert_to_numpy=True)
+    if embedding.shape[0] != 384:
+        logger.error(f"Generated embedding has incorrect dimension: {embedding.shape[0]}")
         return None
+    return embedding
 
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(3),
@@ -209,783 +176,1039 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
         api_key = os.environ.get('XAI_API_KEY')
         if not api_key:
             logger.error("XAI_API_KEY not set in environment variables")
-            return "Error: xAI API key not configured"
-
-        # Truncate context if too long
-        if len(context) > 10000:
-            context = context[:10000] + "... [truncated]"
-            logger.warning(f"Context truncated to 10,000 characters for query: {query[:50]}...")
-
-        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        logger.info(f"Sending Grok API request: prompt={query[:50]}..., context_length={len(context)}")
+            return "Error: API key not configured. Please contact support."
         
+        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
         completion = client.chat.completions.create(
-            model="grok-3-latest",
+            model="grok-3",  # Adjust model name as needed
             messages=[
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Based on the following context, answer the question: {query}\n\nContext: {context}"}
+                {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
             ],
-            max_tokens=500,
-            timeout=30  # Add timeout to prevent hanging
+            max_tokens=1000
         )
-        
-        response_content = completion.choices[0].message.content
-        logger.info(f"Grok API response received: length={len(response_content)}")
-        return response_content
-    
+        return completion.choices[0].message.content
     except Exception as e:
-        logger.error(f"Grok API call failed: {str(e)}")
+        logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
         raise  # Re-raise to trigger retry
 
-def normalize_url(url):
-    """Normalize URL by adding https:// if missing and ensuring proper format."""
-    if not url:
-        return None
-    url = url.strip()
-    if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url
-    try:
-        parsed = urllib.parse.urlparse(url)
-        if not parsed.netloc:
-            return None
-        # Ensure www. prefix for consistency
-        if not parsed.netloc.startswith('www.'):
-            parsed = parsed._replace(netloc='www.' + parsed.netloc)
-        return parsed.geturl()
-    except ValueError:
-        return None
+def get_db_connection():
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    return conn
 
-async def crawl_website(start_url, user_id, library_id):
-    logger.info(f"Starting crawl for {start_url} by user {user_id} in library {library_id}")
-    process = psutil.Process()
-    logger.info(f"Memory usage before crawl: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+class User(UserMixin):
+    def __init__(self, id, email):
+        self.id = id
+        self.email = email
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, email FROM users WHERE id = %s", (user_id,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    if user:
+        return User(user[0], user[1])
+    return None
+
+def validate_user_email(email):
+    try:
+        validate_email(email, check_deliverability=False)
+        return True
+    except EmailNotValidError as e:
+        logger.error(f"Invalid email address: {email}, error: {str(e)}")
+        return False
+
+def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=False):
+    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, test_mode: {test_mode}, recipient: {user_email}")
+    if not validate_user_email(user_email):
+        raise ValueError(f"Invalid recipient email address: {user_email}")
     
-    visited_urls = set()
-    to_visit = []
-    def add_to_visit(url, priority):
-        heappush(to_visit, (priority, url))
-    
-    education_keywords = ['/education', '/learning-center', '/resources']
-    def get_url_priority(url):
-        for keyword in education_keywords:
-            if keyword in url.lower():
-                return 0
-        return 1
-    
-    add_to_visit(start_url, get_url_priority(start_url))
-    base_domain = urllib.parse.urlparse(start_url).netloc
-    links_found = 1
-    links_scanned = 0
-    items_crawled = 0
-    max_items = 50
-    crawled_data = []
-    
-    conn = sqlite3.connect('progress.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO progress (user_id, url, library_id, links_found, links_scanned, items_crawled, status, current_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-              (str(user_id), start_url, library_id, links_found, links_scanned, items_crawled, "running", start_url))
-    conn.commit()
+    query = keywords
+    keywords_with_synonyms, date_range, _ = extract_keywords_and_date(query)
+    start_year = datetime.now().year - {'daily': 1, 'weekly': 1, 'monthly': 1, 'annually': 1}[timeframe]
+    search_query = build_pubmed_query(keywords_with_synonyms, date_range or f"{start_year}/01/01[dp] TO {datetime.now().strftime('%Y/%m/%d')}[dp]")
     
     try:
-        embedding_tokenizer, embedding_model = await load_embedding_model()
+        api_key = os.environ.get('PUBMED_API_KEY')
+        esearch_result = esearch(search_query, retmax=20, api_key=api_key)
+        pmids = esearch_result['esearchresult']['idlist']
+        logger.info(f"Notification rule {rule_id} query: {search_query}, PMIDs: {len(pmids)}")
+        if not pmids:
+            logger.info(f"No new results for rule {rule_id}")
+            content = "No new results found for this rule."
+            if not sg:
+                raise Exception("SendGrid API key not configured. Please contact support.")
+            message = Mail(
+                from_email=Email("noreply@firesidetechnologies.com"),
+                to_emails=To(user_email),
+                subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+                plain_text_content=content
+            )
+            logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
+            response = sg.send(message)
+            response_headers = {k: v for k, v in response.headers.items()}
+            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+            
+            if test_mode:
+                return {
+                    "results": [],
+                    "email_content": content,
+                    "status": "success",
+                    "email_sent": True,
+                    "message_id": response_headers.get('X-Message-Id', 'Not provided')
+                }
+            return
+        
+        efetch_xml = efetch(pmids, api_key=api_key)
+        results = parse_efetch_xml(efetch_xml)
+        
+        context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
+        output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
+        
+        if email_format == "list":
+            content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100] or 'No abstract'}..." for r in results])
+        elif email_format == "detailed":
+            content = "\n".join([f"Title: {r['title']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}\nAbstract: {r['abstract'] or 'No abstract'}\n" for r in results])
+        else:
+            content = output
+        
+        if not sg:
+            raise Exception("SendGrid API key not configured. Please contact support.")
+        message = Mail(
+            from_email=Email("noreply@firesidetechnologies.com"),
+            to_emails=To(user_email),
+            subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+            plain_text_content=content
+        )
+        logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
+        response = sg.send(message)
+        response_headers = {k: v for k, v in response.headers.items()}
+        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+        
+        if test_mode:
+            return {
+                "results": results,
+                "email_content": content,
+                "status": "success",
+                "email_sent": True,
+                "message_id": response_headers.get('X-Message-Id', 'Not provided')
+            }
+        
     except Exception as e:
-        logger.error(f"Failed to load embedding model: {str(e)}")
-        c.execute("UPDATE progress SET status = ?, current_url = ? WHERE user_id = ? AND url = ? AND library_id = ?",
-                  (f"error: {str(e)}", "", str(user_id), start_url, library_id))
-        conn.commit()
-        conn.close()
-        return crawled_data
-    
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'])
+        logger.error(f"Error running notification rule {rule_id}: {str(e)}\n{traceback.format_exc()}")
+        if test_mode:
             try:
-                while to_visit and items_crawled < max_items:
+                if not sg:
+                    raise Exception("SendGrid API key not configured. Please contact support.")
+                message = Mail(
+                    from_email=Email("noreply@firesidetechnologies.com"),
+                    to_emails=To(user_email),
+                    subject=f"PubMedResearcher Test Notification Failed: {rule_name}",
+                    plain_text_content=f"Error testing notification rule: {str(e)}"
+                )
+                logger.info(f"Sending error email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
+                response = sg.send(message)
+                response_headers = {k: v for k, v in response.headers.items()}
+                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+                email_sent = True
+            except Exception as email_e:
+                logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}\n{traceback.format_exc()}")
+                error_detail = ""
+                if hasattr(email_e, 'body') and email_e.body:
                     try:
-                        priority, url = heappop(to_visit)
-                        if url in visited_urls or not url.startswith(('http://', 'https://')):
-                            logger.debug(f"Skipping invalid or visited URL: {url}")
-                            continue
-                        if re.search(r'\.(jpg|jpeg|png|gif|bmp|svg|ico|mp4|avi|mov|wmv|flv|webm|mp3|wav|ogg|css|js|woff|woff2|ttf|eot)$', url, re.IGNORECASE):
-                            logger.debug(f"Skipping non-textual URL: {url}")
-                            continue
-                        visited_urls.add(url)
-                        links_scanned += 1
-                        logger.debug(f"Scanning URL: {url} (priority: {priority})")
-                        
-                        c.execute("UPDATE progress SET current_url = ? WHERE user_id = ? AND url = ? AND library_id = ?",
-                                  (url, str(user_id), start_url, library_id))
-                        conn.commit()
-                        
-                        page = await browser.new_page()
-                        response = await page.goto(url, timeout=30000, wait_until='networkidle')
-                        if response is None or response.status >= 400:
-                            logger.warning(f"Failed to load {url}: Status {response.status if response else 'None'}")
-                            await page.close()
-                            continue
-                        
-                        for _ in range(3):
-                            await page.evaluate('window.scrollTo(0, document.body.scrollHeight);')
-                            await page.wait_for_timeout(2000)
-                        
-                        actions = await analyze_page_for_links(page)
-                        for action in actions[:5]:
-                            try:
-                                if action['type'] == 'click' and action['selector']:
-                                    elements = await page.query_selector_all(action['selector'])
-                                    for element in elements[:2]:
-                                        try:
-                                            await element.click(timeout=5000)
-                                            await page.wait_for_timeout(3000)
-                                            new_links = await page.evaluate('''() => {
-                                                return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);
-                                            }''')
-                                            for link in new_links:
-                                                absolute_url = urllib.parse.urljoin(url, link)
-                                                parsed_url = urllib.parse.urlparse(absolute_url)
-                                                if parsed_url.netloc == base_domain and absolute_url not in visited_urls and absolute_url not in [u[1] for u in to_visit] and parsed_url.scheme in ('http', 'https'):
-                                                    add_to_visit(absolute_url, get_url_priority(absolute_url))
-                                                    links_found += 1
-                                                    logger.debug(f"New link found via click: {absolute_url}, links_found={links_found}")
-                                        except Exception as e:
-                                            logger.debug(f"Error clicking element {action['selector']}: {e}")
-                                elif action['type'] == 'scroll':
-                                    await page.evaluate('window.scrollTo(0, document.body.scrollHeight);')
-                                    await page.wait_for_timeout(2000)
-                            except Exception as e:
-                                logger.debug(f"Error performing action {action}: {e}")
-                        
-                        content_type = response.headers.get('content-type', '').lower()
-                        cleaned_content = None
-                        if 'text/html' in content_type:
-                            content = await page.content()
-                            cleaned_content = clean_content(content)
-                            if not cleaned_content or len(cleaned_content.strip()) < 100:
-                                logger.warning(f"No valid textual content found for {url}")
-                                await page.close()
-                                continue
-                        elif 'application/pdf' in content_type:
-                            cleaned_content = await extract_pdf_text(url)
-                            if not cleaned_content or len(cleaned_content.strip()) < 100:
-                                logger.warning(f"No valid textual content in PDF at {url}")
-                                await page.close()
-                                continue
-                        else:
-                            logger.debug(f"Skipping unsupported content type {content_type} for {url}")
-                            await page.close()
-                            continue
-                        
-                        embedding = await generate_embedding(cleaned_content, embedding_tokenizer, embedding_model)
-                        if embedding is None:
-                            logger.warning(f"Failed to generate embedding for {url}")
-                            await page.close()
-                            continue
-                        
-                        items_crawled += 1
-                        crawled_data.append((url, cleaned_content, embedding.tolist(), None, library_id))
-                        logger.debug(f"Content found for {url}, items_crawled={items_crawled}")
-                        
-                        links = await page.evaluate('''() => {
-                            const urls = [];
-                            document.querySelectorAll('a[href], button, [role="link"], [onclick], [data-href], [data-nav], [data-url], [data-link], meta[content][http-equiv="refresh"], link[rel="sitemap"]').forEach(el => {
-                                let url = el.href || el.getAttribute('data-href') || el.getAttribute('data-nav') || el.getAttribute('data-url') || el.getAttribute('data-link');
-                                if (!url && el.getAttribute('onclick')) {
-                                    const match = el.getAttribute('onclick').match(/(?:location\.href|window\.open|navigateTo|window\.location\.assign|window\.location\.replace)\(['"]([^'"]+)['"]/);
-                                    if (match) url = match[1];
-                                }
-                                if (!url && el.tagName === 'META' && el.getAttribute('http-equiv') === 'refresh') {
-                                    const content = el.getAttribute('content');
-                                    const match = content.match(/url=(.+)$/i);
-                                    if (match) url = match[1];
-                                }
-                                if (!url && el.tagName === 'LINK' && el.getAttribute('rel') === 'sitemap') {
-                                    url = el.href;
-                                }
-                                if (url) urls.push(url);
-                            });
-                            const scripts = document.querySelectorAll('script');
-                            scripts.forEach(script => {
-                                const text = script.textContent || script.src;
-                                const matches = text.match(/(?:location\.href|window\.location|navigateTo|open)\(['"]([^'"]+)['"]/g);
-                                if (matches) {
-                                    matches.forEach(match => {
-                                        const urlMatch = match.match(/['"]([^'"]+)['"]/);
-                                        if (urlMatch) urls.push(urlMatch[1]);
-                                    });
-                                }
-                            });
-                            return [...new Set(urls)];
-                        }''')
-                        for link in links:
-                            absolute_url = urllib.parse.urljoin(url, link)
-                            parsed_url = urllib.parse.urlparse(absolute_url)
-                            if parsed_url.netloc == base_domain and absolute_url not in visited_urls and absolute_url not in [u[1] for u in to_visit] and parsed_url.scheme in ('http', 'https'):
-                                add_to_visit(absolute_url, get_url_priority(absolute_url))
-                                links_found += 1
-                                logger.debug(f"New link found: {absolute_url}, links_found={links_found}")
-                        
-                        c.execute("UPDATE progress SET links_found = ?, links_scanned = ?, items_crawled = ?, status = ? WHERE user_id = ? AND url = ? AND library_id = ?",
-                                  (links_found, links_scanned, items_crawled, "running", str(user_id), start_url, library_id))
-                        conn.commit()
-                        
-                        await page.close()
-                        logger.info(f"Memory usage after scanning {url}: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-                    except Exception as e:
-                        logger.error(f"Error crawling {url}: {str(e)}\n{traceback.format_exc()}")
-                        c.execute("UPDATE progress SET status = ? WHERE user_id = ? AND url = ? AND library_id = ?",
-                                  (f"error: {str(e)}", str(user_id), start_url, library_id))
-                        conn.commit()
-                        continue
-                logger.info(f"Crawl complete: items_crawled={items_crawled}")
-                c.execute("UPDATE progress SET status = ?, current_url = ? WHERE user_id = ? AND url = ? AND library_id = ?",
-                          ("complete", "", str(user_id), start_url, library_id))
-                conn.commit()
-            finally:
-                await browser.close()
-                conn.close()
-        if not crawled_data and links_found == links_scanned:
-            flash("No new textual content found; all URLs already exist or lack meaningful text.", 'info')
-        return crawled_data
-    except Exception as e:
-        logger.error(f"Unexpected error in crawl_website: {str(e)}\n{traceback.format_exc()}")
-        c.execute("UPDATE progress SET status = ?, current_url = ? WHERE user_id = ? AND url = ? AND library_id = ?",
-                  (f"error: {str(e)}", "", str(user_id), start_url, library_id))
-        conn.commit()
-        conn.close()
-        return crawled_data
-    finally:
-        await unload_embedding_model()
+                        error_body = json.loads(email_e.body.decode('utf-8'))
+                        error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
+                    except json.JSONDecodeError:
+                        error_detail = f": {email_e.body.decode('utf-8')}"
+                email_sent = False
+            error_message = (
+                f"Email sending failed due to unverified sender identity. Please verify noreply@firesidetechnologies.com in SendGrid{error_detail}."
+                if "403" in str(e) or "Forbidden" in str(e)
+                else "Email sending failed due to invalid API key configuration. Please contact support."
+                if "Invalid header value" in str(e) or "API key not configured" in str(e)
+                else f"Email sending failed: {str(e)}{error_detail}"
+            )
+            return {
+                "results": [],
+                "email_content": error_message,
+                "status": "error",
+                "email_sent": email_sent,
+                "message_id": None
+            }
+        raise
+
+def schedule_notification_rules():
+    scheduler.remove_all_jobs()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
+        "FROM notifications n JOIN users u ON n.user_id = u.id"
+    )
+    rules = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    for rule in rules:
+        rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
+        cron_trigger = {
+            'daily': CronTrigger(hour=8, minute=0),
+            'weekly': CronTrigger(day_of_week='mon', hour=8, minute=0),
+            'monthly': CronTrigger(day=1, hour=8, minute=0),
+            'annually': CronTrigger(month=1, day=1, hour=8, minute=0)
+        }[timeframe]
+        scheduler.add_job(
+            run_notification_rule,
+            trigger=cron_trigger,
+            args=[rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email],
+            id=f"notification_{rule_id}",
+            replace_existing=True
+        )
+    logger.info(f"Scheduled {len(rules)} notification rules")
 
 @app.route('/')
 def index():
-    try:
-        logger.info("Accessing index page")
-        return render_template('index.html')
-    except Exception as e:
-        logger.error(f"Error rendering index page: {e}\n{traceback.format_exc()}")
-        return "Internal Server Error", 500
+    if current_user.is_authenticated:
+        return redirect(url_for('search'))
+    return render_template('index.html', username=None)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    try:
-        if request.method == 'POST':
-            email = request.form.get('email')
-            password = request.form.get('password')
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            if cur.fetchone():
-                flash('Email already registered.', 'error')
-            else:
-                password_hash = generate_password_hash(password)
-                cur.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s)", (email, password_hash))
-                conn.commit()
-                flash('Registration successful! Please log in.', 'success')
-                return redirect(url_for('login'))
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        if cur.fetchone():
+            flash('Email already registered.', 'error')
+        else:
+            password_hash = generate_password_hash(password)
+            cur.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s)", (email, password_hash))
+            conn.commit()
+            flash('Registration successful! Please log in.', 'success')
             cur.close()
             conn.close()
-        return render_template('register.html')
-    except Exception as e:
-        logger.error(f"Error in register endpoint: {e}\n{traceback.format_exc()}")
-        return "Internal Server Error", 500
+            return redirect(url_for('login'))
+        cur.close()
+        conn.close()
+    return render_template('register.html', username=None)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    try:
-        if request.method == 'POST':
-            email = request.form.get('email')
-            password = request.form.get('password')
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
-            user = cur.fetchone()
-            cur.close()
-            conn.close()
-            if user and check_password_hash(user[2], password):
-                login_user(User(user[0], user[1]), remember=True)
-                session.permanent = True
-                logger.info(f"User {email} logged in successfully")
-                return redirect(url_for('index'))
-            flash('Invalid email or password.', 'error')
-        return render_template('login.html')
-    except Exception as e:
-        logger.error(f"Error in login endpoint: {e}\n{traceback.format_exc()}")
-        return "Internal Server Error", 500
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
+        user = cur.fetchone()
+        cur.close()
+        conn.close()
+        if user and check_password_hash(user[2], password):
+            login_user(User(user[0], user[1]))
+            return redirect(url_for('search'))
+        flash('Invalid email or password.', 'error')
+    return render_template('login.html', username=None)
 
 @app.route('/logout')
 @login_required
 def logout():
-    try:
-        logout_user()
-        logger.info("User logged out")
-        return redirect(url_for('login'))
-    except Exception as e:
-        logger.error(f"Error in logout endpoint: {e}\n{traceback.format_exc()}")
-        return "Internal Server Error", 500
+    logout_user()
+    return redirect(url_for('login'))
 
-@app.route('/libraries', methods=['GET', 'POST'])
-@login_required
-def libraries():
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing libraries endpoint")
-            flash('Please log in to access libraries.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        if request.method == 'POST':
-            name = request.form.get('name')
-            if not name:
-                flash('Library name cannot be empty.', 'error')
-            else:
-                cur.execute("INSERT INTO libraries (user_id, name) VALUES (%s, %s)", (int(current_user.id), name))
-                conn.commit()
-                flash('Library created successfully.', 'success')
-                return redirect(url_for('libraries'))
-        
-        cur.execute("SELECT id, name FROM libraries WHERE user_id = %s", (int(current_user.id),))
-        libraries = cur.fetchall()
-        cur.close()
-        conn.close()
-        return render_template('libraries.html', libraries=libraries)
-    except Exception as e:
-        logger.error(f"Error in libraries endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return render_template('libraries.html', libraries=[])
+def extract_keywords_and_date(query, search_older=False, start_year=None):
+    query_lower = query.lower()
+    tokens = word_tokenize(query)
+    tagged = pos_tag(tokens)
+    stop_words = set(stopwords.words('english')).union({'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to', 'available'})
+    
+    # Improved phrase detection
+    keywords = []
+    current_phrase = []
+    for word, tag in tagged:
+        if word.lower() in stop_words:
+            if current_phrase:
+                keywords.append(' '.join(current_phrase))
+                current_phrase = []
+            continue
+        if tag.startswith('NN') or tag.startswith('JJ'):  # Nouns or adjectives
+            current_phrase.append(word.lower())
+        else:
+            if current_phrase:
+                keywords.append(' '.join(current_phrase))
+                current_phrase = []
+    if current_phrase:
+        keywords.append(' '.join(current_phrase))
+    
+    # Split multi-word phrases into individual words
+    split_keywords = []
+    for kw in keywords:
+        if ' ' in kw:
+            split_keywords.extend(kw.split())
+        else:
+            split_keywords.append(kw)
+    
+    # Remove duplicates and limit to 5 keywords
+    keywords = list(set(split_keywords))[:5]
+    
+    # Get synonyms
+    keywords_with_synonyms = []
+    for kw in keywords:
+        synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:2]  # Limit to 2 synonyms
+        keywords_with_synonyms.append((kw, synonyms))
+    
+    today = datetime.now()
+    default_start_year = today.year - 5
+    date_range = None
+    
+    # Check for explicit date range in query
+    if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
+        start_year = int(since_match.group(1))
+        date_range = f"{start_year}/01/01[dp]:{today.strftime('%Y/%m/%d')}[dp]"
+    elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
+        year = int(year_match.group(1))
+        date_range = f"{year}/01/01[dp]:{year}/12/31[dp]"
+    elif 'past year' in query_lower:
+        date_range = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
+    elif 'past week' in query_lower:
+        date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
+    else:
+        start_year_int = int(start_year) if search_older and start_year else default_start_year
+        date_range = f"{start_year_int}/01/01[dp]:{today.strftime('%Y/%m/%d')}[dp]"
+    
+    logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
+    return keywords_with_synonyms, date_range, start_year_int if search_older and start_year else default_start_year
 
-@app.route('/libraries/view/<int:library_id>')
-@login_required
-def view_library(library_id):
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing view_library endpoint")
-            flash('Please log in to view libraries.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, name FROM libraries WHERE id = %s AND user_id = %s", (library_id, int(current_user.id)))
-        library = cur.fetchone()
-        if not library:
-            flash('Library not found.', 'error')
-            return redirect(url_for('libraries'))
-        
-        cur.execute("SELECT id, url, content FROM documents WHERE library_id = %s", (library_id,))
-        contents = cur.fetchall()
-        cur.close()
-        conn.close()
-        return render_template('library_view.html', library=library, contents=contents)
-    except Exception as e:
-        logger.error(f"Error in view_library endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return redirect(url_for('libraries'))
+def build_pubmed_query(keywords_with_synonyms, date_range):
+    query_parts = []
+    for keyword, synonyms in keywords_with_synonyms:
+        terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms]
+        term_query = " OR ".join(terms)
+        query_parts.append(f"({term_query})")
+    
+    query = " AND ".join(query_parts) if query_parts else ""
+    query = f"({query}) AND {date_range}" if query else date_range
+    
+    logger.info(f"Built PubMed query: {query}")
+    return query
 
-@app.route('/libraries/delete_content/<int:content_id>')
-@login_required
-def delete_library_content(content_id):
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing delete_library_content endpoint")
-            flash('Please log in to delete content.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT library_id FROM documents WHERE id = %s", (content_id,))
-        library_id = cur.fetchone()
-        if not library_id:
-            flash('Content not found.', 'error')
-            return redirect(url_for('libraries'))
-        
-        cur.execute("DELETE FROM documents WHERE id = %s AND library_id IN (SELECT id FROM libraries WHERE user_id = %s)", (content_id, int(current_user.id)))
-        conn.commit()
-        cur.close()
-        conn.close()
-        flash('Content deleted successfully.', 'success')
-        return redirect(url_for('view_library', library_id=library_id[0]))
-    except Exception as e:
-        logger.error(f"Error in delete_library_content endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return redirect(url_for('libraries'))
+@sleep_and_retry
+@limits(calls=10, period=1)
+def esearch(query, retmax=20, api_key=None):
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+    params = {
+        "db": "pubmed",
+        "term": query,
+        "retmax": retmax,
+        "retmode": "json",
+        "sort": "relevance",
+        "api_key": api_key
+    }
+    logger.info(f"PubMed ESearch query: {query}")
+    response = requests.get(url, params=params)
+    response.raise_for_status()
+    result = response.json()
+    logger.info(f"ESearch result: {len(result['esearchresult']['idlist'])} PMIDs")
+    return result
 
-@app.route('/libraries/delete/<int:library_id>')
-@login_required
-def delete_library(library_id):
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing delete_library endpoint")
-            flash('Please log in to delete libraries.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM libraries WHERE id = %s AND user_id = %s", (library_id, int(current_user.id)))
-        if not cur.fetchone():
-            flash('Library not found.', 'error')
-            return redirect(url_for('libraries'))
-        
-        cur.execute("DELETE FROM documents WHERE library_id = %s", (library_id,))
-        cur.execute("DELETE FROM libraries WHERE id = %s AND user_id = %s", (library_id, int(current_user.id)))
-        conn.commit()
-        cur.close()
-        conn.close()
-        flash('Library and its contents deleted successfully.', 'success')
-        return redirect(url_for('libraries'))
-    except Exception as e:
-        logger.error(f"Error in delete_library endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return redirect(url_for('libraries'))
+@sleep_and_retry
+@limits(calls=10, period=1)
+def efetch(pmids, api_key=None):
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    params = {
+        "db": "pubmed",
+        "id": ",".join(map(str, pmids)),
+        "retmode": "xml",
+        "api_key": api_key
+    }
+    response = requests.get(url, params=params)
+    response.raise_for_status()
+    return response.content
 
-@app.route('/add_library', methods=['POST'])
-@login_required
-def add_library():
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing add_library endpoint")
-            return jsonify({'status': 'error', 'message': 'Please log in to add a library'}), 401
-        
-        name = request.form.get('name')
-        if not name:
-            flash('Library name cannot be empty.', 'error')
-            return jsonify({'status': 'error', 'message': 'Library name cannot be empty'}), 400
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("INSERT INTO libraries (user_id, name) VALUES (%s, %s) RETURNING id", (int(current_user.id), name))
-        library_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({'status': 'success', 'library_id': library_id, 'library_name': name})
-    except Exception as e:
-        logger.error(f"Error in add_library endpoint: {e}\n{traceback.format_exc()}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+def parse_efetch_xml(xml_content):
+    root = ElementTree.fromstring(xml_content)
+    articles = []
+    for article in root.findall(".//PubmedArticle"):
+        pmid = article.find(".//PMID").text if article.find(".//PMID") is not None else ""
+        title = article.find(".//ArticleTitle").text if article.find(".//ArticleTitle") is not None else ""
+        abstract = article.find(".//AbstractText")
+        abstract = abstract.text or "" if abstract is not None else ""
+        authors = [author.find("LastName").text for author in article.findall(".//Author") 
+                   if author.find("LastName") is not None]
+        journal = article.find(".//Journal/Title")
+        journal = journal.text if journal is not None else ""
+        pub_date = article.find(".//PubDate/Year")
+        pub_date = pub_date.text if pub_date is not None else ""
+        logger.info(f"Parsed article: PMID={pmid}, Date={pub_date}, Abstract={'Present' if abstract else 'Missing'}")
+        articles.append({
+            "id": pmid,
+            "title": title,
+            "abstract": abstract,
+            "authors": ", ".join(authors),
+            "journal": journal,
+            "publication_date": pub_date
+        })
+    return articles
 
-@app.route('/prompts', methods=['GET', 'POST'])
-@login_required
-def prompts():
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing prompts endpoint")
-            flash('Please log in to access prompts.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        if request.method == 'POST':
-            name = request.form.get('name')
-            content = request.form.get('content')
-            if not name or not content:
-                flash('Prompt name and content cannot be empty.', 'error')
-            else:
-                cur.execute("INSERT INTO prompts (user_id, name, content) VALUES (%s, %s, %s)", (int(current_user.id), name, content))
-                conn.commit()
-                flash('Prompt created successfully.', 'success')
-                return redirect(url_for('prompts'))
-        
-        cur.execute("SELECT id, name, content FROM prompts WHERE user_id = %s", (int(current_user.id),))
-        prompts = cur.fetchall()
-        cur.close()
-        conn.close()
-        return render_template('prompts.html', prompts=prompts)
-    except Exception as e:
-        logger.error(f"Error in prompts endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return render_template('prompts.html', prompts=[])
-
-@app.route('/prompts/edit/<int:prompt_id>', methods=['GET', 'POST'])
-@login_required
-def edit_prompt(prompt_id):
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing edit_prompt endpoint")
-            flash('Please log in to edit prompts.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, name, content FROM prompts WHERE id = %s AND user_id = %s", (prompt_id, int(current_user.id)))
-        prompt = cur.fetchone()
-        if not prompt:
-            flash('Prompt not found.', 'error')
-            return redirect(url_for('prompts'))
-        
-        if request.method == 'POST':
-            name = request.form.get('name')
-            content = request.form.get('content')
-            if not name or not content:
-                flash('Prompt name and content cannot be empty.', 'error')
-            else:
-                cur.execute("UPDATE prompts SET name = %s, content = %s WHERE id = %s AND user_id = %s",
-                            (name, content, prompt_id, int(current_user.id)))
-                conn.commit()
-                flash('Prompt updated successfully.', 'success')
-                return redirect(url_for('prompts'))
-        
-        cur.close()
-        conn.close()
-        return render_template('prompt_edit.html', prompt=prompt)
-    except Exception as e:
-        logger.error(f"Error in edit_prompt endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return redirect(url_for('prompts'))
-
-@app.route('/prompts/delete/<int:prompt_id>')
-@login_required
-def delete_prompt(prompt_id):
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing delete_prompt endpoint")
-            flash('Please log in to delete prompts.', 'error')
-            return redirect(url_for('login'))
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM prompts WHERE id = %s AND user_id = %s", (prompt_id, int(current_user.id)))
-        conn.commit()
-        cur.close()
-        conn.close()
-        flash('Prompt deleted successfully.', 'success')
-        return redirect(url_for('prompts'))
-    except Exception as e:
-        logger.error(f"Error in delete_prompt endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return redirect(url_for('prompts'))
-
-@app.route('/crawl', methods=['GET', 'POST'])
-@login_required
-def crawl():
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing crawl endpoint")
-            flash('Please log in to start a crawl.', 'error')
-            return redirect(url_for('login'))
-        
-        logger.debug(f"User authenticated: ID {current_user.id}, email {current_user.email}")
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, name FROM libraries WHERE user_id = %s", (int(current_user.id),))
-        libraries = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        if request.method == 'POST':
-            start_url = normalize_url(request.form.get('url'))
-            library_id = request.form.get('library_id')
-            if not start_url or not library_id:
-                flash('URL and library selection cannot be empty.', 'error')
-                return render_template('crawl.html', libraries=libraries)
-            
-            logger.info(f"Starting crawl for {start_url} by user {current_user.id} in library {library_id}")
-            try:
-                # Run crawl_website in a thread to avoid event loop conflicts
-                def run_crawl(user_id, start_url, library_id):
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        return loop.run_until_complete(crawl_website(start_url, user_id, int(library_id)))
-                    finally:
-                        loop.close()
-                
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    crawled_data = executor.submit(run_crawl, current_user.id, start_url, library_id).result()
-                
-                if crawled_data:
-                    conn = get_db_connection()
-                    cur = conn.cursor()
-                    query = """
-                    INSERT INTO documents (url, content, embedding, file_path, library_id)
-                    VALUES %s
-                    ON CONFLICT (url, library_id) DO NOTHING
-                    """
-                    execute_values(cur, query, crawled_data)
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    flash(f"Stored {len(crawled_data)} items in library.", 'success')
-                else:
-                    flash("No new textual content found; all URLs already exist or lack meaningful text.", 'info')
-                
-                return redirect(url_for('crawl', url=start_url, library_id=library_id))
-            except psycopg2.errors.UniqueViolation as e:
-                logger.info(f"Duplicate URL detected: {str(e)}")
-                flash("All pages from that link have already been added to the library.", 'info')
-                return redirect(url_for('crawl'))
-            except Exception as e:
-                logger.error(f"Error during crawl: {str(e)}\n{traceback.format_exc()}")
-                flash(f"Error during crawl: {str(e)}", 'error')
-                return render_template('crawl.html', libraries=libraries)
-        
-        return render_template('crawl.html', libraries=libraries)
-    except Exception as e:
-        logger.error(f"Error in crawl endpoint: {e}\n{traceback.format_exc()}")
-        flash(f"Error: {str(e)}", 'error')
-        return render_template('crawl.html', libraries=[])
-
-@app.route('/crawl_progress', methods=['GET'])
-@login_required
-def crawl_progress():
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user in crawl_progress endpoint")
-            return jsonify({"status": "error", "message": "User not authenticated"}), 401
-        conn = sqlite3.connect('progress.db')
-        c = conn.cursor()
-        c.execute("SELECT links_found, links_scanned, items_crawled, status FROM progress WHERE user_id = ? AND url = ? AND library_id = ? ORDER BY rowid DESC LIMIT 1",
-                  (str(current_user.id), request.args.get('url'), request.args.get('library_id')))
-        result = c.fetchone()
-        conn.close()
-        data = {
-            "links_found": result[0] if result else 0,
-            "links_scanned": result[1] if result else 0,
-            "items_crawled": result[2] if result else 0,
-            "status": result[3] if result else "waiting"
+def parse_prompt(prompt_text):
+    if not prompt_text:
+        return {
+            'summary_result_count': 5,  # Updated to 5
+            'display_result_count': 20,
+            'limit_presentation': False
         }
-        return jsonify(data)
-    except Exception as e:
-        logger.error(f"Error in crawl_progress: {e}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    
+    prompt_text_lower = prompt_text.lower()
+    
+    summary_result_count = 5  # Default to 5
+    if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
+        summary_result_count = min(int(match.group(1)), 5)  # Limit to 5
+    elif 'top' in prompt_text_lower:
+        summary_result_count = 3  # Example: if 'top' is mentioned, use 3
+    
+    display_result_count = 20
+    limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
+    
+    logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
+    
+    return {
+        'summary_result_count': summary_result_count,
+        'display_result_count': display_result_count,
+        'limit_presentation': limit_presentation
+    }
 
-@app.route('/current_url', methods=['GET'])
-@login_required
-def current_url():
+def rank_results(query, results, prompt_params=None):
+    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    
     try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user in current_url endpoint")
-            return jsonify({"status": "error", "message": "User not authenticated"}), 401
-        conn = sqlite3.connect('progress.db')
-        c = conn.cursor()
-        c.execute("SELECT current_url FROM progress WHERE user_id = ? AND url = ? AND library_id = ? ORDER BY rowid DESC LIMIT 1",
-                  (str(current_user.id), request.args.get('url'), request.args.get('library_id')))
-        result = c.fetchone()
-        conn.close()
-        return jsonify({"current_url": result[0] if result and result[0] else ""})
+        articles_context = []
+        for i, result in enumerate(results):
+            article_text = f"Article {i+1}: Title: {result['title']}\nAbstract: {result['abstract'] or ''}\nAuthors: {result['authors']}\nJournal: {result['journal']}\nDate: {result['publication_date']}"
+            articles_context.append(article_text)
+        
+        context = "\n\n".join(articles_context)
+        ranking_prompt = f"""
+Given the query '{query}', rank the following articles by relevance.
+Focus on articles that directly address the query's topic and intent.
+Exclude articles that are unrelated to the query.
+Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
+Ensure the response is valid JSON. Example:
+[
+    {{"index": 1, "explanation": "Directly discusses the query topic with high relevance"}},
+    {{"index": 2, "explanation": "Relevant but less specific to the query"}}
+]
+Articles:
+{context}
+"""
+        cache_key = hashlib.md5((query + context + ranking_prompt).encode()).hexdigest()
+        response = query_grok_api(query, context, prompt=ranking_prompt)
+        if not response:
+            raise ValueError("Grok API returned None")
+        
+        logger.info(f"Grok ranking response: {response[:200]}...")
+        ranking = json.loads(response)
+        if isinstance(ranking, dict) and 'articles' in ranking:
+            ranking = ranking['articles']
+        if not isinstance(ranking, list):
+            raise ValueError("Grok response is not a list")
+        
+        ranked_indices = []
+        for item in ranking:
+            if isinstance(item, dict) and 'index' in item:
+                index = item['index']
+                if isinstance(index, (int, str)) and str(index).isdigit():
+                    index = int(index) - 1
+                    if 0 <= index < len(results):
+                        ranked_indices.append(index)
+        
+        missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
+        ranked_indices.extend(missing_indices)
+        
+        ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
+        logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices[:display_result_count]}")
+        return ranked_results
     except Exception as e:
-        logger.error(f"Error in current_url: {e}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Grok ranking failed: {str(e)}")
+        return embedding_based_ranking(query, results, prompt_params)
+
+def embedding_based_ranking(query, results, prompt_params=None):
+    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    query_embedding = generate_embedding(query)
+    if query_embedding is None:
+        logger.error("Failed to generate query embedding")
+        return []
+    current_year = datetime.now().year
+    
+    embeddings = []
+    texts = []
+    for result in results:
+        embedding = get_cached_embedding(result['id'])
+        if embedding is None:
+            texts.append(f"{result['title']} {result['abstract'] or ''}")
+        else:
+            embeddings.append(embedding)
+    
+    if texts:
+        model = load_embedding_model()
+        new_embeddings = model.encode(texts, convert_to_numpy=True)
+        for i, (result, emb) in enumerate(zip(results[len(embeddings):], new_embeddings)):
+            if emb.shape[0] == 384:
+                cache_embedding(result['id'], emb)
+                embeddings.append(emb)
+            else:
+                logger.error(f"Generated embedding for PMID {result['id']} has incorrect dimension: {emb.shape[0]}")
+                embeddings.append(None)
+    
+    scores = []
+    for i, (emb, result) in enumerate(zip(embeddings, results)):
+        if emb is not None and emb.shape[0] == 384:
+            similarity = 1 - cosine(query_embedding, emb)
+        else:
+            similarity = 0.0
+        pub_year = int(result['publication_date']) if result['publication_date'].isdigit() else 2000
+        recency_bonus = (pub_year - 2000) / (current_year - 2000)
+        weighted_score = (0.8 * similarity) + (0.2 * recency_bonus)
+        scores.append((i, weighted_score, pub_year))
+    
+    scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    ranked_indices = [i for i, _, _ in scores]
+    
+    ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
+    logger.info(f"Embedding-based ranked {len(ranked_results)} results with indices {ranked_indices[:display_result_count]}")
+    return ranked_results
+
+def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
+    if not results:
+        return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''}."
+    
+    logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
+    
+    # Limit to top 5 results
+    context_results = results[:5]
+    logger.info(f"Context results count for summary: {len(context_results)}")
+    
+    if not context_results:
+        return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
+    
+    # Construct context
+    context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
+    
+    # Truncate context if too long
+    MAX_CONTEXT_LENGTH = 12000  # Approx. 3000 tokens
+    if len(context) > MAX_CONTEXT_LENGTH:
+        context = context[:MAX_CONTEXT_LENGTH] + "... [truncated]"
+        logger.warning(f"Context truncated to {MAX_CONTEXT_LENGTH} characters for query: {query[:50]}...")
+    
+    try:
+        output = query_grok_api(query, context, prompt=prompt_text)
+        if not output:
+            logger.warning("Grok API returned None, using fallback")
+            output = f"Fallback: Unable to generate AI summary. Top 5 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
+    except Exception as e:
+        logger.error(f"Error generating AI summary: {str(e)}")
+        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top 5 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
+    
+    paragraphs = output.split('\n\n')
+    formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
+    logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")
+    return formatted_output
+
+@app.route('/search_progress', methods=['GET'])
+@login_required
+def search_progress():
+    def stream_progress():
+        try:
+            if not current_user or not hasattr(current_user, 'id'):
+                yield f"data: {{'status': 'error: User not authenticated'}}\n\n"
+                return
+            query = request.args.get('query', '')
+            last_status = None
+            while True:
+                status, timestamp = get_search_progress(current_user.id, query)
+                if status and status != last_status:
+                    yield f"data: {{'status': '{status}'}}\n\n"
+                    last_status = status
+                if status in ["complete", "error"]:
+                    break
+                time.sleep(1)
+        except Exception as e:
+            logger.error(f"Error in search_progress: {str(e)}")
+            yield f"data: {{'status': 'error: {str(e)}'}}\n\n"
+    
+    return Response(stream_progress(), mimetype='text/event-stream')
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
 def search():
-    try:
-        if not current_user.is_authenticated:
-            logger.error("Unauthenticated user accessing search endpoint")
-            flash('Please log in to perform a search.', 'error')
-            return redirect(url_for('login'))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, prompt_name, prompt_text FROM prompts WHERE user_id = %s', (current_user.id,))
+    prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2]} for p in cur.fetchall()]
+    cur.close()
+    conn.close()
+    logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
+
+    prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
+    prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
+    query = request.args.get('query', request.form.get('query', ''))
+    search_older = request.form.get('search_older', 'off') == 'on'
+    start_year = request.form.get('start_year', None)
+
+    selected_prompt_text = prompt_text
+    if prompt_id and not prompt_text:
+        for prompt in prompts:
+            if prompt['id'] == prompt_id:
+                selected_prompt_text = prompt['prompt_text']
+                break
+        else:
+            logger.warning(f"Prompt ID {prompt_id} not found in prompts")
+            selected_prompt_text = ''
+
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}")
+
+    if request.method == 'POST':
+        if not query:
+            update_search_progress(current_user.id, query, "error: Query cannot be empty")
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
         
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, name FROM libraries WHERE user_id = %s", (int(current_user.id),))
-        libraries = cur.fetchall()
-        cur.execute("SELECT id, name, content FROM prompts WHERE user_id = %s", (int(current_user.id),))
-        prompts = cur.fetchall()
-        cur.close()
-        conn.close()
+        update_search_progress(current_user.id, query, "contacting PubMed")
         
-        if request.method == 'POST':
-            query = request.form.get('query')
-            library_id = request.form.get('library_id')
-            prompt_id = request.form.get('prompt_id')
-            if not query or not library_id or not prompt_id:
-                flash('Query, library, and prompt selection cannot be empty.', 'error')
-                return render_template('search.html', libraries=libraries, prompts=prompts)
+        keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
+        if not keywords_with_synonyms:
+            update_search_progress(current_user.id, query, "error: No valid keywords found")
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+        
+        prompt_params = parse_prompt(selected_prompt_text)
+        summary_result_count = prompt_params['summary_result_count']
+        display_result_count = prompt_params['display_result_count']
+        
+        api_key = os.environ.get('PUBMED_API_KEY')
+        try:
+            search_query = build_pubmed_query(keywords_with_synonyms, date_range)
+        except Exception as e:
+            logger.error(f"Error building PubMed query: {str(e)}")
+            update_search_progress(current_user.id, query, f"error: Query processing failed: {str(e)}")
+            return render_template('search.html', error=f"Query processing failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+        
+        try:
+            update_search_progress(current_user.id, query, "executing search")
+            esearch_result = esearch(search_query, retmax=20, api_key=api_key)
+            pmids = esearch_result['esearchresult']['idlist']
+            results = []
+            if pmids:
+                update_search_progress(current_user.id, query, "fetching article details")
+                efetch_xml = efetch(pmids, api_key=api_key)
+                results = parse_efetch_xml(efetch_xml)
             
-            logger.info(f"Search query: {query} in library {library_id}")
-            def run_embedding():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    tokenizer, model = loop.run_until_complete(load_embedding_model())
-                    query_embedding = loop.run_until_complete(generate_embedding(query, tokenizer, model))
-                    loop.run_until_complete(unload_embedding_model())
-                    return query_embedding
-                finally:
-                    loop.close()
-            
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                query_embedding = executor.submit(run_embedding).result()
-            
-            if query_embedding is None:
-                flash('Failed to generate query embedding.', 'error')
-                return render_template('search.html', libraries=libraries, prompts=prompts)
-            
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("""
-            SELECT id, url, content, file_path, embedding
-            FROM documents
-            WHERE library_id = %s
-            ORDER BY embedding <=> %s::vector
-            LIMIT 5
-            """, (int(library_id), query_embedding.tolist()))
-            results = cur.fetchall()
-            
-            cur.execute("SELECT content FROM prompts WHERE id = %s AND user_id = %s", (int(prompt_id), int(current_user.id)))
-            prompt = cur.fetchone()
-            cur.close()
-            conn.close()
-            
-            if not prompt:
-                flash('Selected prompt not found.', 'error')
-                return render_template('search.html', libraries=libraries, prompts=prompts)
-            
-            context = "\n\n".join([result[2] for result in results])
-            prompt_answer = query_grok_api(query, context, prompt[0])
-            if prompt_answer.startswith("Error") or prompt_answer.startswith("Fallback"):
-                prompt_answer = f"{prompt_answer}\n\nRelevant Documents:"
-            
-            documents = [
-                {
-                    "url": result[1] or result[3],
-                    "snippet": result[2][:100] + ("..." if len(result[2]) > 100 else "")
-                }
-                for result in results
+            # Filter results by date range
+            primary_results = [
+                r for r in results
+                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) >= start_year_int
+            ]
+            fallback_results = [
+                r for r in results
+                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) < start_year_int
             ]
             
-            if not results:
-                documents = [{"url": "", "snippet": "No relevant content found."}]
+            if primary_results or fallback_results:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
+                            (query, json.dumps(primary_results + fallback_results)))
+                conn.commit()
+                cur.close()
+                conn.close()
             
-            return render_template('search.html', libraries=libraries, prompts=prompts, query=query, prompt_answer=prompt_answer, documents=documents)
-        
-        return render_template('search.html', libraries=libraries, prompts=prompts)
-    except Exception as e:
-        logger.error(f"Error in search endpoint: {e}\n{traceback.format_exc()}")
-        return "Internal Server Error", 500
+            if not primary_results and not fallback_results:
+                logger.info("No results found")
+                update_search_progress(current_user.id, query, "error: No results found")
+                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            
+            update_search_progress(current_user.id, query, "ranking results")
+            ranked_results = []
+            ranked_fallback_results = []
+            if primary_results:
+                ranked_results = rank_results(query, primary_results, prompt_params)
+            if fallback_results and not primary_results:
+                ranked_fallback_results = rank_results(query, fallback_results, prompt_params)
+            
+            logger.info(f"Ranked results: {len(ranked_results)} primary, {len(ranked_fallback_results)} fallback")
+            
+            update_search_progress(current_user.id, query, "complete" if not selected_prompt_text else "awaiting_summary")
+            
+            return render_template(
+                'search.html', 
+                results=ranked_results,
+                fallback_results=ranked_fallback_results,
+                query=query, 
+                prompts=prompts, 
+                prompt_id=prompt_id,
+                prompt_text=selected_prompt_text,
+                prompt_output='' if selected_prompt_text else None,
+                fallback_prompt_output='' if selected_prompt_text else None,
+                summary_result_count=summary_result_count,
+                target_year=None,
+                username=current_user.email,
+                has_prompt=bool(selected_prompt_text),
+                prompt_params=prompt_params,
+                search_older=search_older,
+                start_year=start_year
+            )
+        except Exception as e:
+            logger.error(f"PubMed API error: {str(e)}")
+            update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+    
+    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=False, start_year=None)
 
-@app.route('/test_playwright')
-def test_playwright():
+@app.route('/search_summary', methods=['POST'])
+@login_required
+def search_summary():
+    query = request.form.get('query', '')
+    prompt_text = request.form.get('prompt_text', '')
+    results = json.loads(request.form.get('results', '[]'))
+    fallback_results = json.loads(request.form.get('fallback_results', '[]'))
+    prompt_params = json.loads(request.form.get('prompt_params', '{}'))
+    
+    logger.info(f"Received summary request for query: {query[:50]}... with prompt: {prompt_text[:50]}...")
+    
     try:
-        logger.info("Starting Playwright test")
-        def run_playwright():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                async def inner():
-                    async with async_playwright() as p:
-                        browser = await p.chromium.launch()
-                        page = await browser.new_page()
-                        await page.goto('https://example.com')
-                        content = await page.content()
-                        await browser.close()
-                        return content
-                return loop.run_until_complete(inner())
-            finally:
-                loop.close()
+        prompt_output = generate_prompt_output(query, results, prompt_text, prompt_params)
+        fallback_prompt_output = generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results else ''
         
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            content = executor.submit(run_playwright).result()
+        logger.info(f"Summary generated: prompt_output length={len(prompt_output)}, fallback_output length={len(fallback_prompt_output) if fallback_prompt_output else 0}")
         
-        logger.info("Playwright test completed successfully")
-        return f"Playwright test successful: {len(content)} bytes"
+        if prompt_output.startswith("Fallback:"):
+            flash("AI summarization failed for primary results.", "warning")
+        if fallback_prompt_output and fallback_prompt_output.startswith("Fallback:"):
+            flash("AI summarization failed for fallback results.", "warning")
+        
+        update_search_progress(current_user.id, query, "complete")
+        
+        return jsonify({
+            'status': 'success',
+            'prompt_output': prompt_output,
+            'fallback_prompt_output': fallback_prompt_output
+        })
     except Exception as e:
-        logger.error(f"Playwright test failed: {str(e)}\n{traceback.format_exc()}")
-        return f"Playwright test failed: {str(e)}"
+        logger.error(f"Error generating AI summary: {str(e)}")
+        update_search_progress(current_user.id, query, f"error: AI summary failed: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f"AI summary failed: {str(e)}"
+        })
 
-@app.route('/health')
-def health():
-    return jsonify({"status": "ok"})
+@app.route('/prompt', methods=['GET', 'POST'])
+@login_required
+def prompt():
+    if request.method == 'POST':
+        prompt_name = request.form.get('prompt_name')
+        prompt_text = request.form.get('prompt_text')
+        if not prompt_name or not prompt_text:
+            flash('Prompt name and text cannot be empty.', 'error')
+        else:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute('INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)', 
+                            (current_user.id, prompt_name, prompt_text))
+                conn.commit()
+                flash('Prompt saved successfully.', 'success')
+            except Exception as e:
+                conn.rollback()
+                flash(f'Failed to save prompt: {str(e)}', 'error')
+            finally:
+                cur.close()
+                conn.close()
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
+                (current_user.id,))
+    prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return render_template('prompt.html', prompts=prompts, username=current_user.email)
+
+@app.route('/prompt/edit/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_prompt(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id, prompt_name, prompt_text FROM prompts WHERE id = %s AND user_id = %s', 
+                (id, current_user.id))
+    prompt = cur.fetchone()
+    
+    if not prompt:
+        cur.close()
+        conn.close()
+        flash('Prompt not found or you do not have permission to edit it.', 'error')
+        return redirect(url_for('prompt'))
+    
+    if request.method == 'POST':
+        prompt_name = request.form.get('prompt_name')
+        prompt_text = request.form.get('prompt_text')
+        if not prompt_name or not prompt_text:
+            flash('Prompt name and text cannot be empty.', 'error')
+        else:
+            try:
+                cur.execute('UPDATE prompts SET prompt_name = %s, prompt_text = %s WHERE id = %s AND user_id = %s', 
+                            (prompt_name, prompt_text, id, current_user.id))
+                conn.commit()
+                flash('Prompt updated successfully.', 'success')
+                cur.close()
+                conn.close()
+                return redirect(url_for('prompt'))
+            except Exception as e:
+                conn.rollback()
+                flash(f'Failed to update prompt: {str(e)}', 'error')
+    
+    cur.close()
+    conn.close()
+    return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
+
+@app.route('/prompt/delete/<int:id>', methods=['POST'])
+@login_required
+def delete_prompt(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
+    prompt = cur.fetchone()
+    
+    if not prompt:
+        cur.close()
+        conn.close()
+        flash('Prompt not found or you do not have permission to delete it.', 'error')
+        return redirect(url_for('prompt'))
+    
+    try:
+        cur.execute('DELETE FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
+        conn.commit()
+        flash('Prompt deleted successfully.', 'success')
+    except Exception as e:
+        conn.rollback()
+        flash(f'Failed to delete prompt: {str(e)}', 'error')
+    finally:
+        cur.close()
+        conn.close()
+    
+    return redirect(url_for('prompt'))
+
+@app.route('/notifications', methods=['GET', 'POST'])
+@login_required
+def notifications():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    if request.method == 'POST':
+        rule_name = request.form.get('rule_name')
+        keywords = request.form.get('keywords')
+        timeframe = request.form.get('timeframe')
+        prompt_text = request.form.get('prompt_text')
+        email_format = request.form.get('email_format')
+        
+        if not all([rule_name, keywords, timeframe, email_format]):
+            flash('All fields except prompt text are required.', 'error')
+        elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
+            flash('Invalid timeframe selected.', 'error')
+        elif email_format not in ['summary', 'list', 'detailed']:
+            flash('Invalid email format selected.', 'error')
+        else:
+            try:
+                cur.execute(
+                    "INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format)
+                )
+                conn.commit()
+                flash('Notification rule created successfully.', 'success')
+                schedule_notification_rules()
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error creating notification: {str(e)}")
+                flash(f'Failed to create notification rule: {str(e)}', 'error')
+    
+    cur.execute(
+        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, created_at "
+        "FROM notifications WHERE user_id = %s ORDER BY created_at DESC",
+        (current_user.id,)
+    )
+    notifications = [
+        {
+            'id': n[0],
+            'rule_name': n[1],
+            'keywords': n[2],
+            'timeframe': n[3],
+            'prompt_text': n[4],
+            'email_format': n[5],
+            'created_at': n[6]
+        } for n in cur.fetchall()
+    ]
+    cur.close()
+    conn.close()
+    return render_template('notifications.html', notifications=notifications, username=current_user.email)
+
+@app.route('/notifications/edit/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format "
+        "FROM notifications WHERE id = %s AND user_id = %s",
+        (id, current_user.id)
+    )
+    notification = cur.fetchone()
+    
+    if not notification:
+        cur.close()
+        conn.close()
+        flash('Notification rule not found or you do not have permission to edit it.', 'error')
+        return redirect(url_for('notifications'))
+    
+    if request.method == 'POST':
+        rule_name = request.form.get('rule_name')
+        keywords = request.form.get('keywords')
+        timeframe = request.form.get('timeframe')
+        prompt_text = request.form.get('prompt_text')
+        email_format = request.form.get('email_format')
+        
+        if not all([rule_name, keywords, timeframe, email_format]):
+            flash('All fields except prompt text are required.', 'error')
+        elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
+            flash('Invalid timeframe selected.', 'error')
+        elif email_format not in ['summary', 'list', 'detailed']:
+            flash('Invalid email format selected.', 'error')
+        else:
+            try:
+                cur.execute(
+                    "UPDATE notifications SET rule_name = %s, keywords = %s, timeframe = %s, prompt_text = %s, email_format = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (rule_name, keywords, timeframe, prompt_text, email_format, id, current_user.id)
+                )
+                conn.commit()
+                flash('Notification rule updated successfully.', 'success')
+                schedule_notification_rules()
+                cur.close()
+                conn.close()
+                return redirect(url_for('notifications'))
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error updating notification: {str(e)}")
+                flash(f'Failed to update notification rule: {str(e)}', 'error')
+    
+    cur.close()
+    conn.close()
+    return render_template('notification_edit.html', notification={
+        'id': notification[0],
+        'rule_name': notification[1],
+        'keywords': notification[2],
+        'timeframe': notification[3],
+        'prompt_text': notification[4],
+        'email_format': notification[5]
+    }, username=current_user.email)
+
+@app.route('/notifications/delete/<int:id>', methods=['POST'])
+@login_required
+def delete_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT id FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
+    notification = cur.fetchone()
+    
+    if not notification:
+        cur.close()
+        conn.close()
+        flash('Notification rule not found or you do not have permission to delete it.', 'error')
+        return redirect(url_for('notifications'))
+    
+    try:
+        cur.execute('DELETE FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
+        conn.commit()
+        flash('Notification rule deleted successfully.', 'success')
+        schedule_notification_rules()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error deleting notification: {str(e)}")
+        flash(f'Failed to delete notification rule: {str(e)}', 'error')
+    finally:
+        cur.close()
+        conn.close()
+    
+    return redirect(url_for('notifications'))
+
+@app.route('/notifications/test/<int:id>', methods=['GET'])
+@login_required
+def test_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
+        "FROM notifications n JOIN users u ON n.user_id = u.id WHERE n.id = %s AND n.user_id = %s",
+        (id, current_user.id)
+    )
+    rule = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if not rule:
+        flash('Notification rule not found or you do not have permission to test it.', 'error')
+        return jsonify({"status": "error", "message": "Rule not found"}), 404
+    
+    rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
+    try:
+        test_result = run_notification_rule(
+            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=True
+        )
+        return jsonify(test_result)
+    except Exception as e:
+        logger.error(f"Error testing notification rule {rule_id}: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/notifications/test_email', methods=['POST'])
+@login_required
+def test_email():
+    if not sg:
+        logger.error("SendGrid API key not configured for test email")
+        return jsonify({"status": "error", "message": "SendGrid API key not configured"}), 500
+    
+    email = request.form.get('email', current_user.email)
+    if not validate_user_email(email):
+        logger.error(f"Invalid email for test: {email}")
+        return jsonify({"status": "error", "message": f"Invalid email address: {email}"}), 400
+    
+    try:
+        message = Mail(
+            from_email=Email("noreply@firesidetechnologies.com"),
+            to_emails=To(email),
+            subject="PubMedResearcher Test Email",
+            plain_text_content="This is a test email to verify SendGrid integration."
+        )
+        logger.info(f"Sending test email, recipient: {email}, subject: {message.subject}")
+        response = sg.send(message)
+        response_headers = {k: v for k, v in response.headers.items()}
+        logger.info(f"Test email sent, recipient: {email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+        return jsonify({
+            "status": "success",
+            "message": f"Test email sent to {email}. Check your inbox and spam/junk folder.",
+            "message_id": response_headers.get('X-Message-Id', 'Not provided')
+        })
+    except Exception as e:
+        logger.error(f"Error sending test email: {str(e)}\n{traceback.format_exc()}")
+        error_detail = ""
+        if hasattr(e, 'body') and e.body:
+            try:
+                error_body = json.loads(e.body.decode('utf-8'))
+                error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
+            except json.JSONDecodeError:
+                error_detail = f": {e.body.decode('utf-8')}"
+        return jsonify({"status": "error", "message": f"Failed to send test email: {str(e)}{error_detail}"}), 500
+
+# Schedule notifications on startup
+schedule_notification_rules()
 
 if __name__ == '__main__':
     app.run(debug=True)
