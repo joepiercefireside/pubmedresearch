@@ -99,12 +99,30 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
+        // Define prompts from server-side data
+        const prompts = {{ prompts|tojson }};
+        
+        // Handle prompt selection
+        const promptSelect = document.getElementById('prompt_id');
+        const promptTextArea = document.getElementById('prompt_text');
+        promptSelect.addEventListener('change', function() {
+            const selectedPromptId = this.value;
+            const selectedPrompt = prompts.find(p => p.id === selectedPromptId);
+            if (selectedPrompt) {
+                promptTextArea.value = selectedPrompt.prompt_text;
+            } else {
+                promptTextArea.value = '';
+            }
+        });
+
+        // Handle search older checkbox
         const searchOlderCheckbox = document.getElementById('search_older');
         const startYearDiv = document.getElementById('start_year_div');
         searchOlderCheckbox.addEventListener('change', function() {
             startYearDiv.style.display = this.checked ? 'block' : 'none';
         });
 
+        // Fetch summary if prompt exists
         if ({{ has_prompt|tojson }}) {
             fetchSummary();
         }
