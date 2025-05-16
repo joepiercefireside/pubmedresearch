@@ -166,6 +166,8 @@ def generate_embedding(text):
         return None
     return embedding
 
+# ... (other imports and code stay the same)
+
 async def query_grok_api_async(query, context, prompt="Process the provided context according to the user's prompt."):
     try:
         cache_key = hashlib.md5((query + context + prompt).encode()).hexdigest()
@@ -176,9 +178,14 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
         
         api_key = os.environ.get('XAI_API_KEY')
         if not api_key:
-            logger.error("XAI_API_KEY not set")
-            return "Error: xAI API key not configured"
+            logger.error("XAI_API_KEY not set in environment variables")
+            return "Error: API key not configured. Please contact support."
         
+        # Truncate context if too long (e.g., limit to 10,000 characters)
+        if len(context) > 10000:
+            context = context[:10000] + "... [truncated]"
+            logger.warning(f"Context truncated to 10,000 characters for query: {query[:50]}...")
+
         async with aiohttp.ClientSession() as session:
             url = "https://api.x.ai/v1/chat/completions"
             headers = {
@@ -193,21 +200,28 @@ async def query_grok_api_async(query, context, prompt="Process the provided cont
                 ],
                 "max_tokens": 1000
             }
-            logger.info(f"Sending async Grok API request: prompt={query[:50]}..., context_length={len(context)}")
-            async with session.post(url, headers=headers, json=data, timeout=300) as response:
-                response.raise_for_status()
+            logger.info(f"Sending Grok API request: prompt={query[:50]}..., context_length={len(context)}")
+            async with session.post(url, headers=headers, json=data, timeout=aiohttp.ClientTimeout(total=300)) as response:
+                response_text = await response.text()
+                if response.status != 200:
+                    logger.error(f"Grok API failed with status {response.status}: {response_text}")
+                    raise Exception(f"API error {response.status}: {response_text}")
                 response_json = await response.json()
-                response_text = response_json['choices'][0]['message']['content']
-                logger.info(f"Async Grok API response received: length={len(response_text)}")
-                cache_grok_response(cache_key, response_text)
-                return response_text
-    except Exception as e:
-        logger.error(f"Async Grok API call failed: {str(e)}")
-        if isinstance(e, aiohttp.ClientResponseError):
-            logger.error(f"HTTP Status: {e.status}, Message: {e.message}")
-        elif isinstance(e, aiohttp.ClientConnectionError):
-            logger.error("Connection error, possibly network issue")
+                response_content = response_json.get('choices', [{}])[0].get('message', {}).get('content', '')
+                if not response_content:
+                    logger.error("Grok API returned empty content")
+                    raise Exception("API returned no content")
+                logger.info(f"Grok API response received: length={len(response_content)}")
+                cache_grok_response(cache_key, response_content)
+                return response_content
+    except aiohttp.ClientError as e:
+        logger.error(f"Network error calling Grok API: {str(e)}")
         return None
+    except Exception as e:
+        logger.error(f"Grok API call failed: {str(e)}")
+        return None
+
+# ... (rest of the file stays the same)
 
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(2),
