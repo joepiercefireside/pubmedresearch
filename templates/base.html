@@ -12,8 +12,8 @@
     <nav>
         <div class="navbar-container">
             <div class="navbar-brand">
-                <span class="navbar-title">AI PubMed Research</span>
-            </div>
+                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Fireside Logo" class="navbar-logo">
+                <span class="navbar-title">AI PubMed Research</span>            </div>
             <div class="navbar-right">
                 <!-- Hamburger icon -->
                 <div class="hamburger" onclick="toggleMenu()">☰</div>
@@ -50,5 +50,12 @@
             }
         });
     </script>
+ <script>
+        window.GPTTConfig = {
+            uuid: "caab72971e424f3990ea8fd1e7dba72c",
+            domain: "firesidetechai.com"
+        }
+    </script>
+    <script src="https://firesidetechai.com/widget-asset.min.js" defer></script>
 </body>
 </html>
