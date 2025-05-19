@@ -1,0 +1,255 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script>{% extends "base.html" %}
+{% block title %}Help Guide{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>PubMedResearch Help Guide</h1>
+    <div class="card">
+        <h2>Table of Contents</h2>
+        <ul>
+            <li><a href="#introduction-to-pubmedresearch">Introduction to PubMedResearch</a></li>
+            <li><a href="#getting-started">Getting Started</a>
+                <ul>
+                    <li><a href="#creating-an-account">Creating an Account</a></li>
+                    <li><a href="#logging-in">Logging In</a></li>
+                </ul>
+            </li>
+            <li><a href="#searching-pubmed">Searching PubMed</a>
+                <ul>
+                    <li><a href="#entering-a-search-query">Entering a Search Query</a></li>
+                    <li><a href="#using-prompts">Using Prompts</a></li>
+                    <li><a href="#searching-older-articles">Searching Older Articles</a></li>
+                    <li><a href="#viewing-search-results">Viewing Search Results</a></li>
+                </ul>
+            </li>
+            <li><a href="#managing-prompts">Managing Prompts</a>
+                <ul>
+                    <li><a href="#creating-a-prompt">Creating a Prompt</a></li>
+                    <li><a href="#editing-a-prompt">Editing a Prompt</a></li>
+                    <li><a href="#deleting-a-prompt">Deleting a Prompt</a></li>
+                </ul>
+            </li>
+            <li><a href="#setting-up-notifications">Setting Up Notifications</a>
+                <ul>
+                    <li><a href="#creating-a-notification-rule">Creating a Notification Rule</a></li>
+                    <li><a href="#editing-a-notification-rule">Editing a Notification Rule</a></li>
+                    <li><a href="#deleting-a-notification-rule">Deleting a Notification Rule</a></li>
+                    <li><a href="#testing-notifications">Testing Notifications</a></li>
+                </ul>
+            </li>
+            <li><a href="#troubleshooting-and-faqs">Troubleshooting and FAQs</a>
+                <ul>
+                    <li><a href="#common-issues">Common Issues</a></li>
+                    <li><a href="#faqs">FAQs</a></li>
+                </ul>
+            </li>
+        </ul>
+    </div>
+
+    <div class="card" id="introduction-to-pubmedresearch">
+        <h2>Introduction to PubMedResearch</h2>
+        <p>PubMedResearch is a powerful web application that allows users to search PubMed’s extensive database of medical and scientific articles with enhanced features powered by AI. The application simplifies the process of finding relevant research by enabling users to:</p>
+        <ul>
+            <li>Perform advanced searches with natural language queries.</li>
+            <li>Generate AI-driven summaries of search results based on custom prompts.</li>
+            <li>Set up automated notifications for new articles matching specific criteria.</li>
+        </ul>
+        <p>Whether you’re a researcher, clinician, or student, PubMedResearch helps you stay up-to-date with the latest publications and extract meaningful insights from complex medical literature.</p>
+    </div>
+
+    <div class="card" id="getting-started">
+        <h2>Getting Started</h2>
+        <h3 id="creating-an-account">Creating an Account</h3>
+        <p>To use PubMedResearch, you need to create an account. Follow these steps:</p>
+        <ol>
+            <li>Visit the PubMedResearch homepage.</li>
+            <li>Click on the <strong>Register</strong> button.</li>
+            <li>Enter your <strong>email address</strong> and create a <strong>password</strong>.</li>
+            <li>Click <strong>Register</strong> to submit your information.</li>
+            <li>Check your email for a verification link (if required) and follow the instructions to verify your account.</li>
+        </ol>
+        <p><strong>Note</strong>: Your email address must be valid, as it will be used for account recovery and notifications.</p>
+
+        <h3 id="logging-in">Logging In</h3>
+        <p>Once your account is created and verified, you can log in:</p>
+        <ol>
+            <li>Visit the PubMedResearch homepage.</li>
+            <li>Click on the <strong>Login</strong> button.</li>
+            <li>Enter your <strong>email address</strong> and <strong>password</strong>.</li>
+            <li>Click <strong>Login</strong> to access your dashboard.</li>
+        </ol>
+        <p>If you forget your password, use the <strong>Forgot Password</strong> link to reset it via email.</p>
+    </div>
+
+    <div class="card" id="searching-pubmed">
+        <h2>Searching PubMed</h2>
+        <p>The search functionality is the core of PubMedResearch. It allows you to find articles based on your query and refine results using AI-powered prompts.</p>
+
+        <h3 id="entering-a-search-query">Entering a Search Query</h3>
+        <ol>
+            <li>On the search page, locate the <strong>Search Query</strong> field.</li>
+            <li>Enter your query using natural language (e.g., "weight loss and diabetes").</li>
+            <li><strong>Tip</strong>: Be specific to get more relevant results. You can include keywords, authors, or publication dates.</li>
+        </ol>
+
+        <h3 id="using-prompts">Using Prompts</h3>
+        <p>Prompts are predefined or custom instructions that guide the AI in generating summaries of your search results.</p>
+        <ol>
+            <li>Below the search query, find the <strong>Select Prompt</strong> dropdown.</li>
+            <li>Choose a prompt from the list (e.g., "Summarize the top 3 articles").</li>
+            <li>The corresponding prompt text will appear in the <strong>Prompt Text</strong> box below.</li>
+            <li>You can modify the prompt text if needed or leave it as is.</li>
+        </ol>
+        <p><strong>Note</strong>: If you leave the prompt text blank, no AI summary will be generated, and you’ll only see the search results.</p>
+
+        <h3 id="searching-older-articles">Searching Older Articles</h3>
+        <p>By default, PubMedResearch searches articles from the past 5 years. To search older articles:</p>
+        <ol>
+            <li>Check the <strong>Search older articles</strong> box.</li>
+            <li>Select a <strong>Start Year</strong> from the dropdown (e.g., 2000).</li>
+            <li>The search will include articles from the selected year to the present.</li>
+        </ol>
+
+        <h3 id="viewing-search-results">Viewing Search Results</h3>
+        <p>After submitting your search by clicking the <strong>Search</strong> button:</p>
+        <ul>
+            <li><strong>Top 10 Relevant Results (AI-Ranked)</strong>: Displays the most relevant articles, ranked by the AI.</li>
+            <li><strong>All Results</strong>: Shows all articles matching your query.</li>
+            <li><strong>Fallback Results</strong>: If no results are found within the specified timeframe, older articles may be shown.</li>
+        </ul>
+        <p>Each result includes the article’s title, authors, journal, publication date, and a snippet of the abstract. Click the title to view the full article on PubMed. If a prompt was used, an <strong>AI Summary</strong> section will appear above the results, showing the AI-generated summary (this may take 30-40 seconds to load).</p>
+    </div>
+
+    <div class="card" id="managing-prompts">
+        <h2>Managing Prompts</h2>
+        <p>Prompts are essential for generating AI-driven summaries. You can create, edit, and delete prompts to tailor the AI’s responses to your needs.</p>
+
+        <h3 id="creating-a-prompt">Creating a Prompt</h3>
+        <ol>
+            <li>Navigate to the <strong>Prompts</strong> section from the dashboard.</li>
+            <li>Click <strong>Create New Prompt</strong>.</li>
+            <li>Enter a <strong>Prompt Name</strong> and the <strong>Prompt Text</strong> (e.g., "Provide a detailed summary of the top 5 results").</li>
+            <li>Click <strong>Save</strong> to store the prompt.</li>
+        </ol>
+
+        <h3 id="editing-a-prompt">Editing a Prompt</h3>
+        <ol>
+            <li>In the <strong>Prompts</strong> section, select the prompt you want to edit.</li>
+            <li>Update the <strong>Prompt Name</strong> and/or <strong>Prompt Text</strong>.</li>
+            <li>Click <strong>Update Prompt</strong> to save your changes.</li>
+        </ol>
+
+        <h3 id="deleting-a-prompt">Deleting a Prompt</h3>
+        <ol>
+            <li>In the <strong>Prompts</strong> section, select the prompt you want to delete.</li>
+            <li>Click <strong>Delete</strong> and confirm the action.</li>
+        </ol>
+        <p><strong>Warning</strong>: Deleting a prompt is permanent and cannot be undone.</p>
+    </div>
+
+    <div class="card" id="setting-up-notifications">
+        <h2>Setting Up Notifications</h2>
+        <p>Notifications keep you informed about new articles matching your criteria.</p>
+
+        <h3 id="creating-a-notification-rule">Creating a Notification Rule</h3>
+        <ol>
+            <li>Go to the <strong>Notifications</strong> section.</li>
+            <li>Click <strong>Create New Rule</strong>.</li>
+            <li>Fill in the required fields:
+                <ul>
+                    <li><strong>Rule Name</strong>: A descriptive name for the rule.</li>
+                    <li><strong>Keywords</strong>: Terms to search for (e.g., "diabetes treatment").</li>
+                    <li><strong>Timeframe</strong>: How often to check for new articles (daily, weekly, monthly, annually).</li>
+                    <li><strong>Prompt Text</strong> (optional): A prompt for summarizing new articles.</li>
+                    <li><strong>Email Format</strong>: How to present the results (summary, list, detailed).</li>
+                </ul>
+            </li>
+            <li>Click <strong>Save</strong> to activate the rule.</li>
+        </ol>
+
+        <h3 id="editing-a-notification-rule">Editing a Notification Rule</h3>
+        <ol>
+            <li>In the <strong>Notifications</strong> section, select the rule you want to modify.</li>
+            <li>Update the fields as needed.</li>
+            <li>Click <strong>Update Rule</strong> to save your changes.</li>
+        </ol>
+
+        <h3 id="deleting-a-notification-rule">Deleting a Notification Rule</h3>
+        <ol>
+            <li>In the <strong>Notifications</strong> section, select the rule you want to delete.</li>
+            <li>Click <strong>Delete</strong> and confirm the action.</li>
+        </ol>
+        <p><strong>Warning</strong>: Deleting a notification rule is permanent.</p>
+
+        <h3 id="testing-notifications">Testing Notifications</h3>
+        <ol>
+            <li>In the <strong>Notifications</strong> section, select a rule and click <strong>Test</strong>.</li>
+            <li>The system will simulate the notification and send a test email to your account.</li>
+            <li>Check your inbox (and spam/junk folder) to verify the email.</li>
+        </ol>
+    </div>
+
+    <div class="card" id="troubleshooting-and-faqs">
+        <h2>Troubleshooting and FAQs</h2>
+
+        <h3 id="common-issues">Common Issues</h3>
+        <ul>
+            <li><strong>Login Problems</strong>: Ensure your email and password are correct. Use the <strong>Forgot Password</strong> link if needed.</li>
+            <li><strong>API Errors</strong>: If you see errors related to the API, check your internet connection or try again later.</li>
+            <li><strong>No Results Found</strong>: Broaden your search query or adjust the date range.</li>
+            <li><strong>AI Summary Delays</strong>: Generating summaries may take 30-40 seconds. Wait for the loading indicator to disappear.</li>
+        </ul>
+
+        <h3 id="faqs">FAQs</h3>
+        <ul>
+            <li><strong>Q: How do I reset my password?</strong>  
+                A: Use the <strong>Forgot Password</strong> link on the login page.</li>
+            <li><strong>Q: Can I use custom prompts?</strong>  
+                A: Yes, you can create custom prompts in the <strong>Prompts</strong> section or edit the prompt text directly in the search form.</li>
+            <li><strong>Q: How often are notifications sent?</strong>  
+                A: Notifications are sent based on the timeframe you select (daily, weekly, etc.).</li>
+            <li><strong>Q: Why didn’t I receive a notification email?</strong>  
+                A: Check your spam/junk folder. If it’s still missing, test the notification or contact support.</li>
+        </ul>
+        <p>For further assistance, contact support at <a href="mailto:support@firesidetechnologies.com">support@firesidetechnologies.com</a>.</p>
+    </div>
+</div>
+{% endblock %}

@@ -420,6 +420,10 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
+@app.route('/help')
+def help():
+    return render_template('help.html')
+
 def extract_keywords_and_date(query, search_older=False, start_year=None):
     query_lower = query.lower()
     tokens = word_tokenize(query)
