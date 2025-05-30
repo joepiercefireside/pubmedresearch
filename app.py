@@ -227,9 +227,20 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         raise ValueError(f"Invalid recipient email address: {user_email}")
     
     query = keywords
-    keywords_with_synonyms, date_range, _ = extract_keywords_and_date(query)
-    start_year = datetime.now().year - {'daily': 1, 'weekly': 1, 'monthly': 1, 'annually': 1}[timeframe]
-    search_query = build_pubmed_query(keywords_with_synonyms, date_range or f"{start_year}/01/01[dp] TO {datetime.now().strftime('%Y/%m/%d')}[dp]")
+    today = datetime.now()
+    # Define strict date ranges based on timeframe
+    timeframe_ranges = {
+        'daily': (today - timedelta(hours=24)).strftime('%Y/%m/%d'),
+        'weekly': (today - timedelta(days=7)).strftime('%Y/%m/%d'),
+        'monthly': (today - timedelta(days=31)).strftime('%Y/%m/%d'),
+        'annually': (today - timedelta(days=365)).strftime('%Y/%m/%d')
+    }
+    start_date = timeframe_ranges[timeframe]
+    date_range = f"{start_date}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+    
+    # Use keywords_with_synonyms from extract_keywords_and_date, but enforce our date range
+    keywords_with_synonyms, _, _ = extract_keywords_and_date(query)
+    search_query = build_pubmed_query(keywords_with_synonyms, date_range)
     
     try:
         api_key = os.environ.get('PUBMED_API_KEY')
@@ -502,7 +513,7 @@ def build_pubmed_query(keywords_with_synonyms, date_range):
 
 @sleep_and_retry
 @limits(calls=10, period=1)
-def esearch(query, retmax=20, api_key=None):
+def esearch(query, retmax=80, api_key=None):
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     params = {
         "db": "pubmed",
@@ -561,20 +572,20 @@ def parse_efetch_xml(xml_content):
 def parse_prompt(prompt_text):
     if not prompt_text:
         return {
-            'summary_result_count': 5,  # Updated to 5
-            'display_result_count': 20,
+            'summary_result_count': 20,  # Updated to 5
+            'display_result_count': 80,
             'limit_presentation': False
         }
     
     prompt_text_lower = prompt_text.lower()
     
-    summary_result_count = 5  # Default to 5
+    summary_result_count = 20  # Default to 20
     if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
-        summary_result_count = min(int(match.group(1)), 5)  # Limit to 5
+        summary_result_count = min(int(match.group(1)), 20)  # Limit to 20
     elif 'top' in prompt_text_lower:
-        summary_result_count = 3  # Example: if 'top' is mentioned, use 3
+        summary_result_count = 5  # Example: if 'top' is mentioned, use 5
     
-    display_result_count = 20
+    display_result_count = 80
     limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
     
     logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
@@ -586,7 +597,7 @@ def parse_prompt(prompt_text):
     }
 
 def rank_results(query, results, prompt_params=None):
-    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    display_result_count = prompt_params.get('display_result_count', 80) if prompt_params else 80
     
     try:
         articles_context = []
@@ -691,8 +702,8 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     
     logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
     
-    # Limit to top 5 results
-    context_results = results[:5]
+    # Limit to top 20 results
+    context_results = results[:20]
     logger.info(f"Context results count for summary: {len(context_results)}")
     
     if not context_results:
@@ -800,7 +811,7 @@ def search():
         
         try:
             update_search_progress(current_user.id, query, "executing search")
-            esearch_result = esearch(search_query, retmax=20, api_key=api_key)
+            esearch_result = esearch(search_query, retmax=80, api_key=api_key)
             pmids = esearch_result['esearchresult']['idlist']
             results = []
             if pmids:
