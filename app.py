@@ -201,7 +201,7 @@ class User(UserMixin):
     def __init__(self, id, email, admin=FALSE):
         self.id = id
         self.email = email
-	self.admin = admin
+        self.admin = admin
 
 @login_manager.user_loader
 def load_user(user_id):
