@@ -198,7 +198,7 @@ def get_db_connection():
     return conn
 
 class User(UserMixin):
-    def __init__(self, id, email, admin=FALSE):
+    def __init__(self, id, email, admin=False):
         self.id = id
         self.email = email
         self.admin = admin
