@@ -31,6 +31,7 @@ from nltk.corpus import stopwords
 from nltk import pos_tag
 import hashlib
 from openai import OpenAI
+from flask import abort
 
 # Download NLTK data
 nltk.download('punkt')
@@ -197,20 +198,21 @@ def get_db_connection():
     return conn
 
 class User(UserMixin):
-    def __init__(self, id, email):
+    def __init__(self, id, email, admin=FALSE):
         self.id = id
         self.email = email
+	self.admin = admin
 
 @login_manager.user_loader
 def load_user(user_id):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, email FROM users WHERE id = %s", (user_id,))
+    cur.execute("SELECT id, email, admin FROM users WHERE id = %s", (user_id,))
     user = cur.fetchone()
     cur.close()
     conn.close()
     if user:
-        return User(user[0], user[1])
+        return User(user[0], user[1], user[2])
     return None
 
 def validate_user_email(email):
@@ -415,14 +417,18 @@ def login():
         password = request.form.get('password')
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
+        cur.execute("SELECT id, email, password_hash, status, admin FROM users WHERE email = %s", (email,))
         user = cur.fetchone()
         cur.close()
         conn.close()
         if user and check_password_hash(user[2], password):
-            login_user(User(user[0], user[1]))
-            return redirect(url_for('search'))
-        flash('Invalid email or password.', 'error')
+            if user[3] == 'inactive':
+                flash('Your account is inactive. Please contact Fireside Technologies at pubmedresearch@firesidetechnologies.com.', 'error')
+            else:
+                login_user(User(user[0], user[1], user[4]))
+                return redirect(url_for('search'))
+        else:
+            flash('Invalid email or password.', 'error')
     return render_template('login.html', username=None)
 
 @app.route('/logout')
@@ -434,6 +440,37 @@ def logout():
 @app.route('/help')
 def help():
     return render_template('help.html')
+
+@app.route('/admin/users', methods=['GET', 'POST'])
+@login_required
+def admin_users():
+    if not current_user.admin:
+        abort(403)  # Forbidden for non-admins
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    if request.method == 'POST':
+        user_id = request.form.get('user_id')
+        new_status = request.form.get('status')
+        if user_id and new_status in ['trial', 'paid', 'inactive']:
+            try:
+                cur.execute(
+                    "UPDATE users SET status = %s WHERE id = %s",
+                    (new_status, user_id)
+                )
+                conn.commit()
+                flash(f"User status updated to {new_status}.", "success")
+            except Exception as e:
+                conn.rollback()
+                flash(f"Failed to update user status: {str(e)}", "error")
+    
+    cur.execute("SELECT id, email, status FROM users ORDER BY id")
+    users = cur.fetchall()
+    cur.close()
+    conn.close()
+    
+    return render_template('admin_users.html', users=users)
 
 def extract_keywords_and_date(query, search_older=False, start_year=None):
     query_lower = query.lower()
