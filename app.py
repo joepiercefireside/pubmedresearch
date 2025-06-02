@@ -1,19 +1,12 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, abort
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
-import re
 import os
 import logging
 import json
-import requests
 import sqlite3
-from xml.etree import ElementTree
-from ratelimit import limits, sleep_and_retry
-from sentence_transformers import SentenceTransformer
-import numpy as np
-from scipy.spatial.distance import cosine
-from dotenv import load_dotenv
+import hashlib
 from datetime import datetime, timedelta
 from collections import Counter
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -25,18 +18,16 @@ import time
 import tenacity
 import email_validator
 from email_validator import validate_email, EmailNotValidError
-import nltk
-from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
-from nltk import pos_tag
-import hashlib
 from openai import OpenAI
+from utils import esearch, efetch, parse_efetch_xml, search_fda_api, extract_keywords_and_date, build_pubmed_query
 
 # Download NLTK data
+import nltk
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('averaged_perceptron_tagger')
 
+from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
@@ -61,19 +52,6 @@ sendgrid_api_key = os.environ.get('SENDGRID_API_KEY', '').strip()
 if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
-
-# Biomedical vocabulary for synonyms
-BIOMEDICAL_VOCAB = {
-    "diabetes": ["Diabetes Mellitus", "insulin resistance", "type 2 diabetes"],
-    "weight loss": ["obesity", "body weight reduction", "fat loss"],
-    "treatment": ["therapy", "intervention", "management"],
-    "disease": ["disorder", "condition", "pathology"],
-    "statins": ["HMG-CoA reductase inhibitors", "atorvastatin", "simvastatin"],
-    "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction"],
-    "cardiovascular": ["heart-related", "circulatory"],
-    "blood pressure": ["hypertension", "BP"],
-    "hypertension": ["high blood pressure", "elevated BP"]
-}
 
 # Initialize SQLite database for search progress and cache
 def init_progress_db():
@@ -180,7 +158,7 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
         
         client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
         completion = client.chat.completions.create(
-            model="grok-3",  # Adjust model name as needed
+            model="grok-3",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
@@ -190,27 +168,28 @@ def query_grok_api(query, context, prompt="Process the provided context accordin
         return completion.choices[0].message.content
     except Exception as e:
         logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
-        raise  # Re-raise to trigger retry
+        raise
 
 def get_db_connection():
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
     return conn
 
 class User(UserMixin):
-    def __init__(self, id, email):
+    def __init__(self, id, email, admin=False):
         self.id = id
         self.email = email
+        self.admin = admin
 
 @login_manager.user_loader
 def load_user(user_id):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, email FROM users WHERE id = %s", (user_id,))
+    cur.execute("SELECT id, email, admin FROM users WHERE id = %s", (user_id,))
     user = cur.fetchone()
     cur.close()
     conn.close()
     if user:
-        return User(user[0], user[1])
+        return User(user[0], user[1], user[2])
     return None
 
 def validate_user_email(email):
@@ -228,7 +207,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     
     query = keywords
     today = datetime.now()
-    # Define strict date ranges based on timeframe
     timeframe_ranges = {
         'daily': (today - timedelta(hours=24)).strftime('%Y/%m/%d'),
         'weekly': (today - timedelta(days=7)).strftime('%Y/%m/%d'),
@@ -238,7 +216,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     start_date = timeframe_ranges[timeframe]
     date_range = f"{start_date}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
     
-    # Use keywords_with_synonyms from extract_keywords_and_date, but enforce our date range
     keywords_with_synonyms, _, _ = extract_keywords_and_date(query)
     search_query = build_pubmed_query(keywords_with_synonyms, date_range)
     
@@ -431,159 +408,21 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-@app.route('/help')
-def help():
-    return render_template('help.html')
-
-def extract_keywords_and_date(query, search_older=False, start_year=None):
-    query_lower = query.lower()
-    tokens = word_tokenize(query)
-    tagged = pos_tag(tokens)
-    stop_words = set(stopwords.words('english')).union({'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to', 'available'})
-    
-    # Improved phrase detection
-    keywords = []
-    current_phrase = []
-    for word, tag in tagged:
-        if word.lower() in stop_words:
-            if current_phrase:
-                keywords.append(' '.join(current_phrase))
-                current_phrase = []
-            continue
-        if tag.startswith('NN') or tag.startswith('JJ'):  # Nouns or adjectives
-            current_phrase.append(word.lower())
-        else:
-            if current_phrase:
-                keywords.append(' '.join(current_phrase))
-                current_phrase = []
-    if current_phrase:
-        keywords.append(' '.join(current_phrase))
-    
-    # Split multi-word phrases into individual words
-    split_keywords = []
-    for kw in keywords:
-        if ' ' in kw:
-            split_keywords.extend(kw.split())
-        else:
-            split_keywords.append(kw)
-    
-    # Remove duplicates and limit to 5 keywords
-    keywords = list(set(split_keywords))[:5]
-    
-    # Get synonyms
-    keywords_with_synonyms = []
-    for kw in keywords:
-        synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:2]  # Limit to 2 synonyms
-        keywords_with_synonyms.append((kw, synonyms))
-    
-    today = datetime.now()
-    default_start_year = today.year - 5
-    date_range = None
-    
-    # Check for explicit date range in query
-    if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
-        start_year = int(since_match.group(1))
-        date_range = f"{start_year}/01/01[dp]:{today.strftime('%Y/%m/%d')}[dp]"
-    elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
-        year = int(year_match.group(1))
-        date_range = f"{year}/01/01[dp]:{year}/12/31[dp]"
-    elif 'past year' in query_lower:
-        date_range = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
-    elif 'past week' in query_lower:
-        date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
-    else:
-        start_year_int = int(start_year) if search_older and start_year else default_start_year
-        date_range = f"{start_year_int}/01/01[dp]:{today.strftime('%Y/%m/%d')}[dp]"
-    
-    logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
-    return keywords_with_synonyms, date_range, start_year_int if search_older and start_year else default_start_year
-
-def build_pubmed_query(keywords_with_synonyms, date_range):
-    query_parts = []
-    for keyword, synonyms in keywords_with_synonyms:
-        terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms]
-        term_query = " OR ".join(terms)
-        query_parts.append(f"({term_query})")
-    
-    query = " AND ".join(query_parts) if query_parts else ""
-    query = f"({query}) AND {date_range}" if query else date_range
-    
-    logger.info(f"Built PubMed query: {query}")
-    return query
-
-@sleep_and_retry
-@limits(calls=10, period=1)
-def esearch(query, retmax=80, api_key=None):
-    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-    params = {
-        "db": "pubmed",
-        "term": query,
-        "retmax": retmax,
-        "retmode": "json",
-        "sort": "relevance",
-        "api_key": api_key
-    }
-    logger.info(f"PubMed ESearch query: {query}")
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    result = response.json()
-    logger.info(f"ESearch result: {len(result['esearchresult']['idlist'])} PMIDs")
-    return result
-
-@sleep_and_retry
-@limits(calls=10, period=1)
-def efetch(pmids, api_key=None):
-    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-    params = {
-        "db": "pubmed",
-        "id": ",".join(map(str, pmids)),
-        "retmode": "xml",
-        "api_key": api_key
-    }
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    return response.content
-
-def parse_efetch_xml(xml_content):
-    root = ElementTree.fromstring(xml_content)
-    articles = []
-    for article in root.findall(".//PubmedArticle"):
-        pmid = article.find(".//PMID").text if article.find(".//PMID") is not None else ""
-        title = article.find(".//ArticleTitle").text if article.find(".//ArticleTitle") is not None else ""
-        abstract = article.find(".//AbstractText")
-        abstract = abstract.text or "" if abstract is not None else ""
-        authors = [author.find("LastName").text for author in article.findall(".//Author") 
-                   if author.find("LastName") is not None]
-        journal = article.find(".//Journal/Title")
-        journal = journal.text if journal is not None else ""
-        pub_date = article.find(".//PubDate/Year")
-        pub_date = pub_date.text if pub_date is not None else ""
-        logger.info(f"Parsed article: PMID={pmid}, Date={pub_date}, Abstract={'Present' if abstract else 'Missing'}")
-        articles.append({
-            "id": pmid,
-            "title": title,
-            "abstract": abstract,
-            "authors": ", ".join(authors),
-            "journal": journal,
-            "publication_date": pub_date
-        })
-    return articles
-
 def parse_prompt(prompt_text):
     if not prompt_text:
         return {
-            'summary_result_count': 20,  # Updated to 5
+            'summary_result_count': 20,
             'display_result_count': 80,
             'limit_presentation': False
         }
     
     prompt_text_lower = prompt_text.lower()
     
-    summary_result_count = 20  # Default to 20
+    summary_result_count = 20
     if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
-        summary_result_count = min(int(match.group(1)), 20)  # Limit to 20
+        summary_result_count = min(int(match.group(1)), 20)
     elif 'top' in prompt_text_lower:
-        summary_result_count = 5  # Example: if 'top' is mentioned, use 5
+        summary_result_count = 3
     
     display_result_count = 80
     limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
@@ -651,7 +490,7 @@ Articles:
         return embedding_based_ranking(query, results, prompt_params)
 
 def embedding_based_ranking(query, results, prompt_params=None):
-    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    display_result_count = prompt_params.get('display_result_count', 80) if prompt_params else 80
     query_embedding = generate_embedding(query)
     if query_embedding is None:
         logger.error("Failed to generate query embedding")
@@ -702,18 +541,15 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     
     logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
     
-    # Limit to top 20 results
     context_results = results[:20]
     logger.info(f"Context results count for summary: {len(context_results)}")
     
     if not context_results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
-    # Construct context
     context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
     
-    # Truncate context if too long
-    MAX_CONTEXT_LENGTH = 12000  # Approx. 3000 tokens
+    MAX_CONTEXT_LENGTH = 12000
     if len(context) > MAX_CONTEXT_LENGTH:
         context = context[:MAX_CONTEXT_LENGTH] + "... [truncated]"
         logger.warning(f"Context truncated to {MAX_CONTEXT_LENGTH} characters for query: {query[:50]}...")
@@ -722,10 +558,10 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         output = query_grok_api(query, context, prompt=prompt_text)
         if not output:
             logger.warning("Grok API returned None, using fallback")
-            output = f"Fallback: Unable to generate AI summary. Top 5 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
+            output = f"Fallback: Unable to generate AI summary. Top 20 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
     except Exception as e:
         logger.error(f"Error generating AI summary: {str(e)}")
-        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top 5 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
+        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top 20 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
     
     paragraphs = output.split('\n\n')
     formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
@@ -767,11 +603,16 @@ def search():
     conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
 
+    # Pagination parameters
+    page = int(request.args.get('page', 1))
+    per_page = 20  # Results per page
+
     prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
     prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
     query = request.args.get('query', request.form.get('query', ''))
     search_older = request.form.get('search_older', 'off') == 'on'
     start_year = request.form.get('start_year', None)
+    sources = request.form.getlist('sources')  # List of selected sources
 
     selected_prompt_text = prompt_text
     if prompt_id and not prompt_text:
@@ -783,82 +624,107 @@ def search():
             logger.warning(f"Prompt ID {prompt_id} not found in prompts")
             selected_prompt_text = ''
 
-    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}")
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}, sources={sources}, page={page}")
 
     if request.method == 'POST':
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
         
-        update_search_progress(current_user.id, query, "contacting PubMed")
+        if not sources:
+            update_search_progress(current_user.id, query, "error: At least one search source must be selected")
+            return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+        
+        update_search_progress(current_user.id, query, "contacting APIs")
         
         keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
         if not keywords_with_synonyms:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
         
         prompt_params = parse_prompt(selected_prompt_text)
         summary_result_count = prompt_params['summary_result_count']
-        display_result_count = prompt_params['display_result_count']
         
         api_key = os.environ.get('PUBMED_API_KEY')
-        try:
-            search_query = build_pubmed_query(keywords_with_synonyms, date_range)
-        except Exception as e:
-            logger.error(f"Error building PubMed query: {str(e)}")
-            update_search_progress(current_user.id, query, f"error: Query processing failed: {str(e)}")
-            return render_template('search.html', error=f"Query processing failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+        pubmed_results = []
+        pubmed_ranked_results = []
+        pubmed_fallback_results = []
+        fda_results = []
         
         try:
-            update_search_progress(current_user.id, query, "executing search")
-            esearch_result = esearch(search_query, retmax=80, api_key=api_key)
-            pmids = esearch_result['esearchresult']['idlist']
-            results = []
-            if pmids:
-                update_search_progress(current_user.id, query, "fetching article details")
-                efetch_xml = efetch(pmids, api_key=api_key)
-                results = parse_efetch_xml(efetch_xml)
+            if 'pubmed' in sources:
+                search_query = build_pubmed_query(keywords_with_synonyms, date_range)
+                update_search_progress(current_user.id, query, "executing PubMed search")
+                esearch_result = esearch(search_query, retmax=80, api_key=api_key)
+                pmids = esearch_result['esearchresult']['idlist']
+                if pmids:
+                    update_search_progress(current_user.id, query, "fetching PubMed article details")
+                    efetch_xml = efetch(pmids, api_key=api_key)
+                    pubmed_results = parse_efetch_xml(efetch_xml)
+                
+                primary_results = [
+                    r for r in pubmed_results
+                    if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) >= start_year_int
+                ]
+                pubmed_fallback_results = [
+                    r for r in pubmed_results
+                    if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) < start_year_int
+                ]
+                
+                if primary_results or pubmed_fallback_results:
+                    conn = get_db_connection()
+                    cur = conn.cursor()
+                    cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
+                                (query, json.dumps(primary_results + pubmed_fallback_results)))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                
+                if not primary_results and not pubmed_fallback_results:
+                    logger.info("No PubMed results found")
+                
+                update_search_progress(current_user.id, query, "ranking PubMed results")
+                if primary_results:
+                    pubmed_ranked_results = rank_results(query, primary_results, prompt_params)
+                if pubmed_fallback_results and not primary_results:
+                    pubmed_fallback_results = rank_results(query, pubmed_fallback_results, prompt_params)
+                
+                logger.info(f"PubMed ranked results: {len(pubmed_ranked_results)} primary, {len(pubmed_fallback_results)} fallback")
             
-            # Filter results by date range
-            primary_results = [
-                r for r in results
-                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) >= start_year_int
-            ]
-            fallback_results = [
-                r for r in results
-                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) < start_year_int
-            ]
+            if 'fda' in sources:
+                update_search_progress(current_user.id, query, "executing FDA search")
+                fda_results = search_fda_api(query, keywords_with_synonyms, date_range)
+                if not fda_results:
+                    logger.info("No FDA results found")
+                
+                logger.info(f"FDA results: {len(fda_results)}")
             
-            if primary_results or fallback_results:
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
-                            (query, json.dumps(primary_results + fallback_results)))
-                conn.commit()
-                cur.close()
-                conn.close()
+            # Calculate total results
+            total_results = len(pubmed_ranked_results) + len(pubmed_results) + len(pubmed_fallback_results) + len(fda_results)
             
-            if not primary_results and not fallback_results:
-                logger.info("No results found")
-                update_search_progress(current_user.id, query, "error: No results found")
-                return render_template('search.html', error="No results found. Try broadening your query.", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            # Paginate results
+            start_idx = (page - 1) * per_page
+            end_idx = start_idx + per_page
             
-            update_search_progress(current_user.id, query, "ranking results")
-            ranked_results = []
-            ranked_fallback_results = []
-            if primary_results:
-                ranked_results = rank_results(query, primary_results, prompt_params)
-            if fallback_results and not primary_results:
-                ranked_fallback_results = rank_results(query, fallback_results, prompt_params)
+            pubmed_ranked_results_paginated = pubmed_ranked_results[start_idx:end_idx]
+            pubmed_results_paginated = pubmed_results[start_idx:end_idx]
+            pubmed_fallback_results_paginated = pubmed_fallback_results[start_idx:end_idx]
+            fda_results_paginated = fda_results[start_idx:end_idx]
             
-            logger.info(f"Ranked results: {len(ranked_results)} primary, {len(ranked_fallback_results)} fallback")
+            total_pages = (total_results + per_page - 1) // per_page
             
             update_search_progress(current_user.id, query, "complete" if not selected_prompt_text else "awaiting_summary")
             
             return render_template(
                 'search.html', 
-                results=ranked_results,
-                fallback_results=ranked_fallback_results,
+                pubmed_results=pubmed_results_paginated,
+                pubmed_ranked_results=pubmed_ranked_results_paginated,
+                pubmed_fallback_results=pubmed_fallback_results_paginated,
+                fda_results=fda_results_paginated,
+                total_results=total_results,
+                page=page,
+                per_page=per_page,
+                total_pages=total_pages,
                 query=query, 
                 prompts=prompts, 
                 prompt_id=prompt_id,
@@ -874,11 +740,11 @@ def search():
                 start_year=start_year
             )
         except Exception as e:
-            logger.error(f"PubMed API error: {str(e)}")
+            logger.error(f"API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
     
-    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, results=[], fallback_results=[], prompt_output='', fallback_prompt_output='', username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=False, start_year=None)
+    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=False, start_year=None)
 
 @app.route('/search_summary', methods=['POST'])
 @login_required

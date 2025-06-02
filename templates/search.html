@@ -2,8 +2,19 @@
 {% block title %}Search{% endblock %}
 {% block content %}
 <div class="container">
-    <h1>Search PubMed</h1>
+    <h1>Fireside AI Search Assistant</h1>
     <form method="POST">
+        <div class="mb-3">
+            <label class="form-label">Search Sources</label>
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" checked>
+                <label class="form-check-label" for="source_pubmed">PubMed</label>
+            </div>
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="source_fda" name="sources" value="fda">
+                <label class="form-check-label" for="source_fda">FDA.gov</label>
+            </div>
+        </div>
         <div class="mb-3">
             <label for="query" class="form-label">Search Query</label>
             <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" placeholder="e.g., weight loss and diabetes">
@@ -50,49 +61,113 @@
     {% endif %}
 
     <div class="results-section mt-3">
-        {% if ranked_results %}
-            <div class="card">
-                <h3>Top 10 Relevant Results (AI-Ranked)</h3>
-                {% for result in ranked_results %}
-                    <div class="card mb-2">
-                        <h5><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}" target="_blank">{{ result.title }}</a></h5>
-                        <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
-                        <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
-                        <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                        <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
-                    </div>
-                {% endfor %}
+        {% if total_results > 0 %}
+            <div class="alert alert-info">
+                Found {{ total_results }} results
             </div>
         {% endif %}
-
-        {% if results %}
-            <div class="card mt-3">
-                <h3>All Results</h3>
-                {% for result in results %}
-                    <div class="card mb-2">
-                        <h5><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}" target="_blank">{{ result.title }}</a></h5>
-                        <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
-                        <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
-                        <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                        <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
+        <ul class="nav nav-tabs" id="resultsTabs" role="tablist">
+            {% if pubmed_results or pubmed_ranked_results or pubmed_fallback_results %}
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="pubmed-tab" data-bs-toggle="tab" data-bs-target="#pubmed" type="button" role="tab">PubMed</button>
+                </li>
+            {% endif %}
+            {% if fda_results %}
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="fda-tab" data-bs-toggle="tab" data-bs-target="#fda" type="button" role="tab">FDA.gov</button>
+                </li>
+            {% endif %}
+        </ul>
+        <div class="tab-content" id="resultsTabsContent">
+            {% if pubmed_results or pubmed_ranked_results or pubmed_fallback_results %}
+                <div class="tab-pane fade show active" id="pubmed" role="tabpanel">
+                    {% if pubmed_ranked_results %}
+                        <div class="card mt-3">
+                            <h3>Top Relevant Results (AI-Ranked)</h3>
+                            {% for result in pubmed_ranked_results %}
+                                <div class="card mb-2">
+                                    <h5><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
+                                    <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
+                                    <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
+                                    <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    {% if pubmed_results %}
+                        <div class="card mt-3">
+                            <h3>All Results</h3>
+                            {% for result in pubmed_results %}
+                                <div class="card mb-2">
+                                    <h5><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
+                                    <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
+                                    <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
+                                    <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    {% if pubmed_fallback_results %}
+                        <div class="card mt-3">
+                            <h3>Fallback Results (Outside Specified Timeframe)</h3>
+                            {% for result in pubmed_fallback_results %}
+                                <div class="card mb-2">
+                                    <h5><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
+                                    <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
+                                    <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
+                                    <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+            {% endif %}
+            {% if fda_results %}
+                <div class="tab-pane fade" id="fda" role="tabpanel">
+                    <div class="card mt-3">
+                        <h3>FDA.gov Results</h3>
+                        {% for result in fda_results %}
+                            <div class="card mb-2">
+                                <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
+                                <p><strong>Summary:</strong> {{ result.summary|default('No summary available')|truncate(300) }}</p>
+                                <p><strong>Date:</strong> {{ result.date|default('N/A') }}</p>
+                            </div>
+                        {% endfor %}
                     </div>
-                {% endfor %}
-            </div>
-        {% endif %}
-
-        {% if fallback_results %}
-            <div class="card mt-3">
-                <h3>Fallback Results (Outside Specified Timeframe)</h3>
-                {% for result in fallback_results %}
-                    <div class="card mb-2">
-                        <h5><a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}" target="_blank">{{ result.title }}</a></h5>
-                        <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
-                        <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
-                        <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                        <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
-                    </div>
-                {% endfor %}
-            </div>
+                </div>
+            {% endif %}
+        </div>
+        {% if total_results > per_page %}
+            <nav aria-label="Page navigation" class="mt-3">
+                <ul class="pagination justify-content-center">
+                    {% if page > 1 %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year) }}">Previous</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">Previous</span>
+                        </li>
+                    {% endif %}
+                    {% for p in range(1, total_pages + 1) %}
+                        <li class="page-item {% if p == page %}active{% endif %}">
+                            <a class="page-link" href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year) }}">{{ p }}</a>
+                        </li>
+                    {% endfor %}
+                    {% if page < total_pages %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year) }}">Next</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled">
+                            <span class="page-link">Next</span>
+                        </li>
+                    {% endif %}
+                </ul>
+            </nav>
         {% endif %}
     </div>
 </div>
@@ -131,15 +206,15 @@
     function fetchSummary() {
         const query = '{{ query|default('')|e }}';
         const promptText = document.getElementById('prompt_text').value;
-        const results = {{ results|tojson }};
-        const fallbackResults = {{ fallback_results|tojson }};
+        const pubmedResults = {{ pubmed_results|tojson }};
+        const pubmedFallbackResults = {{ pubmed_fallback_results|tojson }};
         const promptParams = {{ prompt_params|tojson }};
 
         const formData = new FormData();
         formData.append('query', query);
         formData.append('prompt_text', promptText);
-        formData.append('results', JSON.stringify(results));
-        formData.append('fallback_results', JSON.stringify(fallbackResults));
+        formData.append('results', JSON.stringify(pubmedResults));
+        formData.append('fallback_results', JSON.stringify(pubmedFallbackResults));
         formData.append('prompt_params', JSON.stringify(promptParams));
 
         document.getElementById('summary-loading').style.display = 'inline-block';
