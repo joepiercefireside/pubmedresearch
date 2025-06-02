@@ -1049,6 +1049,10 @@ def test_notification(id):
         logger.error(f"Error testing notification rule {rule_id}: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/help')
+def help():
+    return render_template('help.html', username=current_user.email if current_user.is_authenticated else None)
+
 @app.route('/notifications/test_email', methods=['POST'])
 @login_required
 def test_email():
