@@ -8,8 +8,30 @@ import json
 from abc import ABC, abstractmethod
 from openai import OpenAI
 import os
+import nltk
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk import pos_tag
+
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('averaged_perceptron_tagger')
 
 logger = logging.getLogger(__name__)
+
+# Biomedical vocabulary for synonyms
+BIOMEDICAL_VOCAB = {
+    "diabetes": ["Diabetes Mellitus", "insulin resistance", "type 2 diabetes"],
+    "weight loss": ["obesity", "body weight reduction", "fat loss"],
+    "treatment": ["therapy", "intervention", "management"],
+    "disease": ["disorder", "condition", "pathology"],
+    "statins": ["HMG-CoA reductase inhibitors", "atorvastatin", "simvastatin"],
+    "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction"],
+    "cardiovascular": ["heart-related", "circulatory"],
+    "blood pressure": ["hypertension", "BP"],
+    "hypertension": ["high blood pressure", "elevated BP"],
+    "new": ["recent", "novel", "latest"]
+}
 
 class SearchHandler(ABC):
     def __init__(self, source_id, name, max_results=80, summary_limit=20):
@@ -249,7 +271,7 @@ def search_fda_label_api(query, keywords_with_synonyms, date_range):
         search_terms = []
         for keyword, synonyms in keywords_with_synonyms:
             terms = [keyword] + synonyms
-            search_terms.extend([t.strip() for t in terms if t.strip()])
+            search_terms.extend([t.strip().replace('+', ' ') for t in terms if t.strip()])
         if not search_terms:
             return []
         search_query = quote(' '.join(search_terms))
@@ -285,72 +307,99 @@ def search_fda_label_api(query, keywords_with_synonyms, date_range):
         return []
 
 def extract_keywords_and_date(query, search_older=False, start_year=None):
-    stop_words = {
-        'and', 'or', 'not', 'from', 'the', 'past', 'years', 'about', 'in', 'on', 'at', 'to', 
-        'for', 'of', 'with', 'related', 'what', 'can', 'you', 'tell', 'me', 'is', 'are', 
-        'how', 'why', 'when', 'where', 'who', 'which'
-    }
+    query_lower = query.lower()
+    tokens = word_tokenize(query)
+    tagged = pos_tag(tokens)
+    stop_words = set(stopwords.words('english')).union({
+        'what', 'can', 'you', 'tell', 'me', 'is', 'are', 'how', 'why', 'when', 'where', 'who', 
+        'which', 'please', 'about', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'related', 
+        'any', 'articles', 'that', 'show', 'between', 'only'
+    })
+    
+    # Build phrases from nouns and adjectives
+    keywords = []
+    current_phrase = []
+    for word, tag in tagged:
+        if word.lower() in stop_words:
+            if current_phrase:
+                keywords.append('+'.join(current_phrase))
+                current_phrase = []
+            continue
+        if tag.startswith('NN') or tag.startswith('JJ'):
+            current_phrase.append(word.lower())
+        else:
+            if current_phrase:
+                keywords.append('+'.join(current_phrase))
+                current_phrase = []
+    if current_phrase:
+        keywords.append('+'.join(current_phrase))
+    
+    # Split multi-word phrases into individual words
+    split_keywords = []
+    for kw in keywords:
+        if '+' in kw:
+            split_keywords.extend(kw.split('+'))
+        split_keywords.append(kw)
+    
+    # Remove duplicates and limit to 5 keywords
+    keywords = list(set(split_keywords))[:5]
+    
+    # Get synonyms
+    keywords_with_synonyms = []
+    for kw in keywords:
+        synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:2]
+        keywords_with_synonyms.append((kw, synonyms))
+    
+    # Timeframe parsing
+    today = datetime.now()
+    default_start_year = today.year - 5
+    date_range = None
+    start_year_int = default_start_year
+    
     timeframe_patterns = [
         (r'within\s+the\s+last\s+(\d+)\s+year(s?)', lambda m: int(m.group(1))),
         (r'in\s+(\d{4})', lambda m: (int(m.group(1)), int(m.group(1)))),
-        (r'since\s+(\d{4})', lambda m: (int(m.group(1)), datetime.now().year)),
-        (r'from\s+(\d{4})\s+to\s+(\d{4})', lambda m: (int(m.group(1)), int(m.group(2))))
+        (r'since\s+(\d{4})', lambda m: (int(m.group(1)), today.year)),
+        (r'from\s+(\d{4})\s+to\s+(\d{4})', lambda m: (int(m.group(1)), int(m.group(2)))),
+        (r'past\s+year', lambda m: 1),
+        (r'past\s+week', lambda m: 0.019178)  # Approx. 7 days
     ]
     
-    query_lower = query.lower()
-    start_year_int = 2000
-    date_range = None
-    
-    # Parse timeframe from query
     for pattern, extractor in timeframe_patterns:
         if match := re.search(pattern, query_lower):
             result = extractor(match)
             if isinstance(result, tuple):
                 start_year, end_year = result
             else:
-                start_year = datetime.now().year - result
-                end_year = datetime.now().year
+                start_year = today.year - result
+                end_year = today.year
             start_date = f"{start_year}/01/01"
-            end_date = f"{end_year}/12/31"
+            end_date = f"{end_year}/12/31" if isinstance(result, tuple) else today.strftime('%Y/%m/%d')
             date_range = f"{start_date}[dp]:{end_date}[dp]"
             start_year_int = start_year
             break
     
-    # Default to 5 years if no timeframe specified
     if not date_range and not search_older:
-        start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y/%m/%d')
-        end_date = datetime.now().strftime('%Y/%m/%d')
+        start_date = (today - timedelta(days=5*365)).strftime('%Y/%m/%d')
+        end_date = today.strftime('%Y/%m/%d')
         date_range = f"{start_date}[dp]:{end_date}[dp]"
         start_year_int = int(start_date[:4])
     elif search_older and start_year:
         start_date = f"{start_year}/01/01"
-        end_date = datetime.now().strftime('%Y/%m/%d')
+        end_date = today.strftime('%Y/%m/%d')
         date_range = f"{start_date}[dp]:{end_date}[dp]"
         start_year_int = int(start_year)
     
-    # Extract keywords and synonyms
-    words = query_lower.split()
-    keywords = [(word, []) for word in words if word not in stop_words and not word.isdigit()]
-    
-    # Simple synonym mapping (expandable)
-    synonym_map = {
-        'diabetes': ['diabetic', 'glucose', 'insulin'],
-        'treatment': ['therapy', 'management', 'care'],
-        'weight': ['obesity', 'body mass', 'fat'],
-        'new': ['recent', 'novel', 'latest']
-    }
-    for i, (keyword, _) in enumerate(keywords):
-        keywords[i] = (keyword, synonym_map.get(keyword, []))
-    
-    logger.info(f"Extracted keywords: {keywords}, Date range: {date_range}")
-    return keywords, date_range, start_year_int
+    logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
+    return keywords_with_synonyms, date_range, start_year_int
 
 def build_pubmed_query(keywords_with_synonyms, date_range):
     if not keywords_with_synonyms:
         return ""
     terms = []
     for keyword, synonyms in keywords_with_synonyms:
-        all_terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms]
+        formatted_keyword = keyword.replace('+', ' ')
+        all_terms = [f'"{formatted_keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms]
         terms.append("(" + " OR ".join(all_terms) + ")")
     query = " AND ".join(terms)
     if date_range:

@@ -537,7 +537,7 @@ def search():
         sources=[], 
         total_results=0, 
         page=page, 
-        per_page=per_page, 
+        per_page=per_page,
         username=current_user.email, 
         has_prompt=bool(selected_prompt_text), 
         prompt_params={}, 
