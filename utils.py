@@ -7,6 +7,7 @@ from urllib.parse import quote
 import json
 from abc import ABC, abstractmethod
 from openai import OpenAI
+import os
 
 logger = logging.getLogger(__name__)
 
