@@ -20,7 +20,7 @@ import tenacity
 import email_validator
 from email_validator import validate_email, EmailNotValidError
 from openai import OpenAI
-from utils import esearch, efetch, parse_efetch_xml, search_fda_api, extract_keywords_and_date, build_pubmed_query
+from utils import esearch, efetch, parse_e_fetch_xml, search_fda_label_api, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler
 
 # Download NLTK data
 import nltk
@@ -41,9 +41,6 @@ login_manager.login_view = 'login'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize embedding model
-embedding_model = None
-
 # Initialize scheduler
 scheduler = BackgroundScheduler()
 scheduler.start()
@@ -62,8 +59,6 @@ def init_progress_db():
                  (user_id TEXT, query TEXT, status TEXT, timestamp REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
                  (query TEXT PRIMARY KEY, response TEXT, timestamp REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS embedding_cache
-                 (pmid TEXT PRIMARY KEY, embedding BLOB, timestamp REAL)''')
     conn.commit()
     conn.close()
 
@@ -86,90 +81,6 @@ def get_search_progress(user_id, query):
     result = c.fetchone()
     conn.close()
     return result if result else (None, None)
-
-def cache_grok_response(query, response):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO grok_cache (query, response, timestamp) VALUES (?, ?, ?)",
-              (query, response, time.time()))
-    conn.commit()
-    conn.close()
-    logger.info(f"Cached Grok response for query: {query[:50]}...")
-
-def get_cached_grok_response(query):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("SELECT response, timestamp FROM grok_cache WHERE query = ? AND timestamp > ?",
-              (query, time.time() - 604800))  # Cache valid for 7 days
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def cache_embedding(pmid, embedding):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO embedding_cache (pmid, embedding, timestamp) VALUES (?, ?, ?)",
-              (pmid, embedding.tobytes(), time.time()))
-    conn.commit()
-    conn.close()
-
-def get_cached_embedding(pmid):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = ? AND timestamp > ?",
-              (pmid, time.time() - 604800))  # Cache valid for 7 days
-    result = c.fetchone()
-    conn.close()
-    if result:
-        embedding = np.frombuffer(result[0], dtype=np.float32)
-        if embedding.shape[0] != 384:
-            logger.warning(f"Invalid embedding dimension for PMID {pmid}: expected 384, got {embedding.shape[0]}")
-            return None
-        return embedding
-    return None
-
-def load_embedding_model():
-    global embedding_model
-    if embedding_model is None:
-        logger.info("Loading sentence-transformers model...")
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        logger.info("Model loaded.")
-    return embedding_model
-
-def generate_embedding(text):
-    model = load_embedding_model()
-    embedding = model.encode(text, convert_to_numpy=True)
-    if embedding.shape[0] != 384:
-        logger.error(f"Generated embedding has incorrect dimension: {embedding.shape[0]}")
-        return None
-    return embedding
-
-@tenacity.retry(
-    stop=tenacity.stop_after_attempt(3),
-    wait=tenacity.wait_exponential(multiplier=1, min=2, max=60),
-    retry=tenacity.retry_if_exception_type(Exception),
-    before_sleep=lambda retry_state: logger.info(f"Retrying Grok API call, attempt {retry_state.attempt_number}")
-)
-def query_grok_api(query, context, prompt="Process the provided context according to the user's prompt."):
-    try:
-        api_key = os.environ.get('XAI_API_KEY')
-        if not api_key:
-            logger.error("XAI_API_KEY not set in environment variables")
-            return "Error: API key not configured. Please contact support."
-        
-        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        completion = client.chat.completions.create(
-            model="grok-3",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"Based on the following context, answer the prompt: {query}\n\nContext: {context}"}
-            ],
-            max_tokens=1000
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Error querying xAI Grok API: {str(e)}\n{traceback.format_exc()}")
-        raise
 
 def get_db_connection():
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
@@ -215,7 +126,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         'annually': (today - timedelta(days=365)).strftime('%Y/%m/%d')
     }
     start_date = timeframe_ranges[timeframe]
-    date_range = f"{start_date}[dp] TO {today.strftime('%Y/%m/%d')}[dp]"
+    date_range = f"{start_date}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
     
     keywords_with_synonyms, _, _ = extract_keywords_and_date(query)
     search_query = build_pubmed_query(keywords_with_synonyms, date_range)
@@ -239,7 +150,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
-            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
             
             if test_mode:
                 return {
@@ -252,7 +163,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             return
         
         efetch_xml = efetch(pmids, api_key=api_key)
-        results = parse_efetch_xml(efetch_xml)
+        results = parse_e_fetch_xml(efetch_xml)
         
         context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
         output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
@@ -275,7 +186,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
         response = sg.send(message)
         response_headers = {k: v for k, v in response.headers.items()}
-        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
         
         if test_mode:
             return {
@@ -287,7 +198,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             }
         
     except Exception as e:
-        logger.error(f"Error running notification rule {rule_id}: {str(e)}\n{traceback.format_exc()}")
+        logger.error(f"Error running notification rule {rule_id}: {str(e)}")
         if test_mode:
             try:
                 if not sg:
@@ -301,10 +212,10 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 logger.info(f"Sending error email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
-                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
                 email_sent = True
             except Exception as email_e:
-                logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}\n{traceback.format_exc()}")
+                logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
                 error_detail = ""
                 if hasattr(email_e, 'body') and email_e.body:
                     try:
@@ -435,139 +346,6 @@ def parse_prompt(prompt_text):
         'display_result_count': display_result_count,
         'limit_presentation': limit_presentation
     }
-
-def rank_results(query, results, prompt_params=None):
-    display_result_count = prompt_params.get('display_result_count', 80) if prompt_params else 80
-    
-    try:
-        articles_context = []
-        for i, result in enumerate(results):
-            article_text = f"Article {i+1}: Title: {result['title']}\nAbstract: {result['abstract'] or ''}\nAuthors: {result['authors']}\nJournal: {result['journal']}\nDate: {result['publication_date']}"
-            articles_context.append(article_text)
-        
-        context = "\n\n".join(articles_context)
-        ranking_prompt = f"""
-Given the query '{query}', rank the following articles by relevance.
-Focus on articles that directly address the query's topic and intent.
-Exclude articles that are unrelated to the query.
-Return a JSON list of article indices (1-based) in order of relevance, with a brief explanation for each.
-Ensure the response is valid JSON. Example:
-[
-    {{"index": 1, "explanation": "Directly discusses the query topic with high relevance"}},
-    {{"index": 2, "explanation": "Relevant but less specific to the query"}}
-]
-Articles:
-{context}
-"""
-        cache_key = hashlib.md5((query + context + ranking_prompt).encode()).hexdigest()
-        response = query_grok_api(query, context, prompt=ranking_prompt)
-        if not response:
-            raise ValueError("Grok API returned None")
-        
-        logger.info(f"Grok ranking response: {response[:200]}...")
-        ranking = json.loads(response)
-        if isinstance(ranking, dict) and 'articles' in ranking:
-            ranking = ranking['articles']
-        if not isinstance(ranking, list):
-            raise ValueError("Grok response is not a list")
-        
-        ranked_indices = []
-        for item in ranking:
-            if isinstance(item, dict) and 'index' in item:
-                index = item['index']
-                if isinstance(index, (int, str)) and str(index).isdigit():
-                    index = int(index) - 1
-                    if 0 <= index < len(results):
-                        ranked_indices.append(index)
-        
-        missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
-        ranked_indices.extend(missing_indices)
-        
-        ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
-        logger.info(f"Grok ranked {len(ranked_results)} results: indices {ranked_indices[:display_result_count]}")
-        return ranked_results
-    except Exception as e:
-        logger.error(f"Grok ranking failed: {str(e)}")
-        return embedding_based_ranking(query, results, prompt_params)
-
-def embedding_based_ranking(query, results, prompt_params=None):
-    display_result_count = prompt_params.get('display_result_count', 80) if prompt_params else 80
-    query_embedding = generate_embedding(query)
-    if query_embedding is None:
-        logger.error("Failed to generate query embedding")
-        return []
-    current_year = datetime.now().year
-    
-    embeddings = []
-    texts = []
-    for result in results:
-        embedding = get_cached_embedding(result['id'])
-        if embedding is None:
-            texts.append(f"{result['title']} {result['abstract'] or ''}")
-        else:
-            embeddings.append(embedding)
-    
-    if texts:
-        model = load_embedding_model()
-        new_embeddings = model.encode(texts, convert_to_numpy=True)
-        for i, (result, emb) in enumerate(zip(results[len(embeddings):], new_embeddings)):
-            if emb.shape[0] == 384:
-                cache_embedding(result['id'], emb)
-                embeddings.append(emb)
-            else:
-                logger.error(f"Generated embedding for PMID {result['id']} has incorrect dimension: {emb.shape[0]}")
-                embeddings.append(None)
-    
-    scores = []
-    for i, (emb, result) in enumerate(zip(embeddings, results)):
-        if emb is not None and emb.shape[0] == 384:
-            similarity = 1 - cosine(query_embedding, emb)
-        else:
-            similarity = 0.0
-        pub_year = int(result['publication_date']) if result['publication_date'].isdigit() else 2000
-        recency_bonus = (pub_year - 2000) / (current_year - 2000)
-        weighted_score = (0.8 * similarity) + (0.2 * recency_bonus)
-        scores.append((i, weighted_score, pub_year))
-    
-    scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
-    ranked_indices = [i for i, _, _ in scores]
-    
-    ranked_results = [results[i] for i in ranked_indices[:display_result_count]]
-    logger.info(f"Embedding-based ranked {len(ranked_results)} results with indices {ranked_indices[:display_result_count]}")
-    return ranked_results
-
-def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
-    if not results:
-        return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''}."
-    
-    logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
-    
-    context_results = results[:20]
-    logger.info(f"Context results count for summary: {len(context_results)}")
-    
-    if not context_results:
-        return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
-    
-    context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in context_results])
-    
-    MAX_CONTEXT_LENGTH = 12000
-    if len(context) > MAX_CONTEXT_LENGTH:
-        context = context[:MAX_CONTEXT_LENGTH] + "... [truncated]"
-        logger.warning(f"Context truncated to {MAX_CONTEXT_LENGTH} characters for query: {query[:50]}...")
-    
-    try:
-        output = query_grok_api(query, context, prompt=prompt_text)
-        if not output:
-            logger.warning("Grok API returned None, using fallback")
-            output = f"Fallback: Unable to generate AI summary. Top 20 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
-    except Exception as e:
-        logger.error(f"Error generating AI summary: {str(e)}")
-        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top 20 results include: " + "; ".join([f"{r['title']} ({r['publication_date']})" for r in context_results])
-    
-    paragraphs = output.split('\n\n')
-    formatted_output = ''.join(f'<p>{p}</p>' for p in paragraphs if p.strip())
-    logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")
-    return formatted_output
 
 @app.route('/search_progress', methods=['GET'])
 @login_required
@@ -1102,14 +880,14 @@ def test_email():
         logger.info(f"Sending test email, recipient: {email}, subject: {message.subject}")
         response = sg.send(message)
         response_headers = {k: v for k, v in response.headers.items()}
-        logger.info(f"Test email sent, recipient: {email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}, response_body: {response.body.decode('utf-8') if response.body else 'No body'}, headers: {response_headers}")
+        logger.info(f"Test email sent, recipient: {email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
         return jsonify({
             "status": "success",
             "message": f"Test email sent to {email}. Check your inbox and spam/junk folder.",
             "message_id": response_headers.get('X-Message-Id', 'Not provided')
         })
     except Exception as e:
-        logger.error(f"Error sending test email: {str(e)}\n{traceback.format_exc()}")
+        logger.error(f"Error sending test email: {str(e)}")
         error_detail = ""
         if hasattr(e, 'body') and e.body:
             try:
