@@ -613,7 +613,7 @@ def search():
     query = request.args.get('query', request.form.get('query', ''))
     search_older = request.form.get('search_older', 'off') == 'on'
     start_year = request.form.get('start_year', None)
-    sources = request.form.getlist('sources')  # List of selected sources
+    sources_selected = request.form.getlist('sources')  # List of selected sources
 
     selected_prompt_text = prompt_text
     if prompt_id and not prompt_text:
@@ -625,35 +625,35 @@ def search():
             logger.warning(f"Prompt ID {prompt_id} not found in prompts")
             selected_prompt_text = ''
 
-    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}, sources={sources}, page={page}")
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., selected_prompt_text={selected_prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}, sources={sources_selected}, page={page}")
 
     if request.method == 'POST':
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
         
-        if not sources:
+        if not sources_selected:
             update_search_progress(current_user.id, query, "error: At least one search source must be selected")
-            return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
         
         update_search_progress(current_user.id, query, "contacting APIs")
         
         keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
         if not keywords_with_synonyms:
             update_search_progress(current_user.id, query, "error: No valid keywords found")
-            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
         
         prompt_params = parse_prompt(selected_prompt_text)
         summary_result_count = prompt_params['summary_result_count']
         
         api_key = os.environ.get('PUBMED_API_KEY')
-        pubmed_results = []
-        pubmed_ranked_results = []
-        pubmed_fallback_results = []
-        fda_results = []
+        sources = []
+        total_results = 0
         
         try:
-            if 'pubmed' in sources:
+            # PubMed search
+            pubmed_data = {'ranked': [], 'all': [], 'fallback': [], 'summary': ''}
+            if 'pubmed' in sources_selected:
                 search_query = build_pubmed_query(keywords_with_synonyms, date_range)
                 update_search_progress(current_user.id, query, "executing PubMed search")
                 esearch_result = esearch(search_query, retmax=80, api_key=api_key)
@@ -667,61 +667,88 @@ def search():
                     r for r in pubmed_results
                     if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) >= start_year_int
                 ]
-                pubmed_fallback_results = [
+                pubmed_data['fallback'] = [
                     r for r in pubmed_results
                     if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) < start_year_int
                 ]
                 
-                if primary_results or pubmed_fallback_results:
+                if primary_results or pubmed_data['fallback']:
                     conn = get_db_connection()
                     cur = conn.cursor()
                     cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
-                                (query, json.dumps(primary_results + pubmed_fallback_results)))
+                                (query, json.dumps(primary_results + pubmed_data['fallback'])))
                     conn.commit()
                     cur.close()
                     conn.close()
                 
-                if not primary_results and not pubmed_fallback_results:
+                if not primary_results and not pubmed_data['fallback']:
                     logger.info("No PubMed results found")
                 
                 update_search_progress(current_user.id, query, "ranking PubMed results")
                 if primary_results:
-                    pubmed_ranked_results = rank_results(query, primary_results, prompt_params)
-                if pubmed_fallback_results and not primary_results:
-                    pubmed_fallback_results = rank_results(query, pubmed_fallback_results, prompt_params)
+                    pubmed_data['ranked'] = rank_results(query, primary_results, prompt_params)
+                    pubmed_data['all'] = primary_results
+                if pubmed_data['fallback'] and not primary_results:
+                    pubmed_data['ranked'] = rank_results(query, pubmed_data['fallback'], prompt_params)
                 
-                logger.info(f"PubMed ranked results: {len(pubmed_ranked_results)} primary, {len(pubmed_fallback_results)} fallback")
+                if selected_prompt_text:
+                    pubmed_data['summary'] = generate_prompt_output(query, pubmed_data['ranked'][:20], selected_prompt_text, prompt_params)
+                
+                logger.info(f"PubMed ranked results: {len(pubmed_data['ranked'])} primary, {len(pubmed_data['fallback'])} fallback")
+                total_results += len(pubmed_data['ranked']) + len(pubmed_data['all']) + len(pubmed_data['fallback'])
+                sources.append({
+                    'id': 'pubmed',
+                    'name': 'PubMed',
+                    'results': {
+                        'ranked': pubmed_data['ranked'],
+                        'all': pubmed_data['all'],
+                        'fallback': pubmed_data['fallback']
+                    },
+                    'summary': pubmed_data['summary']
+                })
             
-            if 'fda' in sources:
+            # FDA search
+            fda_data = {'ranked': [], 'all': [], 'fallback': [], 'summary': ''}
+            if 'fda' in sources_selected:
                 update_search_progress(current_user.id, query, "executing FDA search")
                 fda_results = search_fda_api(query, keywords_with_synonyms, date_range)
-                if not fda_results:
+                if fda_results:
+                    fda_data['all'] = fda_results
+                    fda_data['ranked'] = fda_results  # No ranking for FDA yet
+                    if selected_prompt_text:
+                        fda_data['summary'] = generate_prompt_output(query, fda_data['ranked'][:20], selected_prompt_text, prompt_params)
+                else:
                     logger.info("No FDA results found")
                 
-                logger.info(f"FDA results: {len(fda_results)}")
-            
-            # Calculate total results
-            total_results = len(pubmed_ranked_results) + len(pubmed_results) + len(pubmed_fallback_results) + len(fda_results)
+                logger.info(f"FDA results: {len(fda_data['all'])}")
+                total_results += len(fda_data['all'])
+                sources.append({
+                    'id': 'fda',
+                    'name': 'FDA.gov',
+                    'results': {
+                        'ranked': fda_data['ranked'],
+                        'all': fda_data['all'],
+                        'fallback': fda_data['fallback']
+                    },
+                    'summary': fda_data['summary']
+                })
             
             # Paginate results
             start_idx = (page - 1) * per_page
             end_idx = start_idx + per_page
             
-            pubmed_ranked_results_paginated = pubmed_ranked_results[start_idx:end_idx]
-            pubmed_results_paginated = pubmed_results[start_idx:end_idx]
-            pubmed_fallback_results_paginated = pubmed_fallback_results[start_idx:end_idx]
-            fda_results_paginated = fda_results[start_idx:end_idx]
+            for source in sources:
+                source['results']['ranked'] = source['results']['ranked'][start_idx:end_idx]
+                source['results']['all'] = source['results']['all'][start_idx:end_idx]
+                source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
             
             total_pages = (total_results + per_page - 1) // per_page
             
-            update_search_progress(current_user.id, query, "complete" if not selected_prompt_text else "awaiting_summary")
+            update_search_progress(current_user.id, query, "complete")
             
             return render_template(
                 'search.html', 
-                pubmed_results=pubmed_results_paginated,
-                pubmed_ranked_results=pubmed_ranked_results_paginated,
-                pubmed_fallback_results=pubmed_fallback_results_paginated,
-                fda_results=fda_results_paginated,
+                sources=sources,
                 total_results=total_results,
                 page=page,
                 per_page=per_page,
@@ -730,10 +757,7 @@ def search():
                 prompts=prompts, 
                 prompt_id=prompt_id,
                 prompt_text=selected_prompt_text,
-                prompt_output='' if selected_prompt_text else None,
-                fallback_prompt_output='' if selected_prompt_text else None,
                 summary_result_count=summary_result_count,
-                target_year=None,
                 username=current_user.email,
                 has_prompt=bool(selected_prompt_text),
                 prompt_params=prompt_params,
@@ -743,9 +767,9 @@ def search():
         except Exception as e:
             logger.error(f"API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
     
-    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, pubmed_results=[], pubmed_fallback_results=[], fda_results=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=False, start_year=None)
+    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=False, start_year=None)
 
 @app.route('/search_summary', methods=['POST'])
 @login_required
@@ -755,19 +779,20 @@ def search_summary():
     results = json.loads(request.form.get('results', '[]'))
     fallback_results = json.loads(request.form.get('fallback_results', '[]'))
     prompt_params = json.loads(request.form.get('prompt_params', '{}'))
+    source_id = request.form.get('source_id', 'pubmed')
     
-    logger.info(f"Received summary request for query: {query[:50]}... with prompt: {prompt_text[:50]}...")
+    logger.info(f"Received summary request for query: {query[:50]}... with prompt: {prompt_text[:50]}... source: {source_id}")
     
     try:
         prompt_output = generate_prompt_output(query, results, prompt_text, prompt_params)
-        fallback_prompt_output = generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results else ''
+        fallback_prompt_output = generate_prompt_output(query, fallback_results, prompt_text, prompt_params, is_fallback=True) if fallback_results and source_id == 'pubmed' else ''
         
         logger.info(f"Summary generated: prompt_output length={len(prompt_output)}, fallback_output length={len(fallback_prompt_output) if fallback_prompt_output else 0}")
         
         if prompt_output.startswith("Fallback:"):
-            flash("AI summarization failed for primary results.", "warning")
+            flash(f"AI summarization failed for {source_id} results.", "warning")
         if fallback_prompt_output and fallback_prompt_output.startswith("Fallback:"):
-            flash("AI summarization failed for fallback results.", "warning")
+            flash("AI summarization failed for PubMed fallback results.", "warning")
         
         update_search_progress(current_user.id, query, "complete")
         
@@ -777,7 +802,7 @@ def search_summary():
             'fallback_prompt_output': fallback_prompt_output
         })
     except Exception as e:
-        logger.error(f"Error generating AI summary: {str(e)}")
+        logger.error(f"Error generating AI summary for {source_id}: {str(e)}")
         update_search_progress(current_user.id, query, f"error: AI summary failed: {str(e)}")
         return jsonify({
             'status': 'error',
