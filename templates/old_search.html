@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>Search PubMed</h1>
+    <div class="card">
+        <form method="POST" id="searchForm" action="{{ url_for('search') }}">
+            <div class="mb-3">
+                <label for="query" class="form-label">Search Query (default limited to past 5 years)</label>
+                <div class="d-flex align-items-center">
+                    <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" placeholder="Enter your search query (e.g., diabetes treatments in 2025)" required>
+                    <div class="ms-3">
+                        <input type="checkbox" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleYearDropdown()">
+                        <label for="search_older" class="ms-1">Search Older Articles</label>
+                    </div>
+                </div>
+                <div id="year_dropdown" class="mt-2" {% if not search_older %}style="display: none;"{% endif %}>
+                    <select class="form-control" id="start_year" name="start_year">
+                        <option value="">Select start year</option>
+                        {% for year in range(2025, 1959, -1) %}
+                            <option value="{{ year }}" {% if start_year == year|string %}selected{% endif %}>{{ year }}</option>
+                        {% endfor %}
+                    </select>
+                    <small id="year_warning" class="text-muted" style="display: none;">Larger date ranges may take more time</small>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label for="prompt_id" class="form-label">Select Prompt (Optional)</label>
+                <select class="form-control" id="prompt_id" name="prompt_id" onchange="updatePromptText()">
+                    <option value="">None</option>
+                    {% for prompt in prompts %}
+                        <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
+                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter custom prompt (e.g., Summarize the top 3 results)">{{ prompt_text|default('') }}</textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Search</button>
+            <div id="search_spinner" class="spinner-border text-primary ms-2" role="status" style="display: none;">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </form>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else 'warning' if category == 'warning' else 'success' }} mt-3">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    {% if error %}
+        <div class="alert alert-danger mt-3">{{ error }}</div>
+    {% endif %}
+
+    <!-- Primary Results (Within Timeframe) -->
+    {% if results %}
+        <div class="card mt-3">
+            <h2>Search Results{% if query %} for "{{ query }}"{% endif %}</h2>
+            {% if has_prompt %}
+                <div class="card-body" id="ai-summary">
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    <div class="loading">Working on AI Summary, this may take 30 to 40 seconds...</div>
+                </div>
+            {% elif prompt_output is not none %}
+                <div class="card-body">
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    {{ prompt_output|safe }}
+                </div>
+            {% endif %}
+            <div class="list-group">
+                {% for result in results %}
+                    <div class="list-group-item">
+                        <h4 class="mb-1">{{ result.title }}</h4>
+                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Publication Date:</strong> {{ result.publication_date or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Abstract:</strong> {{ result.abstract or 'No abstract available' }}</p>
+                        <a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank" class="btn btn-sm btn-info">View on PubMed</a>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+
+    <!-- Fallback Results (Outside Timeframe) -->
+    {% if fallback_results %}
+        <div class="card mt-3">
+            <h2>These results are relevant but outside your timeframe</h2>
+            {% if has_prompt %}
+                <div class="card-body" id="ai-fallback-summary">
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    <div class="loading">Working on AI Summary, this may take 30 to 40 seconds...</div>
+                </div>
+            {% elif fallback_prompt_output is not none %}
+                <div class="card-body">
+                    <h3>AI Summary {% if summary_result_count is defined and summary_result_count < 20 %}(Top {{ summary_result_count }} Results){% endif %}</h3>
+                    {{ fallback_prompt_output|safe }}
+                </div>
+            {% endif %}
+            <div class="list-group">
+                {% for result in fallback_results %}
+                    <div class="list-group-item">
+                        <h4 class="mb-1">{{ result.title }}</h4>
+                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Publication Date:</strong> {{ result.publication_date or 'Unknown' }}</p>
+                        <p class="mb-1"><strong>Abstract:</strong> {{ result.abstract or 'No abstract available' }}</p>
+                        <a href="https://pubmed.ncbi.nlm.nih.gov/{{ result.id }}/" target="_blank" class="btn btn-sm btn-info">View on PubMed</a>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+<style>
+    .loading {
+        color: #00689B;
+        font-style: italic;
+        animation: flash 1s infinite;
+    }
+    @keyframes flash {
+        0% { opacity: 1; }
+        50% { opacity: 0.3; }
+        100% { opacity: 1; }
+    }
+    .btn-primary {
+        background-color: #00689B;
+        border-color: #00689B;
+    }
+    .btn-primary:hover {
+        background-color: #005580;
+        border-color: #005580;
+    }
+    .spinner-border {
+        width: 1.5rem;
+        height: 1.5rem;
+    }
+</style>
+
+<script>
+    function updatePromptText() {
+        const promptId = document.getElementById('prompt_id').value;
+        const promptTextArea = document.getElementById('prompt_text');
+        if (!promptId) {
+            promptTextArea.value = '';
+            return;
+        }
+        {% for prompt in prompts %}
+            if (promptId === '{{ prompt.id }}') {
+                promptTextArea.value = {{ prompt.prompt_text|tojson }};
+            }
+        {% endfor %}
+    }
+
+    function toggleYearDropdown() {
+        const searchOlder = document.getElementById('search_older').checked;
+        const yearDropdown = document.getElementById('year_dropdown');
+        const yearWarning = document.getElementById('year_warning');
+        yearDropdown.style.display = searchOlder ? 'block' : 'none';
+        yearWarning.style.display = searchOlder && document.getElementById('start_year').value ? 'block' : 'none';
+    }
+
+    document.getElementById('start_year')?.addEventListener('change', function() {
+        const yearWarning = document.getElementById('year_warning');
+        yearWarning.style.display = this.value ? 'block' : 'none';
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.getElementById('searchForm');
+        form.addEventListener('submit', function() {
+            document.getElementById('search_spinner').style.display = 'inline-block';
+            updateSearchProgress('contacting PubMed');
+        });
+
+        function updateSearchProgress(status) {
+            const query = encodeURIComponent('{{ query|default('') }}');
+            const eventSource = new EventSource('/search_progress?query=' + query);
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log('Search progress:', data.status);
+                if (data.status.includes('error') || data.status === 'complete' || data.status === 'awaiting_summary') {
+                    document.getElementById('search_spinner').style.display = 'none';
+                    eventSource.close();
+                    if (data.status === 'awaiting_summary') {
+                        fetchAISummary();
+                    }
+                }
+            };
+        }
+
+        function fetchAISummary() {
+            const hasPrompt = {{ has_prompt|tojson }};
+            const hasResults = {{ (results|length > 0 or fallback_results|length > 0)|tojson }};
+            if (!hasPrompt || !hasResults) {
+                document.getElementById('search_spinner').style.display = 'none';
+                return;
+            }
+
+            const results = {{ results|tojson }};
+            const fallbackResults = {{ fallback_results|tojson }};
+            const promptText = {{ prompt_text|tojson }};
+            const promptParams = {{ prompt_params|tojson|default('{}') }};
+            const summaryResultCount = promptParams.summary_result_count || 20;
+
+            const formData = new FormData();
+            formData.append('query', '{{ query|default('') }}');
+            formData.append('prompt_text', promptText);
+            formData.append('results', JSON.stringify(results));
+            formData.append('fallback_results', JSON.stringify(fallbackResults));
+            formData.append('prompt_params', JSON.stringify(promptParams));
+
+            fetch('{{ url_for('search_summary') }}', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('search_spinner').style.display = 'none';
+                if (data.status === 'success') {
+                    document.getElementById('ai-summary').innerHTML = `
+                        <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
+                        ${data.prompt_output}
+                    `;
+                    if (data.fallback_prompt_output) {
+                        document.getElementById('ai-fallback-summary').innerHTML = `
+                            <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
+                            ${data.fallback_prompt_output}
+                        `;
+                    }
+                } else {
+                    document.getElementById('ai-summary').innerHTML = `
+                        <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
+                        <div class="alert alert-danger">${data.message}</div>
+                    `;
+                    if (document.getElementById('ai-fallback-summary')) {
+                        document.getElementById('ai-fallback-summary').innerHTML = `
+                            <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
+                            <div class="alert alert-danger">${data.message}</div>
+                        `;
+                    }
+                }
+            })
+            .catch(error => {
+                document.getElementById('search_spinner').style.display = 'none';
+                console.error('Error fetching AI summary:', error);
+                document.getElementById('ai-summary').innerHTML = `
+                    <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
+                    <div class="alert alert-danger">Failed to load AI summary.</div>
+                `;
+                if (document.getElementById('ai-fallback-summary')) {
+                    document.getElementById('ai-fallback-summary').innerHTML = `
+                        <h3>AI Summary ${summaryResultCount < 20 ? '(Top ' + summaryResultCount + ' Results)' : ''}</h3>
+                        <div class="alert alert-danger">Failed to load AI summary.</div>
+                    `;
+                }
+            });
+        }
+    });
+</script>
+{% endblock %}

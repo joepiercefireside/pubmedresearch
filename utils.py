@@ -105,11 +105,14 @@ def search_fda_api(query, keywords_with_synonyms, date_range, api_key=None):
         
         results = []
         for item in data.get('results', []):
+            # Safely access reaction field
+            reaction = item.get('reaction', [])
+            title = reaction[0].get('reactionmeddrapt', 'No title') if reaction else 'No title'
             results.append({
                 'id': item.get('safetyreportid', ''),
-                'title': item.get('reaction', [{}])[0].get('reactionmeddrapt', 'No title'),
+                'title': title,
                 'summary': item.get('patient', {}).get('patientnarrative', ''),
-                'date': item.get('receivedate', '')[:8],
+                'date': item.get('receivedate', '')[:8] or 'N/A',
                 'url': f"https://open.fda.gov/data/faers/{item.get('safetyreportid', '')}"
             })
         logger.info(f"FDA API returned {len(results)} results for query: {search_query}")
