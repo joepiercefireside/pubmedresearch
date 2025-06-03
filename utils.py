@@ -87,14 +87,13 @@ def search_fda_api(query, keywords_with_synonyms, date_range, api_key=None):
             search_terms.extend(terms)
         search_query = quote(' '.join(search_terms))
         
+        date_filter = ""
         if date_range:
-            start_date = date_range.split(':')[0].replace('/', '')[:8]
-            end_date = date_range.split(':')[1].replace('[dp]', '').replace('/', '')[:8]
-            date_filter = f"&search=effective_time:[+{start_date}+TO+{end_date}]"
-        else:
-            date_filter = ""
+            start_date = date_range.split(':')[0].replace('/', '')
+            end_date = date_range.split(':')[1].replace('[dp]', '').replace('/', '')
+            date_filter = f"+AND+effective_time:[{start_date}+TO+{end_date}]"
         
-        # Use drug label endpoint for broader results
+        # Use drug label endpoint with corrected query syntax
         url = f"https://api.fda.gov/drug/label.json?search={search_query}{date_filter}&limit=20"
         headers = {'User-Agent': 'PubMedResearch/1.0'}
         response = requests.get(url, headers=headers)
@@ -120,7 +119,7 @@ def search_fda_api(query, keywords_with_synonyms, date_range, api_key=None):
         return []
 
 def extract_keywords_and_date(query, search_older, start_year):
-    stop_words = {'and', 'or', 'not', 'from', 'the', 'past', 'years', 'about', 'in', 'on', 'at', 'to', 'for', 'of', 'with'}
+    stop_words = {'and', 'or', 'not', 'from', 'the', 'past', 'years', 'about', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'related'}
     words = query.lower().split()
     keywords = [(word, []) for word in words if word not in stop_words and not word.isdigit()]
     date_range = None

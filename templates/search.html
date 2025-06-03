@@ -214,17 +214,17 @@
       searchForm.addEventListener('submit', function() {
         resultsSection.innerHTML = ''; // Clear results section
         {% for source in sources %}
-          const summaryContent{{ loop.index }} = document.getElementById('{{ source.id }}-summary-content');
-          const summaryLoading{{ loop.index }} = document.getElementById('{{ source.id }}-summary-loading');
-          const summaryMessage{{ loop.index }} = document.getElementById('{{ source.id }}-summary-message');
-          if (summaryContent{{ loop.index }}) {
-            summaryContent{{ loop.index }}.innerHTML = '';
+          const summaryContent = document.getElementById('{{ source.id }}-summary-content');
+          const summaryLoading = document.getElementById('{{ source.id }}-summary-loading');
+          const summaryMessage = document.getElementById('{{ source.id }}-summary-message');
+          if (summaryContent) {
+            summaryContent.innerHTML = '';
           }
-          if (summaryLoading{{ loop.index }}) {
-            summaryLoading{{ loop.index }}.style.display = 'inline-block';
+          if (summaryLoading) {
+            summaryLoading.style.display = 'inline-block';
           }
-          if (summaryMessage{{ loop.index }}) {
-            summaryMessage{{ loop.index }}.style.display = 'block';
+          if (summaryMessage) {
+            summaryMessage.style.display = 'block';
           }
         {% endfor %}
       });
@@ -240,7 +240,7 @@
     });
 
     function fetchSummary(sourceId) {
-      const query = '{{ query|default('')|e }}';
+      const query = "{{ query|safe }}";
       const promptText = document.getElementById('prompt_text').value;
       const results = sourceId === 'pubmed' ? {{ pubmed_results|tojson }} : {{ fda_results|tojson }};
       const fallbackResults = sourceId === 'pubmed' ? {{ pubmed_fallback_results|tojson }} : [];
@@ -254,7 +254,7 @@
       formData.append('prompt_params', JSON.stringify(promptParams));
       formData.append('source_id', sourceId);
 
-      const summaryLoading = document.getElementById(sourceId + '-summary-loading');
+      const summaryLoading = document.getElementById(sourceId + '-summary-content');
       const summaryMessage = document.getElementById(sourceId + '-summary-message');
       const summaryContent = document.getElementById(sourceId + '-summary-content');
 

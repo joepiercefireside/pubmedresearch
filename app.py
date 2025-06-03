@@ -660,12 +660,12 @@ def search():
                 search_query = build_pubmed_query(keywords_with_synonyms, date_range)
                 update_search_progress(current_user.id, query, "executing PubMed search")
                 esearch_result = esearch(search_query, retmax=80, api_key=api_key)
-                pmids = esearch_result['esearchresult']['idlist']
+                pmids = esearch_result.get('esearchresult', {}).get('idlist', [])
                 logger.info(f"ESearch result: {len(pmids)} PMIDs")
                 if pmids:
                     update_search_progress(current_user.id, query, "fetching PubMed article details")
                     efetch_xml = efetch(pmids, api_key=api_key)
-                    pubmed_results = parse_efetch_xml(efetch_xml)
+                    pubmed_results = parse_efetch_xml(efetch_xml) or []
                 
                 primary_results = [
                     r for r in pubmed_results
@@ -690,17 +690,17 @@ def search():
                 
                 update_search_progress(current_user.id, query, "ranking PubMed results")
                 if primary_results:
-                    pubmed_data['ranked'] = rank_results(query, primary_results, prompt_params)
+                    pubmed_data['ranked'] = rank_results(query, primary_results, prompt_params) or []
                     pubmed_data['all'] = primary_results
                 if pubmed_data['fallback'] and not primary_results:
-                    pubmed_data['ranked'] = rank_results(query, pubmed_data['fallback'], prompt_params)
+                    pubmed_data['ranked'] = rank_results(query, pubmed_data['fallback'], prompt_params) or []
                 
                 if selected_prompt_text and (pubmed_data['ranked'] or pubmed_data['all']):
                     update_search_progress(current_user.id, query, "generating PubMed summary")
-                    pubmed_data['summary'] = generate_prompt_output(query, pubmed_data['ranked'][:20], selected_prompt_text, prompt_params)
+                    pubmed_data['summary'] = generate_prompt_output(query, pubmed_data['ranked'][:20], selected_prompt_text, prompt_params) or ""
                 
                 logger.info(f"PubMed ranked results: {len(pubmed_data['ranked'])} primary, {len(pubmed_data['fallback'])} fallback")
-                total_results += len(pubmed_data['ranked']) + len(pubmed_data['all']) + len(pubmed_data['fallback'])
+                total_results += len(pubmed_data['all']) + len(pubmed_data['fallback'])
                 sources.append({
                     'id': 'pubmed',
                     'name': 'PubMed',
@@ -716,13 +716,13 @@ def search():
             fda_data = {'ranked': [], 'all': [], 'fallback': [], 'summary': ''}
             if 'fda' in sources_selected:
                 update_search_progress(current_user.id, query, "executing FDA search")
-                fda_results = search_fda_api(query, keywords_with_synonyms, date_range)
+                fda_results = search_fda_api(query, keywords_with_synonyms, date_range) or []
                 if fda_results:
                     fda_data['all'] = fda_results
                     fda_data['ranked'] = fda_results  # No ranking for FDA yet
                     if selected_prompt_text:
                         update_search_progress(current_user.id, query, "generating FDA summary")
-                        fda_data['summary'] = generate_prompt_output(query, fda_data['ranked'][:20], selected_prompt_text, prompt_params)
+                        fda_data['summary'] = generate_prompt_output(query, fda_data['ranked'][:20], selected_prompt_text, prompt_params) or ""
                 else:
                     logger.info("No FDA results found")
                 
