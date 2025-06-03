@@ -88,8 +88,8 @@ def search_fda_api(query, keywords_with_synonyms, date_range, api_key=None):
         search_query = quote(' '.join(search_terms))
         
         if date_range:
-            start_date = date_range.split(' TO ')[0].replace('/', '')[:8]
-            end_date = date_range.split(' TO ')[1].replace('/', '')[:8]
+            start_date = date_range.split(':')[0].replace('/', '')[:8]
+            end_date = date_range.split(':')[1].replace('[dp]', '').replace('/', '')[:8]
             date_filter = f"&search=effective_time:[+{start_date}+TO+{end_date}]"
         else:
             date_filter = ""
@@ -120,7 +120,9 @@ def search_fda_api(query, keywords_with_synonyms, date_range, api_key=None):
         return []
 
 def extract_keywords_and_date(query, search_older, start_year):
-    keywords = [(word, []) for word in query.lower().split() if word not in ['and', 'or', 'not']]
+    stop_words = {'and', 'or', 'not', 'from', 'the', 'past', 'years', 'about', 'in', 'on', 'at', 'to', 'for', 'of', 'with'}
+    words = query.lower().split()
+    keywords = [(word, []) for word in words if word not in stop_words and not word.isdigit()]
     date_range = None
     start_year_int = 2000  # Default start year
     if not search_older:

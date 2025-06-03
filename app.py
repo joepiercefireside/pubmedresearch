@@ -611,9 +611,9 @@ def search():
     prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
     prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
     query = request.args.get('query', request.form.get('query', ''))
-    search_older = request.form.get('search_older', 'off') == 'on'
-    start_year = request.form.get('start_year', None)
-    sources_selected = request.form.getlist('sources')  # List of selected sources
+    search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
+    start_year = request.form.get('start_year', request.args.get('start_year', None))
+    sources_selected = request.form.getlist('sources') or request.args.getlist('sources')
 
     selected_prompt_text = prompt_text
     if prompt_id and not prompt_text:
@@ -649,6 +649,9 @@ def search():
         api_key = os.environ.get('PUBMED_API_KEY')
         sources = []
         total_results = 0
+        pubmed_results = []
+        fda_results = []
+        pubmed_fallback_results = []
         
         try:
             # PubMed search
@@ -658,6 +661,7 @@ def search():
                 update_search_progress(current_user.id, query, "executing PubMed search")
                 esearch_result = esearch(search_query, retmax=80, api_key=api_key)
                 pmids = esearch_result['esearchresult']['idlist']
+                logger.info(f"ESearch result: {len(pmids)} PMIDs")
                 if pmids:
                     update_search_progress(current_user.id, query, "fetching PubMed article details")
                     efetch_xml = efetch(pmids, api_key=api_key)
@@ -691,7 +695,8 @@ def search():
                 if pubmed_data['fallback'] and not primary_results:
                     pubmed_data['ranked'] = rank_results(query, pubmed_data['fallback'], prompt_params)
                 
-                if selected_prompt_text:
+                if selected_prompt_text and (pubmed_data['ranked'] or pubmed_data['all']):
+                    update_search_progress(current_user.id, query, "generating PubMed summary")
                     pubmed_data['summary'] = generate_prompt_output(query, pubmed_data['ranked'][:20], selected_prompt_text, prompt_params)
                 
                 logger.info(f"PubMed ranked results: {len(pubmed_data['ranked'])} primary, {len(pubmed_data['fallback'])} fallback")
@@ -716,6 +721,7 @@ def search():
                     fda_data['all'] = fda_results
                     fda_data['ranked'] = fda_results  # No ranking for FDA yet
                     if selected_prompt_text:
+                        update_search_progress(current_user.id, query, "generating FDA summary")
                         fda_data['summary'] = generate_prompt_output(query, fda_data['ranked'][:20], selected_prompt_text, prompt_params)
                 else:
                     logger.info("No FDA results found")
@@ -762,14 +768,32 @@ def search():
                 has_prompt=bool(selected_prompt_text),
                 prompt_params=prompt_params,
                 search_older=search_older,
-                start_year=start_year
+                start_year=start_year,
+                pubmed_results=pubmed_results,
+                fda_results=fda_results,
+                pubmed_fallback_results=pubmed_fallback_results
             )
         except Exception as e:
             logger.error(f"API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
     
-    return render_template('search.html', prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=False, start_year=None)
+    return render_template(
+        'search.html', 
+        prompts=prompts, 
+        prompt_id=prompt_id, 
+        prompt_text=selected_prompt_text, 
+        sources=[], 
+        total_results=0, 
+        page=page, 
+        per_page=per_page, 
+        username=current_user.email, 
+        has_prompt=bool(selected_prompt_text), 
+        prompt_params={}, 
+        summary_result_count=5, 
+        search_older=False, 
+        start_year=None
+    )
 
 @app.route('/search_summary', methods=['POST'])
 @login_required
