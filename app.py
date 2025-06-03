@@ -455,11 +455,11 @@ def search():
                 else:
                     ranked_results = []
                 
+                # Generate summary immediately if prompt is provided
+                summary = ""
                 if selected_prompt_text and (ranked_results or primary_results):
                     update_search_progress(current_user.id, query, f"generating {handler.name} summary")
                     summary = handler.generate_summary(query, ranked_results, selected_prompt_text, prompt_params)
-                else:
-                    summary = ""
                 
                 source_data = {
                     'id': handler.source_id,

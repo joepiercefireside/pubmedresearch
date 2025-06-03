@@ -51,9 +51,14 @@ class SearchHandler(ABC):
 
     def rank_results(self, query, results, prompt_params):
         display_result_count = prompt_params.get('display_result_count', self.max_results)
+        if not results:
+            return []
+        
         try:
+            # Limit to top 50 results to avoid token limits
+            max_rank_results = min(len(results), 50)
             articles_context = []
-            for i, result in enumerate(results):
+            for i, result in enumerate(results[:max_rank_results]):
                 article_text = f"Article {i+1}: {self._format_context(result)}"
                 articles_context.append(article_text)
             
@@ -73,15 +78,27 @@ Articles:
 """
             response = self._query_grok_api(query, context, ranking_prompt)
             logger.info(f"Grok ranking response for {self.source_id}: {response[:200]}...")
-            ranking = json.loads(response)
+            
+            try:
+                ranking = json.loads(response)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Grok ranking response for {self.source_id}: {str(e)}, response: {response[:500]}...")
+                return results[:display_result_count]  # Fallback to original order
+            
+            if isinstance(ranking, dict) and 'articles' in ranking:
+                ranking = ranking['articles']
+            if not isinstance(ranking, list):
+                logger.warning(f"Invalid Grok ranking response format for {self.source_id}: {response[:200]}...")
+                return results[:display_result_count]
             
             ranked_indices = []
             for item in ranking:
                 if isinstance(item, dict) and 'index' in item:
                     index = int(item['index']) - 1
-                    if 0 <= index < len(results):
+                    if 0 <= index < max_rank_results:
                         ranked_indices.append(index)
             
+            # Include remaining indices
             missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
             ranked_indices.extend(missing_indices)
             
@@ -90,7 +107,7 @@ Articles:
             return ranked_results
         except Exception as e:
             logger.error(f"{self.source_id} ranking failed: {str(e)}")
-            return results[:display_result_count]
+            return results[:display_result_count]  # Fallback to original order
 
     def generate_summary(self, query, results, prompt_text, prompt_params):
         if not results:
