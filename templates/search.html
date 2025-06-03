@@ -1,8 +1,7 @@
-<xai_article artifact_id="f3982601-30a9-475b-a32b-8c3d7f04dec7" artifact_version_id="h2i3j4k5m6n7o8p9q0r1s2t3u4v5w6x7" title="search.html" contentType="text/html">
 {% extends "base.html" %}
 {% block title %}Search{% endblock %}
-{% block content %}
 
+{% block content %}
 <h1>Fireside AI Search Assistant</h1>
 
 <form method="POST" id="search-form">
@@ -56,105 +55,95 @@
 </form>
 
 {% if error %}
-  <div class="alert alert-danger mt-3">{{ error }}</div>
+  <div class="alert alert-danger">{{ error }}</div>
 {% endif %}
 
 {% if total_results > 0 %}
-  <h4 class="mt-4">Found {{ total_results }} results</h4>
+  <p>Found {{ total_results }} results</p>
 {% endif %}
 
-<div class="nav nav-tabs mt-4" role="tablist">
+<div class="nav nav-tabs" id="results-section">
   {% for source in sources %}
-    <button class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-bs-toggle="tab" data-bs-target="#{{ source.id }}" type="button" role="tab">
-      {{ source.name }}
-    </button>
+    <button class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-bs-toggle="tab" data-bs-target="#{{ source.id }}" type="button" role="tab">{{ source.name }}</button>
   {% endfor %}
 </div>
 
-<div id="results-section" class="tab-content mt-4">
-  {% for source in sources %}
-    <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ source.id }}" role="tabpanel">
-      {% if source.summary %}
-        <h5>AI Summary</h5>
-        <div id="{{ source.id }}-summary-content">{{ source.summary|safe }}</div>
-      {% endif %}
+{% for source in sources %}
+  <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ source.id }}" role="tabpanel">
+    {% if source.summary %}
+      <h3>AI Summary</h3>
+      <div id="{{ source.id }}-summary-content">{{ source.summary|safe }}</div>
+    {% endif %}
 
-      {% if source.results.ranked %}
-        <h6>Top Relevant Results (AI-Ranked)</h6>
-        {% for result in source.results.ranked %}
-          <div class="card mb-2">
-            <div class="card-body">
-              <h5>{{ result.title }}</h5>
-              {% if source.id == 'pubmed' %}
-                <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
-                <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
-                <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
-              {% else %}
-                <p><strong>Summary:</strong> {{ result.summary|default('No summary available')|truncate(300) }}</p>
-                <p><strong>Date:</strong> {{ result.date|default('N/A') }}</p>
-              {% endif %}
-            </div>
-          </div>
-        {% endfor %}
-      {% endif %}
+    {% if source.results.ranked %}
+      <h4>Top Relevant Results (AI-Ranked)</h4>
+      {% for result in source.results.ranked %}
+        <div class="result">
+          <strong>{{ result.title }}</strong><br>
+          {% if source.id == 'pubmed' %}
+            Authors: {{ result.authors|default('N/A') }}<br>
+            Journal: {{ result.journal|default('N/A') }}<br>
+            Date: {{ result.publication_date|default('N/A') }}<br>
+            Abstract: {{ result.abstract|default('No abstract available')|truncate(300) }}<br>
+          {% else %}
+            Summary: {{ result.summary|default('No summary available')|truncate(300) }}<br>
+            Date: {{ result.date|default('N/A') }}<br>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% endif %}
 
-      {% if source.results.all %}
-        <h6>All Results</h6>
-        {% for result in source.results.all %}
-          <div class="card mb-2">
-            <div class="card-body">
-              <h5>{{ result.title }}</h5>
-              {% if source.id == 'pubmed' %}
-                <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
-                <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
-                <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
-              {% else %}
-                <p><strong>Summary:</strong> {{ result.summary|default('No summary available')|truncate(300) }}</p>
-                <p><strong>Date:</strong> {{ result.date|default('N/A') }}</p>
-              {% endif %}
-            </div>
-          </div>
-        {% endfor %}
-      {% endif %}
+    {% if source.results.all %}
+      <h4>All Results</h4>
+      {% for result in source.results.all %}
+        <div class="result">
+          <strong>{{ result.title }}</strong><br>
+          {% if source.id == 'pubmed' %}
+            Authors: {{ result.authors|default('N/A') }}<br>
+            Journal: {{ result.journal|default('N/A') }}<br>
+            Date: {{ result.publication_date|default('N/A') }}<br>
+            Abstract: {{ result.abstract|default('No abstract available')|truncate(300) }}<br>
+          {% else %}
+            Summary: {{ result.summary|default('No summary available')|truncate(300) }}<br>
+            Date: {{ result.date|default('N/A') }}<br>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% endif %}
 
-      {% if source.results.fallback %}
-        <h6>Fallback Results (Outside Specified Timeframe)</h6>
-        {% for result in source.results.fallback %}
-          <div class="card mb-2">
-            <div class="card-body">
-              <h5>{{ result.title }}</h5>
-              {% if source.id == 'pubmed' %}
-                <p><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
-                <p><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
-                <p><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                <p><strong>Abstract:</strong> {{ result.abstract|default('No abstract available')|truncate(300) }}</p>
-              {% else %}
-                <p><strong>Summary:</strong> {{ result.summary|default('No summary available')|truncate(300) }}</p>
-                <p><strong>Date:</strong> {{ result.date|default('N/A') }}</p>
-              {% endif %}
-            </div>
-          </div>
-        {% endfor %}
-      {% endif %}
-    </div>
-  {% endfor %}
-</div>
+    {% if source.results.fallback %}
+      <h4>Fallback Results (Outside Specified Timeframe)</h4>
+      {% for result in source.results.fallback %}
+        <div class="result">
+          <strong>{{ result.title }}</strong><br>
+          {% if source.id == 'pubmed' %}
+            Authors: {{ result.authors|default('N/A') }}<br>
+            Journal: {{ result.journal|default('N/A') }}<br>
+            Date: {{ result.publication_date|default('N/A') }}<br>
+            Abstract: {{ result.abstract|default('No abstract available')|truncate(300) }}<br>
+          {% else %}
+            Summary: {{ result.summary|default('No summary available')|truncate(300) }}<br>
+            Date: {{ result.date|default('N/A') }}<br>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+{% endfor %}
 
 {% if total_results > per_page %}
-  <nav class="mt-4">
+  <nav>
     <ul class="pagination">
       <li class="page-item {% if page == 1 %}disabled{% endif %}">
-        <a class="page-link" href="?page={{ page - 1 }}">Previous</a>
+        <a class="page-link" href="#">Previous</a>
       </li>
       {% for p in range(1, total_pages + 1) %}
         <li class="page-item {% if p == page %}active{% endif %}">
-          <a class="page-link" href="?page={{ p }}">{{ p }}</a>
+          <a class="page-link" href="#">{{ p }}</a>
         </li>
       {% endfor %}
       <li class="page-item {% if page == total_pages %}disabled{% endif %}">
-        <a class="page-link" href="?page={{ page + 1 }}">Next</a>
+        <a class="page-link" href="#">Next</a>
       </li>
     </ul>
   </nav>
@@ -167,33 +156,35 @@ document.addEventListener('DOMContentLoaded', function () {
   const promptTextArea = document.getElementById('prompt_text');
   const searchForm = document.getElementById('search-form');
   const resultsSection = document.getElementById('results-section');
-  const searchOlderCheckbox = document.getElementById('search_older');
-  const startYearDiv = document.getElementById('start_year_div');
 
+  // Sync prompt text when prompt changes
   promptSelect.addEventListener('change', function () {
     const selectedPrompt = prompts.find(p => p.id === this.value);
     promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
   });
 
+  // Show/hide start year
+  const searchOlderCheckbox = document.getElementById('search_older');
+  const startYearDiv = document.getElementById('start_year_div');
   searchOlderCheckbox.addEventListener('change', function () {
     startYearDiv.style.display = this.checked ? 'block' : 'none';
   });
 
+  // Clear results and show loading
   searchForm.addEventListener('submit', function () {
     resultsSection.innerHTML = '';
     {% for source in sources %}
-      const summaryContent{{ loop.index }} = document.getElementById('{{ source.id }}-summary-content');
-      const summaryLoading{{ loop.index }} = document.getElementById('{{ source.id }}-summary-loading');
-      const summaryMessage{{ loop.index }} = document.getElementById('{{ source.id }}-summary-message');
-      if (summaryContent{{ loop.index }}) summaryContent{{ loop.index }}.innerHTML = '';
-      if (summaryLoading{{ loop.index }}) summaryLoading{{ loop.index }}.style.display = 'inline-block';
-      if (summaryMessage{{ loop.index }}) summaryMessage{{ loop.index }}.style.display = 'block';
+    let summaryContent{{ loop.index }} = document.getElementById('{{ source.id }}-summary-content');
+    if (summaryContent{{ loop.index }}) summaryContent{{ loop.index }}.innerHTML = '';
     {% endfor %}
   });
 
+  // Load summaries if prompt was used
   {% if has_prompt %}
     {% for source in sources %}
+    if ({{ 'true' if source.results.ranked or source.results.all or source.results.fallback else 'false' }}) {
       fetchSummary('{{ source.id }}');
+    }
     {% endfor %}
   {% endif %}
 });
@@ -201,11 +192,11 @@ document.addEventListener('DOMContentLoaded', function () {
 function fetchSummary(sourceId) {
   const query = '{{ query|default('')|e }}';
   const promptText = document.getElementById('prompt_text').value;
-  const results = sourceId === 'pubmed' ? {{ pubmed_results|tojson }} : {{ fda_results|tojson }};
-  const fallbackResults = sourceId === 'pubmed' ? {{ pubmed_fallback_results|tojson }} : [];
-  const promptParams = {{ prompt_params|tojson }};
-  const formData = new FormData();
+  const results = sourceId === 'pubmed' ? {{ pubmed_results|tojson|default('[]') }} : {{ fda_results|tojson|default('[]') }};
+  const fallbackResults = sourceId === 'pubmed' ? {{ pubmed_fallback_results|tojson|default('[]') }} : [];
+  const promptParams = {{ prompt_params|tojson|default('{}') }};
 
+  const formData = new FormData();
   formData.append('query', query);
   formData.append('prompt_text', promptText);
   formData.append('results', JSON.stringify(results));
@@ -213,42 +204,30 @@ function fetchSummary(sourceId) {
   formData.append('prompt_params', JSON.stringify(promptParams));
   formData.append('source_id', sourceId);
 
-  const summaryLoading = document.getElementById(sourceId + '-summary-loading');
-  const summaryMessage = document.getElementById(sourceId + '-summary-message');
   const summaryContent = document.getElementById(sourceId + '-summary-content');
-
-  if (summaryLoading) summaryLoading.style.display = 'inline-block';
-  if (summaryMessage) summaryMessage.style.display = 'block';
-  if (summaryContent) summaryContent.innerHTML = '';
 
   fetch('{{ url_for("search_summary") }}', {
     method: 'POST',
     body: formData
   })
-    .then(response => response.json())
+    .then(res => res.json())
     .then(data => {
-      if (summaryLoading) summaryLoading.style.display = 'none';
-      if (summaryMessage) summaryMessage.style.display = 'none';
       if (summaryContent) {
         if (data.status === 'success') {
           summaryContent.innerHTML = data.prompt_output;
           if (data.fallback_prompt_output && sourceId === 'pubmed') {
-            summaryContent.innerHTML += '<hr><h6>Fallback Summary</h6>' + data.fallback_prompt_output;
+            summaryContent.innerHTML += '<h4>Fallback Summary</h4>' + data.fallback_prompt_output;
           }
         } else {
-          summaryContent.innerHTML = '<div class="alert alert-danger">Error generating summary: ' + data.message + '</div>';
+          summaryContent.innerHTML = '<p class="text-danger">Error generating summary: ' + data.message + '</p>';
         }
       }
     })
     .catch(error => {
-      if (summaryLoading) summaryLoading.style.display = 'none';
-      if (summaryMessage) summaryMessage.style.display = 'none';
       if (summaryContent) {
-        summaryContent.innerHTML = '<div class="alert alert-danger">Failed to load summary: ' + error + '</div>';
+        summaryContent.innerHTML = '<p class="text-danger">Failed to load summary: ' + error + '</p>';
       }
     });
 }
 </script>
-
 {% endblock %}
-</xai_article>
