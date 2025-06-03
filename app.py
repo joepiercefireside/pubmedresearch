@@ -15,6 +15,7 @@ import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
 import traceback
 import time
+import re
 import tenacity
 import email_validator
 from email_validator import validate_email, EmailNotValidError
