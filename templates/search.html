@@ -39,7 +39,7 @@
         <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
         <label class="form-check-label" for="search_older">Search older articles (select start year)</label>
       </div>
-      <div class="mb-3" id="start_year_div" style="display: {% if search_older %}block{% else 'none' %};">
+      <div class="mb-3" id="start_year_div" style="display: {{ 'block' if search_older else 'none' }};">
         <label for="start_year" class="form-label">Start Year</label>
         <select class="form-select" id="start_year" name="start_year">
           {% for year in range(2000, 2026) %}
@@ -229,10 +229,10 @@
         {% endfor %}
       });
 
-      // Fetch summaries for each source only if results exist
+      // Fetch summaries for each source only if results exist and no initial summary
       {% if has_prompt %}
         {% for source in sources %}
-          if ({{ 'true' if source.results.ranked or source.results.all or source.results.fallback else 'false' }}) {
+          if ({{ 'true' if (source.results.ranked or source.results.all or source.results.fallback) and not source.summary else 'false' }}) {
             console.log('Fetching summary for source: {{ source.id }}');
             fetchSummary('{{ source.id }}');
           }
