@@ -60,7 +60,9 @@ def init_progress_db():
     c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
                  (query TEXT PRIMARY KEY, response TEXT, timestamp REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS search_history
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, query TEXT, prompt_text TEXT, sources TEXT, results TEXT, timestamp REAL)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, query TEXT, prompt_text TEXT, sources TEXT, result_ids TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS search_results
+                 (id TEXT PRIMARY KEY, source_id TEXT, result_data TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS chat_history
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, session_id TEXT, message TEXT, is_user BOOLEAN, timestamp REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS user_settings
@@ -91,21 +93,40 @@ def get_search_progress(user_id, query):
 def save_search_history(user_id, query, prompt_text, sources, results):
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
-    c.execute("INSERT INTO search_history (user_id, query, prompt_text, sources, results, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-              (user_id, query, prompt_text, json.dumps(sources), json.dumps(results), time.time()))
+    result_ids = []
+    for result in results:
+        result_id = hashlib.md5(json.dumps(result, sort_keys=True).encode()).hexdigest()
+        c.execute("INSERT OR REPLACE INTO search_results (id, source_id, result_data) VALUES (?, ?, ?)",
+                  (result_id, result.get('source_id', 'unknown'), json.dumps(result)))
+        result_ids.append(result_id)
+    c.execute("INSERT INTO search_history (user_id, query, prompt_text, sources, result_ids, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+              (user_id, query, prompt_text, json.dumps(sources), json.dumps(result_ids), time.time()))
     conn.commit()
     conn.close()
     logger.info(f"Saved search history for user={user_id}, query={query}")
+    return result_ids
 
 def get_search_history(user_id):
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
-    c.execute("SELECT id, query, prompt_text, sources, timestamp FROM search_history WHERE user_id = ? ORDER BY timestamp DESC",
+    c.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = ? ORDER BY timestamp DESC",
               (user_id,))
     results = [
-        {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]), 'timestamp': row[4]}
+        {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]), 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
         for row in c.fetchall()
     ]
+    conn.close()
+    return results
+
+def get_search_results(result_ids):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    results = []
+    for result_id in result_ids:
+        c.execute("SELECT result_data FROM search_results WHERE id = ?", (result_id,))
+        result = c.fetchone()
+        if result:
+            results.append(json.loads(result[0]))
     conn.close()
     return results
 
@@ -250,7 +271,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 continue
             handler = search_handlers[source_id]
             primary_results, _ = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
-            results.extend(primary_results)
+            if primary_results is not None:
+                results.extend([dict(r, source_id=source_id) for r in primary_results])
         
         logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
         if not results:
@@ -522,6 +544,7 @@ def search():
             fda_results = []
             googlescholar_results = []
             pubmed_fallback_results = []
+            all_results = []
             
             for source_id in sources_selected:
                 if source_id not in search_handlers:
@@ -532,6 +555,9 @@ def search():
                 update_search_progress(current_user.id, query, f"executing {handler.name} search")
                 
                 primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
+                
+                primary_results = primary_results or []
+                fallback_results = fallback_results or []
                 
                 if primary_results:
                     update_search_progress(current_user.id, query, f"ranking {handler.name} results")
@@ -555,31 +581,33 @@ def search():
                     'summary': summary
                 }
                 
-                if source_id == 'pubmed' and (primary_results or fallback_results):
-                    conn = get_db_connection()
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
-                                (query, json.dumps(primary_results + fallback_results)))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    pubmed_results = primary_results
-                    pubmed_fallback_results = fallback_results
-                
-                if source_id == 'fda':
+                if source_id == 'pubmed':
+                    if primary_results or fallback_results:
+                        conn = get_db_connection()
+                        cur = conn.cursor()
+                        cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
+                                    (query, json.dumps(primary_results + fallback_results)))
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+                        pubmed_results = primary_results
+                        pubmed_fallback_results = fallback_results
+                elif source_id == 'fda':
                     fda_results = primary_results
-                if source_id == 'googlescholar':
+                elif source_id == 'googlescholar':
                     googlescholar_results = primary_results
                 
                 total_results += len(primary_results) + len(fallback_results)
                 sources.append(source_data)
+                
+                all_results.extend([dict(r, source_id=source_id) for r in primary_results])
+                all_results.extend([dict(r, source_id=source_id) for r in fallback_results])
             
-            # Apply source filters
             if filter_sources:
                 sources = [s for s in sources if s['id'] in filter_sources]
                 total_results = sum(len(s['results']['all']) + len(s['results']['fallback']) for s in sources)
+                all_results = [r for r in all_results if r['source_id'] in filter_sources]
             
-            # Paginate results
             start_idx = (page - 1) * per_page
             end_idx = start_idx + per_page
             
@@ -590,15 +618,9 @@ def search():
             
             total_pages = (total_results + per_page - 1) // per_page
             
-            # Save search to history
-            results_save = []
-            for source in sources:
-                results_save.extend(source['results']['all'])
-                results_save.extend(source['results']['fallback'])
-            save_search_history(current_user.id, query, selected_prompt_text, sources_selected, results_save)
+            result_ids = save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
             
-            # Store results in session for chatbot
-            session['latest_search_results'] = json.dumps(results_save)
+            session['latest_search_result_ids'] = json.dumps(result_ids)
             session['latest_query'] = query
             
             update_search_progress(current_user.id, query, "complete")
@@ -723,7 +745,8 @@ def chat():
         if user_message:
             save_chat_message(current_user.id, session_id, user_message, True)
             
-            search_results = json.loads(session.get('latest_search_results', '[]'))
+            result_ids = json.loads(session.get('latest_search_result_ids', '[]'))
+            search_results = get_search_results(result_ids)
             query = session.get('latest_query', '')
             context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', r.get('date', 'N/A'))}" for r in search_results])
             
