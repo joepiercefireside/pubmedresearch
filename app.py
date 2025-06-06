@@ -173,6 +173,33 @@ def validate_user_email(email):
         logger.error(f"Invalid email address: {email}, error: {str(e)}")
         return False
 
+def parse_prompt(prompt_text):
+    if not prompt_text:
+        return {
+            'summary_result_count': 20,
+            'display_result_count': 80,
+            'limit_presentation': False
+        }
+    
+    prompt_text_lower = prompt_text.lower()
+    
+    summary_result_count = 20
+    if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
+        summary_result_count = min(int(match.group(1)), 20)
+    elif 'top' in prompt_text_lower:
+        summary_result_count = 3
+    
+    display_result_count = 80
+    limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
+    
+    logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
+    
+    return {
+        'summary_result_count': summary_result_count,
+        'display_result_count': display_result_count,
+        'limit_presentation': limit_presentation
+    }
+
 def query_grok_api(prompt, context):
     try:
         api_key = os.environ.get('XAI_API_KEY')
@@ -737,19 +764,19 @@ def prompt():
             cur = conn.cursor()
             try:
                 cur.execute('INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)', 
-                          (current_user.id, prompt_name, prompt_text))
+                            (current_user.id, prompt_name, prompt_text))
                 conn.commit()
                 flash('Prompt saved successfully.', 'success')
             except Exception as e:
                 conn.rollback()
-                flash(f"Failed to save prompt: {str(e)}", 'error')
+                flash(f'Failed to save prompt: {str(e)}', 'error')
             finally:
                 cur.close()
                 conn.close()
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT id, prompt_name, prompt_text, created FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
+    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
                 (current_user.id,))
     prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
@@ -813,7 +840,7 @@ def delete_prompt(id):
         flash('Prompt deleted successfully.', 'success')
     except Exception as e:
         conn.rollback()
-        flash(f"Failed to delete prompt: {str(e)}", 'error')
+        flash(f'Failed to delete prompt: {str(e)}', 'error')
     finally:
         cur.close()
         conn.close()
@@ -826,7 +853,6 @@ def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # Pre-populate form if query parameters are provided
     pre_query = request.args.get('keywords', '')
     pre_prompt = request.args.get('prompt_text', '')
     
