@@ -13,6 +13,10 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk import pos_tag
 from bs4 import BeautifulSoup
+import time
+import random
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -57,7 +61,6 @@ class SearchHandler(ABC):
             return []
         
         if sort_by == 'date':
-            # Sort by publication date (descending)
             sorted_results = sorted(results, key=lambda x: x.get('publication_date', x.get('date', '0')), reverse=True)
             return sorted_results[:display_result_count]
         
@@ -229,6 +232,16 @@ class GoogleScholarSearchHandler(SearchHandler):
             return [], []
         
         search_query = ' '.join(search_terms)
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36'
+        ]
+        
+        session = requests.Session()
+        retries = Retry(total=3, backoff_factor=1, status_forcelist=[403, 429])
+        session.mount('https://', HTTPAdapter(max_retries=retries))
+        
         try:
             base_url = "https://scholar.google.com/scholar"
             params = {
@@ -237,8 +250,8 @@ class GoogleScholarSearchHandler(SearchHandler):
                 "as_ylo": start_year_int,
                 "as_yhi": datetime.now().year
             }
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.get(base_url, params=params, headers=headers)
+            headers = {'User-Agent': random.choice(user_agents)}
+            response = session.get(base_url, params=params, headers=headers, timeout=10)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -453,6 +466,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         (r'in\s+(\d{4})', lambda m: (int(m.group(1)), int(m.group(1)))),
         (r'since\s+(\d{4})', lambda m: (int(m.group(1)), today.year)),
         (r'from\s+(\d{4})\s+to\s+(\d{4})', lambda m: (int(m.group(1)), int(m.group(2)))),
+        (r'from\s+(\d{4})\s+and\s+(\d{4})', lambda m: (int(m.group(1)), int(m.group(2)))),
         (r'past\s+year', lambda m: 1),
         (r'past\s+week', lambda m: 0.019178)
     ]
