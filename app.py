@@ -44,6 +44,16 @@ if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
+# Add datetimeformat filter
+def datetimeformat(value, format='%Y-%m-%d %H:%M:%S'):
+    try:
+        dt = datetime.fromtimestamp(value)
+        return dt.strftime(format)
+    except (ValueError, TypeError):
+        return str(value)
+
+app.jinja_env.filters['datetimeformat'] = datetimeformat
+
 def init_progress_db():
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
@@ -762,6 +772,44 @@ def chat():
         return render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours)
     
     return render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours)
+
+@app.route('/chat_message', methods=['POST'])
+@login_required
+def chat_message():
+    if not current_user.is_authenticated:
+        return jsonify({'status': 'error', 'message': 'User not authenticated'}), 401
+    
+    session_id = session.get('chat_session_id', str(hashlib.md5(str(time.time()).encode()).hexdigest()))
+    session['chat_session_id'] = session_id
+    
+    user_message = request.form.get('message', '')
+    if not user_message:
+        return jsonify({'status': 'error', 'message': 'Message cannot be empty'}), 400
+    
+    try:
+        save_chat_message(current_user.id, session_id, user_message, True)
+        
+        retention_hours = get_user_settings(current_user.id)
+        chat_history = get_chat_history(current_user.id, session_id, retention_hours)
+        
+        result_ids = json.loads(session.get('latest_search_result_ids', '[]'))
+        search_results = get_search_results(result_ids)
+        query = session.get('latest_query', '')
+        context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', r.get('date', 'N/A'))}" for r in search_results])
+        
+        with open('static/templates/chatbot_prompt.txt', 'r', encoding='utf-8') as f:
+            system_prompt = f.read()
+        
+        history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
+        full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
+        
+        response = query_grok_api(system_prompt, full_context)
+        save_chat_message(current_user.id, session_id, response, False)
+        
+        return jsonify({'status': 'success', 'message': response})
+    except Exception as e:
+        logger.error(f"Error in chat_message: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/previous_searches', methods=['GET'])
 @login_required
