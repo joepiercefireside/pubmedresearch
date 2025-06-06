@@ -594,7 +594,8 @@ def search():
                 all_results.extend([dict(r, source_id=source_id) for r in primary_results])
                 all_results.extend([dict(r, source_id=source_id) for r in fallback_results])
             
-            if filter_sources and len(sources_selected) > 1:
+            logger.debug(f"Filter sources: {filter_sources}, Sources selected: {sources_selected}")
+            if filter_sources and len(filter_sources) > 0 and len(sources_selected) > 1:
                 sources = [s for s in sources if s['id'] in filter_sources]
                 total_results = sum(len(s['results']['all']) + len(s['results']['fallback']) for s in sources)
                 all_results = [r for r in all_results if r['source_id'] in filter_sources]
