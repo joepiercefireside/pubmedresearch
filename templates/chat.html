@@ -1,268 +1,46 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Search - PubMedResearcher</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=3">
-    <link rel="icon" href="{{ url_for('static', filename='images/logo.png') }}" type="image/png">
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-</head>
-<body class="grey-background">
-    <header>
-        <nav>
-            <div class="logo">
-                <a href="{{ url_for('index') }}">
-                    <img src="{{ url_for('static', filename='images/logo.png') }}" alt="PubMedResearcher Logo" class="logo-img">
-                </a>
-            </div>
-            <ul>
-                <li><a href="{{ url_for('search') }}" class="active">Search</a></li>
-                <li><a href="{{ url_for('chat') }}">Chat</a></li>
-                <li><a href="{{ url_for('prompt') }}">Prompts</a></li>
-                <li><a href="{{ url_for('notifications') }}">Notifications</a></li>
-                <li><a href="{{ url_for('previous_searches') }}">Previous Searches</a></li>
-                <li><a href="{{ url_for('help') }}">Help</a></li>
-                {% if current_user.is_authenticated %}
-                    <li><a href="{{ url_for('logout') }}">Logout ({{ username }})</a></li>
-                {% else %}
-                    <li><a href="{{ url_for('login') }}">Login</a></li>
-                    <li><a href="{{ url_for('register') }}">Register</a></li>
-                {% endif %}
-            </ul>
-        </nav>
-    </header>
-
-    <main>
-        <h1>Search Research Articles</h1>
-        <form method="POST" action="{{ url_for('search') }}" id="search-form">
-            <div class="search-inputs">
-                <input type="text" name="query" placeholder="Enter search query..." value="{{ query }}" required>
-                <select name="prompt_id">
-                    <option value="">Select a prompt...</option>
-                    {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                    {% endfor %}
-                </select>
-                <textarea name="prompt_text" placeholder="Enter custom prompt...">{{ prompt_text }}</textarea>
-            </div>
-            <div class="search-options">
-                <label><input type="checkbox" name="search_older" {% if search_older %}checked{% endif %}> Search older articles</label>
-                <input type="number" name="start_year" placeholder="Start year" value="{{ start_year }}">
-                <label>Sources:</label>
-                <label><input type="checkbox" name="sources" value="pubmed" checked> PubMed</label>
-                <label><input type="checkbox" name="sources" value="fda"> FDA.gov</label>
-                <label><input type="checkbox" name="sources" value="googlescholar"> Google Scholar</label>
-                <label>Sort by:</label>
-                <select name="sort_by">
-                    <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
-                    <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Date</option>
-                </select>
-            </div>
-            <button type="submit">Search</button>
-        </form>
-
-        {% if error %}
-            <div class="error">{{ error }}</div>
-        {% endif %}
-
-        <div id="search-progress"></div>
-
-        {% if sources %}
-            <div class="results">
-                <h2>Search Results ({{ total_results }})</h2>
-                <div class="filter-options">
-                    <label>Filter by source:</label>
-                    {% for source in sources %}
-                        <label><input type="checkbox" name="filter_sources" value="{{ source.id }}" {% if source.id in filter_sources %}checked{% endif %} onchange="applyFilters()"> {{ source.name }}</label>
-                    {% endfor %}
-                </div>
-                {% for source in sources %}
-                    <div class="source-results" id="{{ source.id }}-results">
-                        <h3>{{ source.name }} Results</h3>
-                        {% if source.results.ranked %}
-                            <h4>Ranked Results</h4>
-                            {% for result in source.results.ranked %}
-                                <div class="result">
-                                    <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p><strong>Authors:</strong> {{ result.authors }}</p>
-                                    <p><strong>Journal:</strong> {{ result.journal }}</p>
-                                    <p><strong>Date:</strong> {{ result.publication_date }}</p>
-                                    <p>{{ result.abstract or result.summary }}</p>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                        {% if source.results.all %}
-                            <h4>All Results</h4>
-                            {% for result in source.results.all %}
-                                <div class="result">
-                                    <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p><strong>Authors:</strong> {{ result.authors }}</p>
-                                    <p><strong>Journal:</strong> {{ result.journal }}</p>
-                                    <p><strong>Date:</strong> {{ result.publication_date }}</p>
-                                    <p>{{ result.abstract or result.summary }}</p>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                        {% if source.results.fallback %}
-                            <h4>Fallback Results</h4>
-                            {% for result in source.results.fallback %}
-                                <div class="result">
-                                    <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p><strong>Authors:</strong> {{ result.authors }}</p>
-                                    <p><strong>Journal:</strong> {{ result.journal }}</p>
-                                    <p><strong>Date:</strong> {{ result.publication_date }}</p>
-                                    <p>{{ result.abstract or result.summary }}</p>
-                                </div>
-                            {% endfor %}
-                        {% endif %}
-                        {% if source.summary %}
-                            <div class="summary">
-                                <h4>Summary</h4>
-                                <p>{{ source.summary }}</p>
-                            </div>
-                        {% endif %}
+{% extends "base.html" %}
+{% block title %}Chat{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>Chat with Research Assistant</h1>
+    <div class="card">
+        <div class="card-body">
+            <div class="chat-history" style="max-height: 400px; overflow-y: auto;">
+                {% for message in chat_history %}
+                    <div class="message {% if message.is_user %}bg-light{% else %}bg-info-subtle{% endif %} mb-2 p-2 rounded">
+                        <strong>{{ 'You' if message.is_user else 'Assistant' }} ({{ message.timestamp|datetimeformat('%Y-%m-%d %H:%M:%S') }}):</strong>
+                        <p>{{ message.message }}</p>
                     </div>
                 {% endfor %}
-                <div class="pagination">
-                    {% if page > 1 %}
-                        <a href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Previous</a>
-                    {% endif %}
-                    {% for p in range(1, total_pages + 1) %}
-                        <a href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}" {% if p == page %}class="active"{% endif %}>{{ p }}</a>
+            </div>
+            <form method="POST" action="{{ url_for('chat') }}" class="mt-3">
+                <div class="input-group">
+                    <textarea class="form-control" name="message" placeholder="Type your message here..." required></textarea>
+                    <button type="submit" class="btn btn-primary">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div class="card mt-3">
+        <div class="card-body">
+            <h2>Chat Memory Retention</h2>
+            <form method="POST" action="{{ url_for('chat') }}">
+                <div class="mb-3">
+                    <label for="retention_hours" class="form-label">Retention Hours (1-720):</label>
+                    <input type="number" class="form-control" id="retention_hours" name="retention_hours" value="{{ retention_hours }}" min="1" max="720">
+                </div>
+                <button type="submit" class="btn btn-primary">Update</button>
+            </form>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
+                            {{ message }}
+                        </div>
                     {% endfor %}
-                    {% if page < total_pages %}
-                        <a href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Next</a>
-                    {% endif %}
-                </div>
-            </div>
-        {% endif %}
-
-        <!-- Chat Bubble and Pop-up Modal -->
-        <div class="chat-bubble" id="chat-bubble">
-            <span>💬</span>
+                {% endif %}
+            {% endwith %}
         </div>
-        <div class="chat-modal" id="chat-modal">
-            <div class="chat-modal-content">
-                <span class="close-chat">&times;</span>
-                <h3>Chat with Research Assistant</h3>
-                <div class="chat-history" id="chat-history">
-                    <!-- Chat messages will be appended here -->
-                </div>
-                <form id="chat-form">
-                    <textarea name="message" id="chat-message" placeholder="Type your question..." required></textarea>
-                    <button type="submit">Send</button>
-                </form>
-            </div>
-        </div>
-    </main>
-
-    <footer>
-        <p>© 2025 PubMedResearcher. All rights reserved.</p>
-    </footer>
-
-    <script>
-        // Search progress updates
-        function startProgressUpdates() {
-            const query = "{{ query | e }}";
-            if (query) {
-                const source = new EventSource("{{ url_for('search_progress') }}?query=" + encodeURIComponent(query));
-                const progressDiv = document.getElementById("search-progress");
-                source.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    progressDiv.innerHTML = `<p>Status: ${data.status}</p>`;
-                    if (data.status.includes("complete") || data.status.includes("error")) {
-                        source.close();
-                    }
-                };
-                source.onerror = function() {
-                    progressDiv.innerHTML = "<p>Error fetching search progress.</p>";
-                    source.close();
-                };
-            }
-        }
-
-        // Apply filters
-        function applyFilters() {
-            const filterSources = Array.from(document.querySelectorAll('input[name="filter_sources"]:checked')).map(el => el.value);
-            const url = new URL(window.location);
-            url.searchParams.set('filter_sources', filterSources.join(','));
-            window.location = url;
-        }
-
-        // Chat modal functionality
-        $(document).ready(function() {
-            const chatBubble = $('#chat-bubble');
-            const chatModal = $('#chat-modal');
-            const closeChat = $('.close-chat');
-            const chatForm = $('#chat-form');
-            const chatHistory = $('#chat-history');
-            const chatMessage = $('#chat-message');
-
-            // Toggle chat modal
-            chatBubble.click(function() {
-                chatModal.show();
-            });
-
-            closeChat.click(function() {
-                chatModal.hide();
-            });
-
-            // Handle chat form submission
-            chatForm.submit(function(e) {
-                e.preventDefault();
-                const message = chatMessage.val().trim();
-                if (!message) return;
-
-                // Append user message
-                chatHistory.append(`
-                    <div class="message user-message">
-                        <strong>You (${new Date().toLocaleString()}):</strong>
-                        <p>${message}</p>
-                    </div>
-                `);
-                chatMessage.val('');
-                chatHistory.scrollTop(chatHistory[0].scrollHeight);
-
-                // Send message to server
-                $.ajax({
-                    url: '{{ url_for("chat_message") }}',
-                    type: 'POST',
-                    data: { message: message },
-                    success: function(response) {
-                        if (response.status === 'success') {
-                            chatHistory.append(`
-                                <div class="message assistant-message">
-                                    <strong>Assistant (${new Date().toLocaleString()}):</strong>
-                                    <p>${response.message}</p>
-                                </div>
-                            `);
-                            chatHistory.scrollTop(chatHistory[0].scrollHeight);
-                        } else {
-                            chatHistory.append(`
-                                <div class="message assistant-message error">
-                                    <strong>Assistant (${new Date().toLocaleString()}):</strong>
-                                    <p>Error: ${response.message}</p>
-                                </div>
-                            `);
-                            chatHistory.scrollTop(chatHistory[0].scrollHeight);
-                        }
-                    },
-                    error: function() {
-                        chatHistory.append(`
-                            <div class="message assistant-message error">
-                                <strong>Assistant (${new Date().toLocaleString()}):</strong>
-                                <p>Error: Failed to communicate with server.</p>
-                            </div>
-                        `);
-                        chatHistory.scrollTop(chatHistory[0].scrollHeight);
-                    }
-                });
-            });
-
-            // Initialize progress updates
-            startProgressUpdates();
-        });
-    </script>
-</body>
-</html>
+    </div>
+</div>
+{% endblock %}

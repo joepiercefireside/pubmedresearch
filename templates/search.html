@@ -1,80 +1,77 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Search - PubMedResearcher</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=3">
-    <link rel="icon" href="{{ url_for('static', filename='images/logo.png') }}" type="image/png">
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-</head>
-<body class="grey-background">
-    <header>
-        <nav>
-            <div class="logo">
-                <a href="{{ url_for('index') }}">
-                    <img src="{{ url_for('static', filename='images/logo.png') }}" alt="PubMedResearcher Logo" class="logo-img">
-                </a>
-            </div>
-            <ul>
-                <li><a href="{{ url_for('search') }}" class="active">Search</a></li>
-                <li><a href="{{ url_for('chat') }}">Chat</a></li>
-                <li><a href="{{ url_for('prompt') }}">Prompts</a></li>
-                <li><a href="{{ url_for('notifications') }}">Notifications</a></li>
-                <li><a href="{{ url_for('previous_searches') }}">Previous Searches</a></li>
-                <li><a href="{{ url_for('help') }}">Help</a></li>
-                {% if current_user.is_authenticated %}
-                    <li><a href="{{ url_for('logout') }}">Logout ({{ username }})</a></li>
-                {% else %}
-                    <li><a href="{{ url_for('login') }}">Login</a></li>
-                    <li><a href="{{ url_for('register') }}">Register</a></li>
-                {% endif %}
-            </ul>
-        </nav>
-    </header>
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<div class="container">
+    <h1>Search Research Articles</h1>
+    <div class="card">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('search') }}" id="search-form">
+                <div class="mb-3">
+                    <input type="text" class="form-control" name="query" placeholder="Enter search query..." value="{{ query }}" required>
+                </div>
+                <div class="mb-3">
+                    <select class="form-control" name="prompt_id">
+                        <option value="">Select a prompt...</option>
+                        {% for prompt in prompts %}
+                            <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <textarea class="form-control" name="prompt_text" placeholder="Enter custom prompt..." rows="4">{{ prompt_text }}</textarea>
+                </div>
+                <div class="mb-3">
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" name="search_older" id="search_older" {% if search_older %}checked{% endif %}>
+                        <label class="form-check-label" for="search_older">Search older articles</label>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <input type="number" class="form-control" name="start_year" placeholder="Start year" value="{{ start_year }}">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Sources:</label>
+                    <div class="form-check form-check-inline">
+                        <input type="checkbox" class="form-check-input" name="sources" value="pubmed" id="source_pubmed" checked>
+                        <label class="form-check-label" for="source_pubmed">PubMed</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input type="checkbox" class="form-check-input" name="sources" value="fda" id="source_fda">
+                        <label class="form-check-label" for="source_fda">FDA.gov</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input type="checkbox" class="form-check-input" name="sources" value="googlescholar" id="source_googlescholar">
+                        <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label for="sort_by" class="form-label">Sort by:</label>
+                    <select class="form-control" name="sort_by" id="sort_by">
+                        <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
+                        <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Date</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Search</button>
+            </form>
+            {% if error %}
+                <div class="alert alert-danger mt-3">{{ error }}</div>
+            {% endif %}
+        </div>
+    </div>
 
-    <main>
-        <h1>Search Research Articles</h1>
-        <form method="POST" action="{{ url_for('search') }}" id="search-form">
-            <div class="search-inputs">
-                <input type="text" name="query" placeholder="Enter search query..." value="{{ query }}" required>
-                <select name="prompt_id">
-                    <option value="">Select a prompt...</option>
-                    {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                    {% endfor %}
-                </select>
-                <textarea name="prompt_text" placeholder="Enter custom prompt...">{{ prompt_text }}</textarea>
-            </div>
-            <div class="search-options">
-                <label><input type="checkbox" name="search_older" {% if search_older %}checked{% endif %}> Search older articles</label>
-                <input type="number" name="start_year" placeholder="Start year" value="{{ start_year }}">
-                <label>Sources:</label>
-                <label><input type="checkbox" name="sources" value="pubmed" checked> PubMed</label>
-                <label><input type="checkbox" name="sources" value="fda"> FDA.gov</label>
-                <label><input type="checkbox" name="sources" value="googlescholar"> Google Scholar</label>
-                <label>Sort by:</label>
-                <select name="sort_by">
-                    <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
-                    <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Date</option>
-                </select>
-            </div>
-            <button type="submit">Search</button>
-        </form>
+    <div id="search-progress" class="mt-3"></div>
 
-        {% if error %}
-            <div class="error">{{ error }}</div>
-        {% endif %}
-
-        <div id="search-progress"></div>
-
-        {% if sources %}
-            <div class="results">
+    {% if sources %}
+        <div class="card mt-3">
+            <div class="card-body">
                 <h2>Search Results ({{ total_results }})</h2>
-                <div class="filter-options">
-                    <label>Filter by source:</label>
+                <div class="mb-3">
+                    <label class="form-label">Filter by source:</label>
                     {% for source in sources %}
-                        <label><input type="checkbox" name="filter_sources" value="{{ source.id }}" {% if source.id in filter_sources %}checked{% endif %} onchange="applyFilters()"> {{ source.name }}</label>
+                        <div class="form-check form-check-inline">
+                            <input type="checkbox" class="form-check-input" name="filter_sources" value="{{ source.id }}" {% if source.id in filter_sources %}checked{% endif %} onchange="applyFilters()">
+                            <label class="form-check-label">{{ source.name }}</label>
+                        </div>
                     {% endfor %}
                 </div>
                 {% for source in sources %}
@@ -83,186 +80,192 @@
                         {% if source.results.ranked %}
                             <h4>Ranked Results</h4>
                             {% for result in source.results.ranked %}
-                                <div class="result">
+                                <div class="result mb-3 p-3 border rounded">
                                     <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p><strong>Authors:</strong> {{ result.authors }}</p>
-                                    <p><strong>Journal:</strong> {{ result.journal }}</p>
-                                    <p><strong>Date:</strong> {{ result.publication_date }}</p>
-                                    <p>{{ result.abstract or result.summary }}</p>
+                                    <p class="mb-1"><strong>Authors:</strong> {{ result.authors }}</p>
+                                    <p class="mb-1"><strong>Journal:</strong> {{ result.journal }}</p>
+                                    <p class="mb-1"><strong>Date:</strong> {{ result.publication_date }}</p>
+                                    <p>{{ result.abstract or result.summary|truncate(200) }}</p>
                                 </div>
                             {% endfor %}
                         {% endif %}
                         {% if source.results.all %}
                             <h4>All Results</h4>
                             {% for result in source.results.all %}
-                                <div class="result">
+                                <div class="result mb-3 p-3 border rounded">
                                     <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p><strong>Authors:</strong> {{ result.authors }}</p>
-                                    <p><strong>Journal:</strong> {{ result.journal }}</p>
-                                    <p><strong>Date:</strong> {{ result.publication_date }}</p>
-                                    <p>{{ result.abstract or result.summary }}</p>
+                                    <p class="mb-1"><strong>Authors:</strong> {{ result.authors }}</p>
+                                    <p class="mb-1"><strong>Journal:</strong> {{ result.journal }}</p>
+                                    <p class="mb-1"><strong>Date:</strong> {{ result.publication_date }}</p>
+                                    <p>{{ result.abstract or result.summary|truncate(200) }}</p>
                                 </div>
                             {% endfor %}
                         {% endif %}
                         {% if source.results.fallback %}
                             <h4>Fallback Results</h4>
                             {% for result in source.results.fallback %}
-                                <div class="result">
+                                <div class="result mb-3 p-3 border rounded">
                                     <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p><strong>Authors:</strong> {{ result.authors }}</p>
-                                    <p><strong>Journal:</strong> {{ result.journal }}</p>
-                                    <p><strong>Date:</strong> {{ result.publication_date }}</p>
-                                    <p>{{ result.abstract or result.summary }}</p>
+                                    <p class="mb-1"><strong>Authors:</strong> {{ result.authors }}</p>
+                                    <p class="mb-1"><strong>Journal:</strong> {{ result.journal }}</p>
+                                    <p class="mb-1"><strong>Date:</strong> {{ result.publication_date }}</p>
+                                    <p>{{ result.abstract or result.summary|truncate(200) }}</p>
                                 </div>
                             {% endfor %}
                         {% endif %}
                         {% if source.summary %}
-                            <div class="summary">
+                            <div class="summary mt-3">
                                 <h4>Summary</h4>
                                 <p>{{ source.summary }}</p>
                             </div>
                         {% endif %}
                     </div>
                 {% endfor %}
-                <div class="pagination">
-                    {% if page > 1 %}
-                        <a href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Previous</a>
-                    {% endif %}
-                    {% for p in range(1, total_pages + 1) %}
-                        <a href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}" {% if p == page %}class="active"{% endif %}>{{ p }}</a>
-                    {% endfor %}
-                    {% if page < total_pages %}
-                        <a href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Next</a>
-                    {% endif %}
-                </div>
-            </div>
-        {% endif %}
-
-        <!-- Chat Bubble and Pop-up Modal -->
-        <div class="chat-bubble" id="chat-bubble">
-            <span>💬</span>
-        </div>
-        <div class="chat-modal" id="chat-modal">
-            <div class="chat-modal-content">
-                <span class="close-chat">&times;</span>
-                <h3>Chat with Research Assistant</h3>
-                <div class="chat-history" id="chat-history">
-                    <!-- Chat messages will be appended here -->
-                </div>
-                <form id="chat-form">
-                    <textarea name="message" id="chat-message" placeholder="Type your question..." required></textarea>
-                    <button type="submit">Send</button>
-                </form>
+                <nav aria-label="Page navigation" class="mt-3">
+                    <ul class="pagination">
+                        {% if page > 1 %}
+                            <li class="page-item">
+                                <a class="page-link" href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Previous</a>
+                            </li>
+                        {% endif %}
+                        {% for p in range(1, total_pages + 1) %}
+                            <li class="page-item {% if p == page %}active{% endif %}">
+                                <a class="page-link" href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">{{ p }}</a>
+                            </li>
+                        {% endfor %}
+                        {% if page < total_pages %}
+                            <li class="page-item">
+                                <a class="page-link" href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Next</a>
+                            </li>
+                        {% endif %}
+                    </ul>
+                </nav>
             </div>
         </div>
-    </main>
+    {% endif %}
 
-    <footer>
-        <p>© 2025 PubMedResearcher. All rights reserved.</p>
-    </footer>
+    <!-- Chat Bubble and Pop-up Modal -->
+    <div class="chat-bubble" id="chat-bubble">
+        <i class="bi bi-chat-dots-fill"></i>
+    </div>
+    <div class="chat-modal" id="chat-modal">
+        <div class="chat-modal-content">
+            <span class="close-chat">&times;</span>
+            <h5 class="card-title">Chat with Research Assistant</h5>
+            <div class="chat-history card-body" id="chat-history">
+                <!-- Chat messages will be appended here -->
+            </div>
+            <form id="chat-form" class="card-footer">
+                <div class="input-group">
+                    <textarea class="form-control" name="message" id="chat-message" placeholder="Type your question..." required></textarea>
+                    <button type="submit" class="btn btn-primary">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 
-    <script>
-        // Search progress updates
-        function startProgressUpdates() {
-            const query = "{{ query | e }}";
-            if (query) {
-                const source = new EventSource("{{ url_for('search_progress') }}?query=" + encodeURIComponent(query));
-                const progressDiv = document.getElementById("search-progress");
-                source.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    progressDiv.innerHTML = `<p>Status: ${data.status}</p>`;
-                    if (data.status.includes("complete") || data.status.includes("error")) {
-                        source.close();
-                    }
-                };
-                source.onerror = function() {
-                    progressDiv.innerHTML = "<p>Error fetching search progress.</p>";
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script>
+    // Search progress updates
+    function startProgressUpdates() {
+        const query = "{{ query | e }}";
+        if (query) {
+            const source = new EventSource("{{ url_for('search_progress') }}?query=" + encodeURIComponent(query));
+            const progressDiv = document.getElementById("search-progress");
+            source.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                progressDiv.innerHTML = `<div class="alert alert-info">Status: ${data.status}</div>`;
+                if (data.status.includes("complete") || data.status.includes("error")) {
                     source.close();
-                };
-            }
+                }
+            };
+            source.onerror = function() {
+                progressDiv.innerHTML = "<div class='alert alert-danger'>Error fetching search progress.</div>";
+                source.close();
+            };
         }
+    }
 
-        // Apply filters
-        function applyFilters() {
-            const filterSources = Array.from(document.querySelectorAll('input[name="filter_sources"]:checked')).map(el => el.value);
-            const url = new URL(window.location);
-            url.searchParams.set('filter_sources', filterSources.join(','));
-            window.location = url;
-        }
+    // Apply filters
+    function applyFilters() {
+        const filterSources = Array.from(document.querySelectorAll('input[name="filter_sources"]:checked')).map(el => el.value);
+        const url = new URL(window.location);
+        url.searchParams.set('filter_sources', filterSources.join(','));
+        window.location = url;
+    }
 
-        // Chat modal functionality
-        $(document).ready(function() {
-            const chatBubble = $('#chat-bubble');
-            const chatModal = $('#chat-modal');
-            const closeChat = $('.close-chat');
-            const chatForm = $('#chat-form');
-            const chatHistory = $('#chat-history');
-            const chatMessage = $('#chat-message');
+    // Chat modal functionality
+    $(document).ready(function() {
+        const chatBubble = $('#chat-bubble');
+        const chatModal = $('#chat-modal');
+        const closeChat = $('.close-chat');
+        const chatForm = $('#chat-form');
+        const chatHistory = $('#chat-history');
+        const chatMessage = $('#chat-message');
 
-            // Toggle chat modal
-            chatBubble.click(function() {
-                chatModal.show();
-            });
+        // Toggle chat modal
+        chatBubble.click(function() {
+            chatModal.show();
+        });
 
-            closeChat.click(function() {
-                chatModal.hide();
-            });
+        closeChat.click(function() {
+            chatModal.hide();
+        });
 
-            // Handle chat form submission
-            chatForm.submit(function(e) {
-                e.preventDefault();
-                const message = chatMessage.val().trim();
-                if (!message) return;
+        // Handle chat form submission
+        chatForm.submit(function(e) {
+            e.preventDefault();
+            const message = chatMessage.val().trim();
+            if (!message) return;
 
-                // Append user message
-                chatHistory.append(`
-                    <div class="message user-message">
-                        <strong>You (${new Date().toLocaleString()}):</strong>
-                        <p>${message}</p>
-                    </div>
-                `);
-                chatMessage.val('');
-                chatHistory.scrollTop(chatHistory[0].scrollHeight);
+            // Append user message
+            chatHistory.append(`
+                <div class="message user-message mb-2 p-2 bg-light rounded">
+                    <strong>You (${new Date().toLocaleString()}):</strong>
+                    <p>${message}</p>
+                </div>
+            `);
+            chatMessage.val('');
+            chatHistory.scrollTop(chatHistory[0].scrollHeight);
 
-                // Send message to server
-                $.ajax({
-                    url: '{{ url_for("chat_message") }}',
-                    type: 'POST',
-                    data: { message: message },
-                    success: function(response) {
-                        if (response.status === 'success') {
-                            chatHistory.append(`
-                                <div class="message assistant-message">
-                                    <strong>Assistant (${new Date().toLocaleString()}):</strong>
-                                    <p>${response.message}</p>
-                                </div>
-                            `);
-                            chatHistory.scrollTop(chatHistory[0].scrollHeight);
-                        } else {
-                            chatHistory.append(`
-                                <div class="message assistant-message error">
-                                    <strong>Assistant (${new Date().toLocaleString()}):</strong>
-                                    <p>Error: ${response.message}</p>
-                                </div>
-                            `);
-                            chatHistory.scrollTop(chatHistory[0].scrollHeight);
-                        }
-                    },
-                    error: function() {
+            // Send message to server
+            $.ajax({
+                url: '{{ url_for("chat_message") }}',
+                type: 'POST',
+                data: { message: message },
+                success: function(response) {
+                    if (response.status === 'success') {
                         chatHistory.append(`
-                            <div class="message assistant-message error">
+                            <div class="message assistant-message mb-2 p-2 bg-info-subtle rounded">
                                 <strong>Assistant (${new Date().toLocaleString()}):</strong>
-                                <p>Error: Failed to communicate with server.</p>
+                                <p>${response.message}</p>
                             </div>
                         `);
-                        chatHistory.scrollTop(chatHistory[0].scrollHeight);
+                    } else {
+                        chatHistory.append(`
+                            <div class="message assistant-message error mb-2 p-2 bg-danger-subtle rounded">
+                                <strong>Assistant (${new Date().toLocaleString()}):</strong>
+                                <p>Error: ${response.message}</p>
+                            </div>
+                        `);
                     }
-                });
+                    chatHistory.scrollTop(chatHistory[0].scrollHeight);
+                },
+                error: function() {
+                    chatHistory.append(`
+                        <div class="message assistant-message error mb-2 p-2 bg-danger-subtle rounded">
+                            <strong>Assistant (${new Date().toLocaleString()}):</strong>
+                            <p>Error: Failed to communicate with server.</p>
+                        </div>
+                    `);
+                    chatHistory.scrollTop(chatHistory[0].scrollHeight);
+                }
             });
-
-            // Initialize progress updates
-            startProgressUpdates();
         });
-    </script>
-</body>
-</html>
+
+        // Initialize progress updates
+        startProgressUpdates();
+    });
+</script>
+{% endblock %}
