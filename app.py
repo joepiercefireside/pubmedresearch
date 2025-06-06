@@ -482,13 +482,15 @@ def search():
     per_page = 20
     sort_by = request.form.get('sort_by', request.args.get('sort_by', 'relevance'))
     filter_sources = request.form.getlist('filter_sources') or request.args.getlist('filter_sources') or []
+    logger.debug(f"Filter sources initialized: type={type(filter_sources)}, value={filter_sources}")
 
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
     prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
     query = request.form.get('query', request.args.get('query', ''))
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
-    sources_selected = request.form.getlist('sources') or request.args.getlist('sources')
+    sources_selected = request.form.getlist('sources') or request.args.getlist('sources') or []
+    logger.debug(f"Sources selected initialized: type={type(sources_selected)}, value={sources_selected}")
 
     selected_prompt_text = prompt_text
     if prompt_id and not prompt_text:
@@ -525,9 +527,9 @@ def search():
                 update_search_progress(current_user.id, query, "error: No valid keywords found")
                 return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources)
             
-            prompt_params = parse_prompt(selected_prompt_text)
+            prompt_params = parse_prompt(selected_prompt_text) or {}
             prompt_params['sort_by'] = sort_by
-            summary_result_count = prompt_params['summary_result_count']
+            summary_result_count = prompt_params.get('summary_result_count', 20)
             
             sources = []
             total_results = 0
@@ -594,11 +596,12 @@ def search():
                 all_results.extend([dict(r, source_id=source_id) for r in primary_results])
                 all_results.extend([dict(r, source_id=source_id) for r in fallback_results])
             
-            logger.debug(f"Filter sources: {filter_sources}, Sources selected: {sources_selected}")
-            if filter_sources and len(filter_sources) > 0 and len(sources_selected) > 1:
+            logger.debug(f"Before filtering: sources={len(sources)}, total_results={total_results}, filter_sources={filter_sources}, sources_selected={sources_selected}")
+            if isinstance(filter_sources, list) and filter_sources and isinstance(sources_selected, list) and len(sources_selected) > 1:
                 sources = [s for s in sources if s['id'] in filter_sources]
                 total_results = sum(len(s['results']['all']) + len(s['results']['fallback']) for s in sources)
                 all_results = [r for r in all_results if r['source_id'] in filter_sources]
+            logger.debug(f"After filtering: sources={len(sources)}, total_results={total_results}")
             
             start_idx = (page - 1) * per_page
             end_idx = start_idx + per_page

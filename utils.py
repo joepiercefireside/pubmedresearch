@@ -14,6 +14,7 @@ from nltk.corpus import stopwords
 from nltk import pos_tag
 from bs4 import BeautifulSoup
 import time
+import hashlib
 import random
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -219,6 +220,8 @@ class FDASearchHandler(SearchHandler):
             "url": result["url"]
         }
 
+logger = logging.getLogger(__name__)
+
 class GoogleScholarSearchHandler(SearchHandler):
     def __init__(self):
         super().__init__(source_id="googlescholar", name="Google Scholar")
@@ -235,11 +238,13 @@ class GoogleScholarSearchHandler(SearchHandler):
         user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36'
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:89.0) Gecko/20100101 Firefox/89.0'
         ]
         
         session = requests.Session()
-        retries = Retry(total=3, backoff_factor=1, status_forcelist=[403, 429])
+        retries = Retry(total=5, backoff_factor=2, status_forcelist=[403, 429], allowed_methods=["GET"])
         session.mount('https://', HTTPAdapter(max_retries=retries))
         
         try:
@@ -250,8 +255,12 @@ class GoogleScholarSearchHandler(SearchHandler):
                 "as_ylo": start_year_int,
                 "as_yhi": datetime.now().year
             }
-            headers = {'User-Agent': random.choice(user_agents)}
-            response = session.get(base_url, params=params, headers=headers, timeout=10)
+            headers = {
+                'User-Agent': random.choice(user_agents),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5'
+            }
+            response = session.get(base_url, params=params, headers=headers, timeout=15)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
