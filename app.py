@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, abort, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, session
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,21 +8,17 @@ import json
 import sqlite3
 import hashlib
 from datetime import datetime, timedelta
-from collections import Counter
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
-import traceback
 import time
 import re
-import tenacity
 import email_validator
 from email_validator import validate_email, EmailNotValidError
 from openai import OpenAI
 from utils import esearch, efetch, parse_e_fetch_xml, search_fda_label_api, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler, GoogleScholarSearchHandler
 
-# Download NLTK data
 import nltk
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -37,21 +33,17 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize scheduler
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-# SendGrid client
 sendgrid_api_key = os.environ.get('SENDGRID_API_KEY', '').strip()
 if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
-# Initialize SQLite databases
 def init_progress_db():
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
@@ -203,7 +195,6 @@ def parse_prompt(prompt_text):
         }
     
     prompt_text_lower = prompt_text.lower()
-    
     summary_result_count = 20
     if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
         summary_result_count = min(int(match.group(1)), 20)
@@ -489,12 +480,12 @@ def search():
 
     page = int(request.args.get('page', 1))
     per_page = 20
-    sort_by = request.args.get('sort_by', request.form.get('sort_by', 'relevance'))
-    filter_sources = request.args.getlist('filter_sources') or request.form.getlist('filter_sources')
+    sort_by = request.form.get('sort_by', request.args.get('sort_by', 'relevance'))
+    filter_sources = request.form.getlist('filter_sources') or request.args.getlist('filter_sources') or []
 
-    prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
-    prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
-    query = request.args.get('query', request.form.get('query', ''))
+    prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
+    prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
+    query = request.form.get('query', request.args.get('query', ''))
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
     sources_selected = request.form.getlist('sources') or request.args.getlist('sources')
@@ -603,7 +594,7 @@ def search():
                 all_results.extend([dict(r, source_id=source_id) for r in primary_results])
                 all_results.extend([dict(r, source_id=source_id) for r in fallback_results])
             
-            if filter_sources:
+            if filter_sources and len(sources_selected) > 1:
                 sources = [s for s in sources if s['id'] in filter_sources]
                 total_results = sum(len(s['results']['all']) + len(s['results']['fallback']) for s in sources)
                 all_results = [r for r in all_results if r['source_id'] in filter_sources]
@@ -1097,7 +1088,6 @@ def test_email():
                 error_detail = f": {e.body.decode('utf-8')}"
         return jsonify({"status": "error", "message": f"Failed to send test email: {str(e)}{error_detail}"}), 500
 
-# Schedule notifications on startup
 schedule_notification_rules()
 
 if __name__ == '__main__':
