@@ -2,248 +2,261 @@
 {% block title %}Notifications{% endblock %}
 {% block content %}
 <div class="container">
-    <h1>Manage Notification Rules</h1>
-    <div class="card">
-        <form method="POST">
-            <div class="mb-3">
-                <label for="rule_name" class="form-label">Rule Name</label>
-                <input type="text" class="form-control" id="rule_name" name="rule_name" placeholder="Enter rule name (e.g., Heart Disease Alerts)">
-            </div>
-            <div class="mb-3">
-                <label for="keywords" class="form-label">Keywords</label>
-                <input type="text" class="form-control" id="keywords" name="keywords" placeholder="Enter keywords (e.g., heart disease, cardiovascular, hypertension)">
-            </div>
-            <div class="mb-3">
-                <label for="timeframe" class="form-label">Timeframe</label>
-                <select class="form-control" id="timeframe" name="timeframe">
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="annually">Annually</option>
-                </select>
-            </div>
-            <div class="mb-3">
-                <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
-                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="Enter prompt (e.g., Provide a summary of results)"></textarea>
-            </div>
-            <div class="mb-3">
-                <label for="email_format" class="form-label">Email Format</label>
-                <select class="form-control" id="email_format" name="email_format">
-                    <option value="summary">Summary</option>
-                    <option value="list">List</option>
-                    <option value="detailed">Detailed</option>
-                </select>
-            </div>
-            <button type="submit" class="btn btn-primary">Add Rule</button>
-        </form>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-    </div>
-    <div class="card mt-3">
-        <h2>Test Email Sending</h2>
-        <form id="test-email-form" method="POST" action="{{ url_for('test_email') }}">
-            <div class="mb-3">
-                <label for="test-email" class="form-label">Recipient Email (leave blank to use your email)</label>
-                <input type="email" class="form-control" id="test-email" name="email" placeholder="Enter email (e.g., your_email@example.com)">
-            </div>
-            <button type="submit" class="btn btn-secondary">Send Test Email</button>
-        </form>
-        <div id="test-email-result" class="mt-3" style="display: none;"></div>
-    </div>
-    {% if notifications %}
-        <div class="card mt-3">
-            <h2>Your Notification Rules</h2>
-            <div class="table-responsive">
-                <table class="table table-striped table-hover">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Keywords</th>
-                            <th>Timeframe</th>
-                            <th>Prompt</th>
-                            <th>Format</th>
-                            <th>Created</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for notification in notifications %}
-                            <tr>
-                                <td>{{ notification.rule_name }}</td>
-                                <td>{{ notification.keywords }}</td>
-                                <td>{{ notification.timeframe.capitalize() }}</td>
-                                <td>{{ notification.prompt_text|truncate(50) or 'None' }}</td>
-                                <td>{{ notification.email_format.capitalize() }}</td>
-                                <td>{{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                                <td>
-                                    <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning">Edit</a>
-                                    <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#testModal-{{ notification.id }}">Test</button>
-                                    <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}">Delete</button>
-                                    <!-- Test Modal -->
-                                    <div class="modal fade" id="testModal-{{ notification.id }}" tabindex="-1" aria-labelledby="testModalLabel-{{ notification.id }}" aria-hidden="true">
-                                        <div class="modal-dialog modal-lg">
-                                            <div class="modal-content">
-                                                <div class="modal-header">
-                                                    <h5 class="modal-title" id="testModalLabel-{{ notification.id }}">Test Notification Rule: {{ notification.rule_name }}</h5>
-                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                                                </div>
-                                                <div class="modal-body">
-                                                    <div id="test-loading-{{ notification.id }}" class="alert alert-info">
-                                                        Testing rule and sending email... Please wait.
-                                                    </div>
-                                                    <div id="test-results-{{ notification.id }}" style="display: none;">
-                                                        <div id="test-email-status-{{ notification.id }}" class="alert alert-success" style="display: none;">
-                                                            Email sent to {{ current_user.email }}. Check your inbox and spam/junk folder. Message ID: <span id="test-message-id-{{ notification.id }}"></span>
-                                                        </div>
-                                                        <h6>Retrieved Articles</h6>
-                                                        <div id="test-articles-{{ notification.id }}"></div>
-                                                        <h6>Email Content Preview</h6>
-                                                        <pre id="test-email-{{ notification.id }}" style="white-space: pre-wrap;"></pre>
-                                                    </div>
-                                                    <div id="test-error-{{ notification.id }}" class="alert alert-danger" style="display: none;"></div>
-                                                </div>
-                                                <div class="modal-footer">
-                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <!-- Delete Modal -->
-                                    <div class="modal fade" id="deleteModal-{{ notification.id }}" tabindex="-1" aria-labelledby="deleteModalLabel-{{ notification.id }}" aria-hidden="true">
-                                        <div class="modal-dialog">
-                                            <div class="modal-content">
-                                                <div class="modal-header">
-                                                    <h5 class="modal-title" id="deleteModalLabel-{{ notification.id }}">Confirm Delete</h5>
-                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                                                </div>
-                                                <div class="modal-body">
-                                                    Are you sure you want to delete the notification rule "{{ notification.rule_name }}"?
-                                                </div>
-                                                <div class="modal-footer">
-                                                    <form action="{{ url_for('delete_notification', id=notification.id) }}" method="POST">
-                                                        <button type="submit" class="btn btn-danger">Delete</button>
-                                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                                                    </form>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+  <h1>Manage Notification Rules</h1>
+  <div class="card">
+    <form method="POST">
+      <div class="mb-3">
+        <label for="rule_name" class="form-label">Rule Name</label>
+        <input type="text" class="form-control" id="rule_name" name="rule_name" placeholder="e.g., Heart Disease Alerts">
+      </div>
+      <div class="mb-3">
+        <label for="keywords" class="form-label">Keywords</label>
+        <input type="text" class="form-control" id="keywords" name="keywords" value="{{ pre_query|default('') }}" placeholder="e.g., heart disease, cardiovascular, hypertension">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Search Sources</label>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" checked>
+          <label class="form-check-label" for="source_pubmed">PubMed</label>
         </div>
-    {% endif %}
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_fda" name="sources" value="fda">
+          <label class="form-check-label" for="source_fda">FDA.gov</label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar">
+          <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label for="timeframe" class="form-label">Timeframe</label>
+        <select class="form-control" id="timeframe" name="timeframe">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="annually">Annually</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
+        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="e.g., Provide a summary of results">{{ pre_prompt|default('') }}</textarea>
+      </div>
+      <div class="mb-3">
+        <label for="email_format" class="form-label">Email Format</label>
+        <select class="form-control" id="email_format" name="email_format">
+          <option value="summary">Summary</option>
+          <option value="list">List</option>
+          <option value="detailed">Detailed</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">Add Rule</button>
+    </form>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
+            {{ message }}
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+  </div>
+  <div class="card mt-3">
+    <h2>Test Email Sending</h2>
+    <form id="test-email-form" method="POST" action="{{ url_for('test_email') }}">
+      <div class="mb-3">
+        <label for="test-email" class="form-label">Recipient Email (leave blank to use your email)</label>
+        <input type="email" class="form-control" id="test-email" name="email" placeholder="e.g., your_email@example.com">
+      </div>
+      <button type="submit" class="btn btn-secondary">Send Test Email</button>
+    </form>
+    <div id="test-email-result" class="mt-3" style="display: none;"></div>
+  </div>
+  {% if notifications %}
+    <div class="card mt-3">
+      <h2>Your Notification Rules</h2>
+      <div class="table-responsive">
+        <table class="table table-striped table-hover">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Keywords</th>
+              <th>Sources</th>
+              <th>Timeframe</th>
+              <th>Prompt</th>
+              <th>Format</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for notification in notifications %}
+              <tr>
+                <td>{{ notification.rule_name }}</td>
+                <td>{{ notification.keywords }}</td>
+                <td>{{ notification.sources|join(', ') }}</td>
+                <td>{{ notification.timeframe.capitalize() }}</td>
+                <td>{{ notification.prompt_text|truncate(50) or 'None' }}</td>
+                <td>{{ notification.email_format.capitalize() }}</td>
+                <td>{{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>
+                  <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning">Edit</a>
+                  <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#testModal-{{ notification.id }}">Test</button>
+                  <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}">Delete</button>
+                  <!-- Test Modal -->
+                  <div class="modal fade" id="testModal-{{ notification.id }}" tabindex="-1" aria-labelledby="testModalLabel-{{ notification.id }}" aria-hidden="true">
+                    <div class="modal-dialog modal-lg">
+                      <div class="modal-content">
+                        <div class="modal-header">
+                          <h5 class="modal-title" id="testModalLabel-{{ notification.id }}">Test Notification Rule: {{ notification.rule_name }}</h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                          <div id="test-loading-{{ notification.id }}" class="alert alert-info">
+                            Testing rule and sending email... Please wait.
+                          </div>
+                          <div id="test-results-{{ notification.id }}" style="display: none;">
+                            <div id="test-email-status-{{ notification.id }}" class="alert alert-success" style="display: none;">
+                              Email sent to {{ current_user.email }}. Check your inbox and spam/junk folder. Message ID: <span id="test-message-id-{{ notification.id }}"></span>
+                            </div>
+                            <h6>Retrieved Articles</h6>
+                            <div id="test-articles-{{ notification.id }}"></div>
+                            <h6>Email Content Preview</h6>
+                            <pre id="test-email-{{ notification.id }}" style="white-space: pre-wrap;"></pre>
+                          </div>
+                          <div id="test-error-{{ notification.id }}" class="alert alert-danger" style="display: none;"></div>
+                        </div>
+                        <div class="modal-footer">
+                          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Delete Modal -->
+                  <div class="modal fade" id="deleteModal-{{ notification.id }}" tabindex="-1" aria-labelledby="deleteModalLabel-{{ notification.id }}" aria-hidden="true">
+                    <div class="modal-dialog">
+                      <div class="modal-content">
+                        <div class="modal-header">
+                          <h5 class="modal-title" id="deleteModalLabel-{{ notification.id }}">Confirm Delete</h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                          Are you sure you want to delete the notification rule "{{ notification.rule_name }}"?
+                        </div>
+                        <div class="modal-footer">
+                          <form action="{{ url_for('delete_notification', id=notification.id) }}" method="POST">
+                            <button type="submit" class="btn btn-danger">Delete</button>
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                          </form>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
 </div>
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        // Handle notification test modals
-        {% for notification in notifications %}
-            document.querySelector(`#testModal-{{ notification.id }}`).addEventListener('show.bs.modal', function() {
-                const loadingDiv = document.getElementById(`test-loading-{{ notification.id }}`);
-                const resultsDiv = document.getElementById(`test-results-{{ notification.id }}`);
-                const emailStatusDiv = document.getElementById(`test-email-status-{{ notification.id }}`);
-                const messageIdSpan = document.getElementById(`test-message-id-{{ notification.id }}`);
-                const errorDiv = document.getElementById(`test-error-{{ notification.id }}`);
-                const articlesDiv = document.getElementById(`test-articles-{{ notification.id }}`);
-                const emailDiv = document.getElementById(`test-email-{{ notification.id }}`);
-                
-                // Reset modal state
-                loadingDiv.style.display = 'block';
-                resultsDiv.style.display = 'none';
-                emailStatusDiv.style.display = 'none';
-                errorDiv.style.display = 'none';
-                articlesDiv.innerHTML = '';
-                emailDiv.textContent = '';
-                messageIdSpan.textContent = '';
-                
-                // Fetch test results
-                fetch(`/notifications/test/{{ notification.id }}`)
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error(`Failed to test notification: ${response.statusText}`);
-                        }
-                        return response.json();
-                    })
-                    .then(data => {
-                        loadingDiv.style.display = 'none';
-                        if (data.status === 'success') {
-                            resultsDiv.style.display = 'block';
-                            emailStatusDiv.style.display = data.email_sent ? 'block' : 'none';
-                            messageIdSpan.textContent = data.message_id || 'Not provided';
-                            if (data.results && data.results.length > 0) {
-                                let html = '<ul>';
-                                data.results.forEach(result => {
-                                    html += `<li><strong>${result.title}</strong> (${result.publication_date})<br>${result.abstract ? result.abstract.substring(0, 200) + '...' : 'No abstract'}</li>`;
-                                });
-                                html += '</ul>';
-                                articlesDiv.innerHTML = html;
-                            } else {
-                                articlesDiv.innerHTML = '<p>No articles found.</p>';
-                            }
-                            emailDiv.textContent = data.email_content || 'No content available';
-                        } else {
-                            errorDiv.style.display = 'block';
-                            errorDiv.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
-                            if (data.email_sent) {
-                                errorDiv.textContent += ' (Error email sent to your inbox)';
-                            }
-                        }
-                    })
-                    .catch(error => {
-                        loadingDiv.style.display = 'none';
-                        errorDiv.style.display = 'block';
-                        errorDiv.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
-                    });
-            });
-        {% endfor %}
-
-        // Handle test email form submission
-        const testEmailForm = document.getElementById('test-email-form');
-        const testEmailResult = document.getElementById('test-email-result');
+  document.addEventListener('DOMContentLoaded', function() {
+    {% for notification in notifications %}
+      document.querySelector(`#testModal-{{ notification.id }}`).addEventListener('show.bs.modal', function() {
+        const loadingDiv = document.getElementById(`test-loading-{{ notification.id }}`);
+        const resultsDiv = document.getElementById(`test-results-{{ notification.id }}`);
+        const emailStatusDiv = document.getElementById(`test-email-status-{{ notification.id }}`);
+        const messageIdSpan = document.getElementById(`test-message-id-{{ notification.id }}`);
+        const errorDiv = document.getElementById(`test-error-{{ notification.id }}`);
+        const articlesDiv = document.getElementById(`test-articles-{{ notification.id }}`);
+        const emailDiv = document.getElementById(`test-email-{{ notification.id }}`);
         
-        testEmailForm.addEventListener('submit', function(event) {
-            event.preventDefault();
-            testEmailResult.style.display = 'none';
-            testEmailResult.innerHTML = '';
+        loadingDiv.style.display = 'block';
+        resultsDiv.style.display = 'none';
+        emailStatusDiv.style.display = 'none';
+        errorDiv.style.display = 'none';
+        articlesDiv.innerHTML = '';
+        emailDiv.textContent = '';
+        messageIdSpan.textContent = '';
+        
+        fetch(`/notifications/test/{{ notification.id }}`)
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`Failed to test notification: ${response.statusText}`);
+            }
+            return response.json();
+          })
+          .then(data => {
+            loadingDiv.style.display = 'none';
+            if (data.status === 'success') {
+              resultsDiv.style.display = 'block';
+              emailStatusDiv.style.display = data.email_sent ? 'block' : 'none';
+              messageIdSpan.textContent = data.message_id || 'Not provided';
+              if (data.results && data.results.length > 0) {
+                let html = '<ul>';
+                data.results.forEach(result => {
+                  html += `<li><strong>${result.title}</strong> (${result.publication_date})<br>${result.abstract ? result.abstract.substring(0, 200) + '...' : 'No abstract'}</li>`;
+                });
+                html += '</ul>';
+                articlesDiv.innerHTML = html;
+              } else {
+                articlesDiv.innerHTML = '<p>No articles found.</p>';
+              }
+              emailDiv.textContent = data.email_content || 'No content available';
+            } else {
+              errorDiv.style.display = 'block';
+              errorDiv.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
+              if (data.email_sent) {
+                errorDiv.textContent += ' (Error email sent to your inbox)';
+              }
+            }
+          })
+          .catch(error => {
+            loadingDiv.style.display = 'none';
+            errorDiv.style.display = 'block';
+            errorDiv.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
+          });
+      });
+    {% endfor %}
 
-            const formData = new FormData(testEmailForm);
-            
-            fetch(testEmailForm.action, {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`Failed to send test email: ${response.statusText}`);
-                }
-                return response.json();
-            })
-            .then(data => {
-                testEmailResult.style.display = 'block';
-                if (data.status === 'success') {
-                    testEmailResult.className = 'alert alert-success';
-                    testEmailResult.textContent = `${data.message} Message ID: ${data.message_id || 'Not provided'}`;
-                } else {
-                    testEmailResult.className = 'alert alert-danger';
-                    testEmailResult.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
-                }
-            })
-            .catch(error => {
-                testEmailResult.style.display = 'block';
-                testEmailResult.className = 'alert alert-danger';
-                testEmailResult.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
-            });
-        });
+    const testEmailForm = document.getElementById('test-email-form');
+    const testEmailResult = document.getElementById('test-email-result');
+    
+    testEmailForm.addEventListener('submit', function(event) {
+      event.preventDefault();
+      testEmailResult.style.display = 'none';
+      testEmailResult.innerHTML = '';
+
+      const formData = new FormData(testEmailForm);
+      
+      fetch(testEmailForm.action, {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Failed to send test email: ${response.statusText}`);
+        }
+        return response.json();
+      })
+      .then(data => {
+        testEmailResult.style.display = 'block';
+        if (data.status === 'success') {
+          testEmailResult.className = 'alert alert-success';
+          testEmailResult.textContent = `${data.message} Message ID: ${data.message_id || 'Not provided'}`;
+        } else {
+          testEmailResult.className = 'alert alert-danger';
+          testEmailResult.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
+        }
+      })
+      .catch(error => {
+        testEmailResult.style.display = 'block';
+        testEmailResult.className = 'alert alert-danger';
+        testEmailResult.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
+      });
     });
+  });
 </script>
 {% endblock %}

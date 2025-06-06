@@ -3,6 +3,7 @@
 {% block content %}
   {% set pubmed_results = pubmed_results|default([]) %}
   {% set fda_results = fda_results|default([]) %}
+  {% set googlescholar_results = googlescholar_results|default([]) %}
   {% set pubmed_fallback_results = pubmed_fallback_results|default([]) %}
   <div class="container">
     <h1>Fireside AI Search Assistant</h1>
@@ -10,12 +11,16 @@
       <div class="mb-3">
         <label class="form-label">Search Sources</label>
         <div class="form-check">
-          <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" checked>
+          <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
           <label class="form-check-label" for="source_pubmed">PubMed</label>
         </div>
         <div class="form-check">
-          <input type="checkbox" class="form-check-input" id="source_fda" name="sources" value="fda">
+          <input type="checkbox" class="form-check-input" id="source_fda" name="sources" value="fda" {% if 'fda' in sources_selected %}checked{% endif %}>
           <label class="form-check-label" for="source_fda">FDA.gov</label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
+          <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
         </div>
       </div>
       <div class="mb-3">
@@ -47,7 +52,35 @@
           {% endfor %}
         </select>
       </div>
+      <div class="mb-3">
+        <label for="sort_by" class="form-label">Sort By</label>
+        <select class="form-select" id="sort_by" name="sort_by">
+          <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
+          <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Date (Newest First)</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Filter Sources</label>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="filter_pubmed" name="filter_sources" value="pubmed" {% if 'pubmed' in filter_sources %}checked{% endif %}>
+          <label class="form-check-label" for="filter_pubmed">PubMed</label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="filter_fda" name="filter_sources" value="fda" {% if 'fda' in filter_sources %}checked{% endif %}>
+          <label class="form-check-label" for="filter_fda">FDA.gov</label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="filter_googlescholar" name="filter_sources" value="googlescholar" {% if 'googlescholar' in filter_sources %}checked{% endif %}>
+          <label class="form-check-label" for="filter_googlescholar">Google Scholar</label>
+        </div>
+      </div>
       <button type="submit" class="btn btn-primary">Search</button>
+      {% if query %}
+        <a href="{{ url_for('notifications', keywords=query, prompt_text=prompt_text) }}" class="btn btn-secondary ms-2">Add to Notifications</a>
+      {% endif %}
+      {% if total_results > 0 %}
+        <a href="{{ url_for('chat') }}" class="btn btn-info ms-2">Chat with Results</a>
+      {% endif %}
     </form>
 
     {% if error %}
@@ -88,7 +121,7 @@
                     <div class="card mb-2 shadow-sm">
                       <div class="card-body">
                         <h6 class="card-title"><a href="{{ result.url }}" target="_blank" class="text-primary">{{ result.title }}</a></h6>
-                        {% if source.id == 'pubmed' %}
+                        {% if source.id == 'pubmed' or source.id == 'googlescholar' %}
                           <p class="card-text small"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
                           <p class="card-text small"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
                           <p class="card-text small"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
@@ -111,7 +144,7 @@
                     <div class="card mb-2 shadow-sm">
                       <div class="card-body">
                         <h6 class="card-title"><a href="{{ result.url }}" target="_blank" class="text-primary">{{ result.title }}</a></h6>
-                        {% if source.id == 'pubmed' %}
+                        {% if source.id == 'pubmed' or source.id == 'googlescholar' %}
                           <p class="card-text small"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
                           <p class="card-text small"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
                           <p class="card-text small"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
@@ -134,7 +167,7 @@
                     <div class="card mb-2 shadow-sm">
                       <div class="card-body">
                         <h6 class="card-title"><a href="{{ result.url }}" target="_blank" class="text-primary">{{ result.title }}</a></h6>
-                        {% if source.id == 'pubmed' %}
+                        {% if source.id == 'pubmed' or source.id == 'googlescholar' %}
                           <p class="card-text small"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
                           <p class="card-text small"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
                           <p class="card-text small"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
@@ -157,7 +190,7 @@
           <ul class="pagination justify-content-center">
             {% if page > 1 %}
               <li class="page-item">
-                <a class="page-link" href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sources=sources|map(attribute='id')|list) }}">Previous</a>
+                <a class="page-link" href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sources=sources_selected, sort_by=sort_by, filter_sources=filter_sources) }}">Previous</a>
               </li>
             {% else %}
               <li class="page-item disabled">
@@ -166,12 +199,12 @@
             {% endif %}
             {% for p in range(1, total_pages + 1) %}
               <li class="page-item {% if p == page %}active{% endif %}">
-                <a class="page-link" href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sources=sources|map(attribute='id')|list) }}">{{ p }}</a>
+                <a class="page-link" href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sources=sources_selected, sort_by=sort_by, filter_sources=filter_sources) }}">{{ p }}</a>
               </li>
             {% endfor %}
             {% if page < total_pages %}
               <li class="page-item">
-                <a class="page-link" href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sources=sources|map(attribute='id')|list) }}">Next</a>
+                <a class="page-link" href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sources=sources_selected, sort_by=sort_by, filter_sources=filter_sources) }}">Next</a>
               </li>
             {% else %}
               <li class="page-item disabled">
@@ -212,7 +245,7 @@
 
       // Clear results on form submission
       searchForm.addEventListener('submit', function() {
-        resultsSection.innerHTML = ''; // Clear results section
+        resultsSection.innerHTML = '';
         {% for source in sources %}
           const summaryContent = document.getElementById('{{ source.id }}-summary-content');
           const summaryLoading = document.getElementById('{{ source.id }}-summary-loading');
@@ -244,7 +277,7 @@
       console.log('Starting fetchSummary for source:', sourceId);
       const query = '{{ query|default('')|e }}';
       const promptText = document.getElementById('prompt_text').value;
-      const results = sourceId === 'pubmed' ? {{ pubmed_results|tojson }} : {{ fda_results|tojson }};
+      const results = sourceId === 'pubmed' ? {{ pubmed_results|tojson }} : sourceId === 'fda' ? {{ fda_results|tojson }} : {{ googlescholar_results|tojson }};
       const fallbackResults = sourceId === 'pubmed' ? {{ pubmed_fallback_results|tojson }} : [];
       const promptParams = {{ prompt_params|tojson|default('{}') }};
 
@@ -262,7 +295,7 @@
 
       if (summaryLoading) summaryLoading.style.display = 'inline-block';
       if (summaryMessage) summaryMessage.style.display = 'block';
-      if (summaryContent) summaryContent.innerHTML = ''; // Clear previous summary
+      if (summaryContent) summaryContent.innerHTML = '';
 
       fetch('{{ url_for('search_summary') }}', {
         method: 'POST',

@@ -12,6 +12,7 @@ import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk import pos_tag
+from bs4 import BeautifulSoup
 
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -30,7 +31,7 @@ BIOMEDICAL_VOCAB = {
     "cardiovascular": ["heart-related", "circulatory"],
     "blood pressure": ["hypertension", "BP"],
     "hypertension": ["high blood pressure", "elevated BP"],
-    "new": ["recent", "novel", "latest"]
+    "cidp": ["Chronic Inflammatory Demyelinating Polyneuropathy", "demyelinating polyneuropathy"]
 }
 
 class SearchHandler(ABC):
@@ -51,11 +52,16 @@ class SearchHandler(ABC):
 
     def rank_results(self, query, results, prompt_params):
         display_result_count = prompt_params.get('display_result_count', self.max_results)
+        sort_by = prompt_params.get('sort_by', 'relevance')
         if not results:
             return []
         
+        if sort_by == 'date':
+            # Sort by publication date (descending)
+            sorted_results = sorted(results, key=lambda x: x.get('publication_date', x.get('date', '0')), reverse=True)
+            return sorted_results[:display_result_count]
+        
         try:
-            # Limit to top 50 results to avoid token limits
             max_rank_results = min(len(results), 50)
             articles_context = []
             for i, result in enumerate(results[:max_rank_results]):
@@ -83,7 +89,7 @@ Articles:
                 ranking = json.loads(response)
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse Grok ranking response for {self.source_id}: {str(e)}, response: {response[:500]}...")
-                return results[:display_result_count]  # Fallback to original order
+                return results[:display_result_count]
             
             if isinstance(ranking, dict) and 'articles' in ranking:
                 ranking = ranking['articles']
@@ -98,7 +104,6 @@ Articles:
                     if 0 <= index < max_rank_results:
                         ranked_indices.append(index)
             
-            # Include remaining indices
             missing_indices = [i for i in range(len(results)) if i not in ranked_indices]
             ranked_indices.extend(missing_indices)
             
@@ -107,7 +112,7 @@ Articles:
             return ranked_results
         except Exception as e:
             logger.error(f"{self.source_id} ranking failed: {str(e)}")
-            return results[:display_result_count]  # Fallback to original order
+            return results[:display_result_count]
 
     def generate_summary(self, query, results, prompt_text, prompt_params):
         if not results:
@@ -208,6 +213,81 @@ class FDASearchHandler(SearchHandler):
             "title": result["title"],
             "summary": result["summary"],
             "date": result["date"],
+            "url": result["url"]
+        }
+
+class GoogleScholarSearchHandler(SearchHandler):
+    def __init__(self):
+        super().__init__(source_id="googlescholar", name="Google Scholar")
+
+    def search(self, query, keywords_with_synonyms, date_range, start_year_int):
+        search_terms = []
+        for keyword, synonyms in keywords_with_synonyms:
+            terms = [keyword] + synonyms
+            search_terms.extend([t.strip().replace('+', ' ') for t in terms if t.strip()])
+        if not search_terms:
+            return [], []
+        
+        search_query = ' '.join(search_terms)
+        try:
+            base_url = "https://scholar.google.com/scholar"
+            params = {
+                "q": search_query,
+                "hl": "en",
+                "as_ylo": start_year_int,
+                "as_yhi": datetime.now().year
+            }
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(base_url, params=params, headers=headers)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            results = []
+            for entry in soup.select('.gs_ri')[:self.max_results]:
+                title_elem = entry.select_one('.gs_rt a')
+                title = title_elem.text if title_elem else "No title"
+                url = title_elem['href'] if title_elem else ""
+                abstract_elem = entry.select_one('.gs_rs')
+                abstract = abstract_elem.text if abstract_elem else ""
+                authors_elem = entry.select_one('.gs_a')
+                authors = authors_elem.text.split(' - ')[0] if authors_elem else "N/A"
+                year = ""
+                if authors_elem:
+                    year_match = re.search(r'\b(\d{4})\b', authors_elem.text)
+                    year = year_match.group(1) if year_match else "N/A"
+                
+                results.append({
+                    "id": hashlib.md5(url.encode()).hexdigest(),
+                    "title": title,
+                    "abstract": abstract,
+                    "authors": authors,
+                    "journal": "N/A",
+                    "publication_date": year,
+                    "url": url
+                })
+            
+            logger.info(f"Google Scholar returned {len(results)} results for query: {search_query}")
+            primary_results = [
+                r for r in results
+                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) >= start_year_int
+            ]
+            fallback_results = [
+                r for r in results
+                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) < start_year_int
+            ]
+            return primary_results, fallback_results
+        except Exception as e:
+            logger.error(f"Error querying Google Scholar: {str(e)}")
+            return [], []
+
+    def format_result(self, result):
+        return {
+            "id": result["id"],
+            "title": result["title"],
+            "abstract": result["abstract"],
+            "authors": result["authors"],
+            "journal": result["journal"],
+            "publication_date": result["publication_date"],
             "url": result["url"]
         }
 
@@ -328,12 +408,11 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     tokens = word_tokenize(query)
     tagged = pos_tag(tokens)
     stop_words = set(stopwords.words('english')).union({
-        'what', 'can', 'you', 'tell', 'me', 'is', 'are', 'how', 'why', 'when', 'where', 'who', 
-        'which', 'please', 'about', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'related', 
-        'any', 'articles', 'that', 'show', 'between', 'only'
+        'what', 'can', 'you', 'tell', 'me', 'is', 'are', 'how', 'why', 'when', 'where', 'who',
+        'which', 'please', 'about', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'related',
+        'any', 'articles', 'that', 'show', 'between', 'only', 'latest', 'recent', 'new'
     })
     
-    # Build phrases from nouns and adjectives
     keywords = []
     current_phrase = []
     for word, tag in tagged:
@@ -351,23 +430,19 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
     if current_phrase:
         keywords.append('+'.join(current_phrase))
     
-    # Split multi-word phrases into individual words
     split_keywords = []
     for kw in keywords:
         if '+' in kw:
             split_keywords.extend(kw.split('+'))
         split_keywords.append(kw)
     
-    # Remove duplicates and limit to 5 keywords
     keywords = list(set(split_keywords))[:5]
     
-    # Get synonyms
     keywords_with_synonyms = []
     for kw in keywords:
         synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:2]
         keywords_with_synonyms.append((kw, synonyms))
     
-    # Timeframe parsing
     today = datetime.now()
     default_start_year = today.year - 5
     date_range = None
@@ -379,7 +454,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         (r'since\s+(\d{4})', lambda m: (int(m.group(1)), today.year)),
         (r'from\s+(\d{4})\s+to\s+(\d{4})', lambda m: (int(m.group(1)), int(m.group(2)))),
         (r'past\s+year', lambda m: 1),
-        (r'past\s+week', lambda m: 0.019178)  # Approx. 7 days
+        (r'past\s+week', lambda m: 0.019178)
     ]
     
     for pattern, extractor in timeframe_patterns:

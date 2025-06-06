@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, abort, session
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -20,7 +20,7 @@ import tenacity
 import email_validator
 from email_validator import validate_email, EmailNotValidError
 from openai import OpenAI
-from utils import esearch, efetch, parse_e_fetch_xml, search_fda_label_api, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler
+from utils import esearch, efetch, parse_e_fetch_xml, search_fda_label_api, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler, GoogleScholarSearchHandler
 
 # Download NLTK data
 import nltk
@@ -51,7 +51,7 @@ if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
-# Initialize SQLite database for search progress and cache
+# Initialize SQLite databases
 def init_progress_db():
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
@@ -59,6 +59,12 @@ def init_progress_db():
                  (user_id TEXT, query TEXT, status TEXT, timestamp REAL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
                  (query TEXT PRIMARY KEY, response TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS search_history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, query TEXT, prompt_text TEXT, sources TEXT, results TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS chat_history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, session_id TEXT, message TEXT, is_user BOOLEAN, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS user_settings
+                 (user_id TEXT PRIMARY KEY, chat_memory_retention_hours INTEGER DEFAULT 24)''')
     conn.commit()
     conn.close()
 
@@ -81,6 +87,61 @@ def get_search_progress(user_id, query):
     result = c.fetchone()
     conn.close()
     return result if result else (None, None)
+
+def save_search_history(user_id, query, prompt_text, sources, results):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO search_history (user_id, query, prompt_text, sources, results, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+              (user_id, query, prompt_text, json.dumps(sources), json.dumps(results), time.time()))
+    conn.commit()
+    conn.close()
+    logger.info(f"Saved search history for user={user_id}, query={query}")
+
+def get_search_history(user_id):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT id, query, prompt_text, sources, timestamp FROM search_history WHERE user_id = ? ORDER BY timestamp DESC",
+              (user_id,))
+    results = [
+        {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]), 'timestamp': row[4]}
+        for row in c.fetchall()
+    ]
+    conn.close()
+    return results
+
+def save_chat_message(user_id, session_id, message, is_user):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO chat_history (user_id, session_id, message, is_user, timestamp) VALUES (?, ?, ?, ?, ?)",
+              (user_id, session_id, message, is_user, time.time()))
+    conn.commit()
+    conn.close()
+
+def get_chat_history(user_id, session_id, retention_hours):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    cutoff_time = time.time() - (retention_hours * 3600)
+    c.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = ? AND session_id = ? AND timestamp > ? ORDER BY timestamp ASC",
+              (user_id, session_id, cutoff_time))
+    messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2]} for row in c.fetchall()]
+    conn.close()
+    return messages
+
+def get_user_settings(user_id):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("SELECT chat_memory_retention_hours FROM user_settings WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else 24
+
+def update_user_settings(user_id, retention_hours):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO user_settings (user_id, chat_memory_retention_hours) VALUES (?, ?)",
+              (user_id, retention_hours))
+    conn.commit()
+    conn.close()
 
 def get_db_connection():
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
@@ -112,8 +173,27 @@ def validate_user_email(email):
         logger.error(f"Invalid email address: {email}, error: {str(e)}")
         return False
 
-def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=False):
-    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, test_mode: {test_mode}, recipient: {user_email}")
+def query_grok_api(prompt, context):
+    try:
+        api_key = os.environ.get('XAI_API_KEY')
+        if not api_key:
+            raise ValueError("XAI_API_KEY not set")
+        client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+        completion = client.chat.completions.create(
+            model="grok-3",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": context}
+            ],
+            max_tokens=1000
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Error querying Grok API: {str(e)}")
+        raise
+
+def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources, test_mode=False):
+    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, sources: {sources}, test_mode: {test_mode}, recipient: {user_email}")
     if not validate_user_email(user_email):
         raise ValueError(f"Invalid recipient email address: {user_email}")
     
@@ -128,29 +208,37 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     start_date = timeframe_ranges[timeframe]
     date_range = f"{start_date}[dp]:{today.strftime('%Y/%m/%d')}[dp]"
     
-    keywords_with_synonyms, _, _ = extract_keywords_and_date(query)
-    search_query = build_pubmed_query(keywords_with_synonyms, date_range)
+    search_handlers = {
+        'pubmed': PubMedSearchHandler(),
+        'fda': FDASearchHandler(),
+        'googlescholar': GoogleScholarSearchHandler()
+    }
     
     try:
-        api_key = os.environ.get('PUBMED_API_KEY')
-        esearch_result = esearch(search_query, retmax=20, api_key=api_key)
-        pmids = esearch_result['esearchresult']['idlist']
-        logger.info(f"Notification rule {rule_id} query: {search_query}, PMIDs: {len(pmids)}")
-        if not pmids:
-            logger.info(f"No new results for rule {rule_id}")
+        keywords_with_synonyms, _, start_year_int = extract_keywords_and_date(query)
+        results = []
+        for source_id in sources:
+            if source_id not in search_handlers:
+                logger.warning(f"Unknown source in notification: {source_id}")
+                continue
+            handler = search_handlers[source_id]
+            primary_results, _ = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
+            results.extend(primary_results)
+        
+        logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
+        if not results:
             content = "No new results found for this rule."
             if not sg:
-                raise Exception("SendGrid API key not configured. Please contact support.")
+                raise Exception("SendGrid API key not configured.")
             message = Mail(
                 from_email=Email("noreply@firesidetechnologies.com"),
                 to_emails=To(user_email),
                 subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
                 plain_text_content=content
             )
-            logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
-            logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+            logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
             
             if test_mode:
                 return {
@@ -162,31 +250,27 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 }
             return
         
-        efetch_xml = efetch(pmids, api_key=api_key)
-        results = parse_e_fetch_xml(efetch_xml)
-        
-        context = "\n".join([f"Title: {r['title']}\nAbstract: {r['abstract'] or ''}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}" for r in results])
+        context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', r.get('date', 'N/A'))}" for r in results])
         output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
         
         if email_format == "list":
-            content = "\n".join([f"- {r['title']} ({r['publication_date']})\n  {r['abstract'][:100] or 'No abstract'}..." for r in results])
+            content = "\n".join([f"- {r['title']} ({r.get('publication_date', r.get('date', 'N/A'))})\n  {r.get('abstract', r.get('summary', ''))[:100] or 'No abstract'}..." for r in results])
         elif email_format == "detailed":
-            content = "\n".join([f"Title: {r['title']}\nAuthors: {r['authors']}\nJournal: {r['journal']}\nDate: {r['publication_date']}\nAbstract: {r['abstract'] or 'No abstract'}\n" for r in results])
+            content = "\n".join([f"Title: {r['title']}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', r.get('date', 'N/A'))}\nAbstract: {r.get('abstract', r.get('summary', '')) or 'No abstract'}\n" for r in results])
         else:
             content = output
         
         if not sg:
-            raise Exception("SendGrid API key not configured. Please contact support.")
+            raise Exception("SendGrid API key not configured.")
         message = Mail(
             from_email=Email("noreply@firesidetechnologies.com"),
             to_emails=To(user_email),
             subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
             plain_text_content=content
         )
-        logger.info(f"Sending email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
         response = sg.send(message)
         response_headers = {k: v for k, v in response.headers.items()}
-        logger.info(f"Email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+        logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
         
         if test_mode:
             return {
@@ -202,17 +286,15 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         if test_mode:
             try:
                 if not sg:
-                    raise Exception("SendGrid API key not configured. Please contact support.")
+                    raise Exception("SendGrid API key not configured.")
                 message = Mail(
                     from_email=Email("noreply@firesidetechnologies.com"),
                     to_emails=To(user_email),
                     subject=f"PubMedResearcher Test Notification Failed: {rule_name}",
                     plain_text_content=f"Error testing notification rule: {str(e)}"
                 )
-                logger.info(f"Sending error email for rule {rule_id}, recipient: {user_email}, subject: {message.subject}")
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
-                logger.info(f"Error email sent for rule {rule_id}, test_mode: {test_mode}, recipient: {user_email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
                 email_sent = True
             except Exception as email_e:
                 logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
@@ -245,7 +327,7 @@ def schedule_notification_rules():
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
+        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email, n.sources "
         "FROM notifications n JOIN users u ON n.user_id = u.id"
     )
     rules = cur.fetchall()
@@ -253,7 +335,8 @@ def schedule_notification_rules():
     conn.close()
     
     for rule in rules:
-        rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
+        rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources = rule
+        sources = json.loads(sources) if sources else ['pubmed']
         cron_trigger = {
             'daily': CronTrigger(hour=8, minute=0),
             'weekly': CronTrigger(day_of_week='mon', hour=8, minute=0),
@@ -263,7 +346,7 @@ def schedule_notification_rules():
         scheduler.add_job(
             run_notification_rule,
             trigger=cron_trigger,
-            args=[rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email],
+            args=[rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources],
             id=f"notification_{rule_id}",
             replace_existing=True
         )
@@ -320,33 +403,6 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-def parse_prompt(prompt_text):
-    if not prompt_text:
-        return {
-            'summary_result_count': 20,
-            'display_result_count': 80,
-            'limit_presentation': False
-        }
-    
-    prompt_text_lower = prompt_text.lower()
-    
-    summary_result_count = 20
-    if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
-        summary_result_count = min(int(match.group(1)), 20)
-    elif 'top' in prompt_text_lower:
-        summary_result_count = 3
-    
-    display_result_count = 80
-    limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
-    
-    logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
-    
-    return {
-        'summary_result_count': summary_result_count,
-        'display_result_count': display_result_count,
-        'limit_presentation': limit_presentation
-    }
-
 @app.route('/search_progress', methods=['GET'])
 @login_required
 def search_progress():
@@ -382,11 +438,11 @@ def search():
     conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
 
-    # Pagination parameters
     page = int(request.args.get('page', 1))
     per_page = 20
+    sort_by = request.args.get('sort_by', request.form.get('sort_by', 'relevance'))
+    filter_sources = request.args.getlist('filter_sources') or request.form.getlist('filter_sources')
 
-    # Form parameters
     prompt_id = request.args.get('prompt_id', request.form.get('prompt_id', ''))
     prompt_text = request.args.get('prompt_text', request.form.get('prompt_text', ''))
     query = request.args.get('query', request.form.get('query', ''))
@@ -394,7 +450,6 @@ def search():
     start_year = request.form.get('start_year', request.args.get('start_year', None))
     sources_selected = request.form.getlist('sources') or request.args.getlist('sources')
 
-    # Select prompt text
     selected_prompt_text = prompt_text
     if prompt_id and not prompt_text:
         for prompt in prompts:
@@ -405,22 +460,22 @@ def search():
             logger.warning(f"Prompt ID {prompt_id} not found in prompts")
             selected_prompt_text = ''
 
-    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}, sources={sources_selected}, page={page}")
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50]}..., query={query[:50]}..., search_older={search_older}, start_year={start_year}, sources={sources_selected}, page={page}, sort_by={sort_by}, filter_sources={filter_sources}")
 
-    # Available search handlers
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
-        'fda': FDASearchHandler()
+        'fda': FDASearchHandler(),
+        'googlescholar': GoogleScholarSearchHandler()
     }
 
     if request.method == 'POST':
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources)
         
         if not sources_selected:
             update_search_progress(current_user.id, query, "error: At least one search source must be selected")
-            return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources)
         
         update_search_progress(current_user.id, query, "contacting APIs")
         
@@ -428,15 +483,17 @@ def search():
             keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
             if not keywords_with_synonyms:
                 update_search_progress(current_user.id, query, "error: No valid keywords found")
-                return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+                return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources)
             
             prompt_params = parse_prompt(selected_prompt_text)
+            prompt_params['sort_by'] = sort_by
             summary_result_count = prompt_params['summary_result_count']
             
             sources = []
             total_results = 0
             pubmed_results = []
             fda_results = []
+            googlescholar_results = []
             pubmed_fallback_results = []
             
             for source_id in sources_selected:
@@ -455,7 +512,6 @@ def search():
                 else:
                     ranked_results = []
                 
-                # Generate summary immediately if prompt is provided
                 summary = ""
                 if selected_prompt_text and (ranked_results or primary_results):
                     update_search_progress(current_user.id, query, f"generating {handler.name} summary")
@@ -472,7 +528,6 @@ def search():
                     'summary': summary
                 }
                 
-                # Cache results for PubMed
                 if source_id == 'pubmed' and (primary_results or fallback_results):
                     conn = get_db_connection()
                     cur = conn.cursor()
@@ -486,9 +541,16 @@ def search():
                 
                 if source_id == 'fda':
                     fda_results = primary_results
+                if source_id == 'googlescholar':
+                    googlescholar_results = primary_results
                 
                 total_results += len(primary_results) + len(fallback_results)
                 sources.append(source_data)
+            
+            # Apply source filters
+            if filter_sources:
+                sources = [s for s in sources if s['id'] in filter_sources]
+                total_results = sum(len(s['results']['all']) + len(s['results']['fallback']) for s in sources)
             
             # Paginate results
             start_idx = (page - 1) * per_page
@@ -500,6 +562,17 @@ def search():
                 source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
             
             total_pages = (total_results + per_page - 1) // per_page
+            
+            # Save search to history
+            results_save = []
+            for source in sources:
+                results_save.extend(source['results']['all'])
+                results_save.extend(source['results']['fallback'])
+            save_search_history(current_user.id, query, selected_prompt_text, sources_selected, results_save)
+            
+            # Store results in session for chatbot
+            session['latest_search_results'] = json.dumps(results_save)
+            session['latest_query'] = query
             
             update_search_progress(current_user.id, query, "complete")
             
@@ -520,14 +593,17 @@ def search():
                 prompt_params=prompt_params,
                 search_older=search_older,
                 start_year=start_year,
+                sort_by=sort_by,
+                filter_sources=filter_sources,
                 pubmed_results=pubmed_results,
                 fda_results=fda_results,
+                googlescholar_results=googlescholar_results,
                 pubmed_fallback_results=pubmed_fallback_results
             )
         except Exception as e:
             logger.error(f"API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year)
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources)
     
     return render_template(
         'search.html', 
@@ -543,7 +619,9 @@ def search():
         prompt_params={}, 
         summary_result_count=5, 
         search_older=False, 
-        start_year=None
+        start_year=None,
+        sort_by=sort_by,
+        filter_sources=filter_sources
     )
 
 @app.route('/search_summary', methods=['POST'])
@@ -559,7 +637,7 @@ def search_summary():
     logger.info(f"Received summary request for query: {query[:50]}... with prompt: {prompt_text[:50]}... source: {source_id}")
     
     try:
-        handler = next((h for h in [PubMedSearchHandler(), FDASearchHandler()] if h.source_id == source_id), None)
+        handler = next((h for h in [PubMedSearchHandler(), FDASearchHandler(), GoogleScholarSearchHandler()] if h.source_id == source_id), None)
         if not handler:
             raise ValueError(f"Unknown source: {source_id}")
         
@@ -588,6 +666,64 @@ def search_summary():
             'message': f"AI summary failed: {str(e)}"
         })
 
+@app.route('/chat', methods=['GET', 'POST'])
+@login_required
+def chat():
+    if not current_user.is_authenticated:
+        return redirect(url_for('login'))
+    
+    session_id = session.get('chat_session_id', str(hashlib.md5(str(time.time()).encode()).hexdigest()))
+    session['chat_session_id'] = session_id
+    
+    retention_hours = get_user_settings(current_user.id)
+    chat_history = get_chat_history(current_user.id, session_id, retention_hours)
+    
+    if request.method == 'POST':
+        user_message = request.form.get('message', '')
+        new_retention = request.form.get('retention_hours')
+        
+        if new_retention:
+            try:
+                retention_hours = int(new_retention)
+                if retention_hours < 1 or retention_hours > 720:
+                    flash("Retention hours must be between 1 and 720.", "error")
+                else:
+                    update_user_settings(current_user.id, retention_hours)
+                    flash("Chat memory retention updated.", "success")
+            except ValueError:
+                flash("Invalid retention hours.", "error")
+        
+        if user_message:
+            save_chat_message(current_user.id, session_id, user_message, True)
+            
+            search_results = json.loads(session.get('latest_search_results', '[]'))
+            query = session.get('latest_query', '')
+            context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', r.get('date', 'N/A'))}" for r in search_results])
+            
+            with open('static/templates/chatbot_prompt.txt', 'r', encoding='utf-8') as f:
+                system_prompt = f.read()
+            
+            history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
+            full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
+            
+            try:
+                response = query_grok_api(system_prompt, full_context)
+                save_chat_message(current_user.id, session_id, response, False)
+                chat_history.append({'message': user_message, 'is_user': True, 'timestamp': time.time()})
+                chat_history.append({'message': response, 'is_user': False, 'timestamp': time.time()})
+            except Exception as e:
+                flash(f"Error generating chat response: {str(e)}", "error")
+        
+        return render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours)
+    
+    return render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours)
+
+@app.route('/previous_searches', methods=['GET'])
+@login_required
+def previous_searches():
+    search_history = get_search_history(current_user.id)
+    return render_template('previous_searches.html', searches=search_history, username=current_user.email)
+
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
 def prompt():
@@ -601,19 +737,19 @@ def prompt():
             cur = conn.cursor()
             try:
                 cur.execute('INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)', 
-                            (current_user.id, prompt_name, prompt_text))
+                          (current_user.id, prompt_name, prompt_text))
                 conn.commit()
                 flash('Prompt saved successfully.', 'success')
             except Exception as e:
                 conn.rollback()
-                flash(f'Failed to save prompt: {str(e)}', 'error')
+                flash(f"Failed to save prompt: {str(e)}", 'error')
             finally:
                 cur.close()
                 conn.close()
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
+    cur.execute('SELECT id, prompt_name, prompt_text, created FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
                 (current_user.id,))
     prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
     cur.close()
@@ -677,7 +813,7 @@ def delete_prompt(id):
         flash('Prompt deleted successfully.', 'success')
     except Exception as e:
         conn.rollback()
-        flash(f'Failed to delete prompt: {str(e)}', 'error')
+        flash(f"Failed to delete prompt: {str(e)}", 'error')
     finally:
         cur.close()
         conn.close()
@@ -689,15 +825,21 @@ def delete_prompt(id):
 def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
+    
+    # Pre-populate form if query parameters are provided
+    pre_query = request.args.get('keywords', '')
+    pre_prompt = request.args.get('prompt_text', '')
+    
     if request.method == 'POST':
         rule_name = request.form.get('rule_name')
         keywords = request.form.get('keywords')
         timeframe = request.form.get('timeframe')
         prompt_text = request.form.get('prompt_text')
         email_format = request.form.get('email_format')
+        sources = request.form.getlist('sources')
         
-        if not all([rule_name, keywords, timeframe, email_format]):
-            flash('All fields except prompt text are required.', 'error')
+        if not all([rule_name, keywords, timeframe, sources, email_format]):
+            flash('All required fields must be filled.', 'error')
         elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
             flash('Invalid timeframe selected.', 'error')
         elif email_format not in ['summary', 'list', 'detailed']:
@@ -705,9 +847,11 @@ def notifications():
         else:
             try:
                 cur.execute(
-                    "INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format)
+                    """
+                    INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources))
                 )
                 conn.commit()
                 flash('Notification rule created successfully.', 'success')
@@ -718,7 +862,7 @@ def notifications():
                 flash(f'Failed to create notification rule: {str(e)}', 'error')
     
     cur.execute(
-        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, created_at "
+        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, created_at, sources "
         "FROM notifications WHERE user_id = %s ORDER BY created_at DESC",
         (current_user.id,)
     )
@@ -730,12 +874,13 @@ def notifications():
             'timeframe': n[3],
             'prompt_text': n[4],
             'email_format': n[5],
-            'created_at': n[6]
+            'created_at': n[6],
+            'sources': json.loads(n[7]) if n[7] else ['pubmed']
         } for n in cur.fetchall()
     ]
     cur.close()
     conn.close()
-    return render_template('notifications.html', notifications=notifications, username=current_user.email)
+    return render_template('notifications.html', notifications=notifications, username=current_user.email, pre_query=pre_query, pre_prompt=pre_prompt)
 
 @app.route('/notifications/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -743,7 +888,7 @@ def edit_notification(id):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format "
+        "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, sources "
         "FROM notifications WHERE id = %s AND user_id = %s",
         (id, current_user.id)
     )
@@ -761,9 +906,10 @@ def edit_notification(id):
         timeframe = request.form.get('timeframe')
         prompt_text = request.form.get('prompt_text')
         email_format = request.form.get('email_format')
+        sources = request.form.getlist('sources')
         
-        if not all([rule_name, keywords, timeframe, email_format]):
-            flash('All fields except prompt text are required.', 'error')
+        if not all([rule_name, keywords, timeframe, sources, email_format]):
+            flash('All required fields must be filled.', 'error')
         elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
             flash('Invalid timeframe selected.', 'error')
         elif email_format not in ['summary', 'list', 'detailed']:
@@ -771,9 +917,11 @@ def edit_notification(id):
         else:
             try:
                 cur.execute(
-                    "UPDATE notifications SET rule_name = %s, keywords = %s, timeframe = %s, prompt_text = %s, email_format = %s "
-                    "WHERE id = %s AND user_id = %s",
-                    (rule_name, keywords, timeframe, prompt_text, email_format, id, current_user.id)
+                    """
+                    UPDATE notifications SET rule_name = %s, keywords = %s, timeframe = %s, prompt_text = %s, email_format = %s, sources = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources), id, current_user.id)
                 )
                 conn.commit()
                 flash('Notification rule updated successfully.', 'success')
@@ -788,14 +936,16 @@ def edit_notification(id):
     
     cur.close()
     conn.close()
-    return render_template('notification_edit.html', notification={
+    notification_data = {
         'id': notification[0],
         'rule_name': notification[1],
         'keywords': notification[2],
         'timeframe': notification[3],
         'prompt_text': notification[4],
-        'email_format': notification[5]
-    }, username=current_user.email)
+        'email_format': notification[5],
+        'sources': json.loads(notification[6]) if notification[6] else ['pubmed']
+    }
+    return render_template('notification_edit.html', notification=notification_data, username=current_user.email)
 
 @app.route('/notifications/delete/<int:id>', methods=['POST'])
 @login_required
@@ -832,7 +982,7 @@ def test_notification(id):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email "
+        "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email, n.sources "
         "FROM notifications n JOIN users u ON n.user_id = u.id WHERE n.id = %s AND n.user_id = %s",
         (id, current_user.id)
     )
@@ -844,10 +994,11 @@ def test_notification(id):
         flash('Notification rule not found or you do not have permission to test it.', 'error')
         return jsonify({"status": "error", "message": "Rule not found"}), 404
     
-    rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email = rule
+    rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources = rule
+    sources = json.loads(sources) if sources else ['pubmed']
     try:
         test_result = run_notification_rule(
-            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, test_mode=True
+            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources, test_mode=True
         )
         return jsonify(test_result)
     except Exception as e:

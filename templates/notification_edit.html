@@ -2,49 +2,64 @@
 {% block title %}Edit Notification{% endblock %}
 {% block content %}
 <div class="container">
-    <h1>Edit Notification Rule</h1>
-    <div class="card">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        <form method="POST">
-            <div class="mb-3">
-                <label for="rule_name" class="form-label">Rule Name</label>
-                <input type="text" class="form-control" id="rule_name" name="rule_name" value="{{ notification.rule_name }}" required>
-            </div>
-            <div class="mb-3">
-                <label for="keywords" class="form-label">Keywords</label>
-                <input type="text" class="form-control" id="keywords" name="keywords" value="{{ notification.keywords }}" required>
-            </div>
-            <div class="mb-3">
-                <label for="timeframe" class="form-label">Timeframe</label>
-                <select class="form-control" id="timeframe" name="timeframe" required>
-                    <option value="daily" {% if notification.timeframe == 'daily' %}selected{% endif %}>Daily</option>
-                    <option value="weekly" {% if notification.timeframe == 'weekly' %}selected{% endif %}>Weekly</option>
-                    <option value="monthly" {% if notification.timeframe == 'monthly' %}selected{% endif %}>Monthly</option>
-                    <option value="annually" {% if notification.timeframe == 'annually' %}selected{% endif %}>Annually</option>
-                </select>
-            </div>
-            <div class="mb-3">
-                <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
-                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5">{{ notification.prompt_text }}</textarea>
-            </div>
-            <div class="mb-3">
-                <label for="email_format" class="form-label">Email Format</label>
-                <select class="form-control" id="email_format" name="email_format" required>
-                    <option value="summary" {% if notification.email_format == 'summary' %}selected{% endif %}>Summary</option>
-                    <option value="list" {% if notification.email_format == 'list' %}selected{% endif %}>List</option>
-                    <option value="detailed" {% if notification.email_format == 'detailed' %}selected{% endif %}>Detailed</option>
-                </select>
-            </div>
-            <button type="submit" class="btn btn-primary">Update Rule</button>
-        </form>
-    </div>
+  <h1>Edit Notification Rule</h1>
+  <div class="card">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} mt-3">
+            {{ message }}
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="POST">
+      <div class="mb-3">
+        <label for="rule_name" class="form-label">Rule Name</label>
+        <input type="text" class="form-control" id="rule_name" name="rule_name" value="{{ notification.rule_name }}" required>
+      </div>
+      <div class="mb-3">
+        <label for="keywords" class="form-label">Keywords</label>
+        <input type="text" class="form-control" id="keywords" name="keywords" value="{{ notification.keywords }}" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Search Sources</label>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in notification.sources %}checked{% endif %}>
+          <label class="form-check-label" for="source_pubmed">PubMed</label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_fda" name="sources" value="fda" {% if 'fda' in notification.sources %}checked{% endif %}>
+          <label class="form-check-label" for="source_fda">FDA.gov</label>
+        </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in notification.sources %}checked{% endif %}>
+          <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label for="timeframe" class="form-label">Timeframe</label>
+        <select class="form-control" id="timeframe" name="timeframe" required>
+          <option value="daily" {% if notification.timeframe == 'daily' %}selected{% endif %}>Daily</option>
+          <option value="weekly" {% if notification.timeframe == 'weekly' %}selected{% endif %}>Weekly</option>
+          <option value="monthly" {% if notification.timeframe == 'monthly' %}selected{% endif %}>Monthly</option>
+          <option value="annually" {% if notification.timeframe == 'annually' %}selected{% endif %}>Annually</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
+        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5">{{ notification.prompt_text }}</textarea>
+      </div>
+      <div class="mb-3">
+        <label for="email_format" class="form-label">Email Format</label>
+        <select class="form-control" id="email_format" name="email_format" required>
+          <option value="summary" {% if notification.email_format == 'summary' %}selected{% endif %}>Summary</option>
+          <option value="list" {% if notification.email_format == 'list' %}selected{% endif %}>List</option>
+          <option value="detailed" {% if notification.email_format == 'detailed' %}selected{% endif %}>Detailed</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">Update Rule</button>
+    </form>
+  </div>
 </div>
 {% endblock %}
