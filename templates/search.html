@@ -173,9 +173,9 @@
     // Search progress updates
     function startProgressUpdates() {
         const query = "{{ query | e }}";
+        const progressDiv = document.getElementById("search-progress");
         if (query) {
             const source = new EventSource("{{ url_for('search_progress') }}?query=" + encodeURIComponent(query));
-            const progressDiv = document.getElementById("search-progress");
             source.onmessage = function(event) {
                 const data = JSON.parse(event.data);
                 progressDiv.innerHTML = `<div class="alert alert-info">Status: ${data.status}</div>`;
@@ -191,6 +191,8 @@
                 progressDiv.innerHTML = "<div class='alert alert-danger'>Error fetching search progress.</div>";
                 source.close();
             };
+        } else {
+            progressDiv.innerHTML = "";
         }
     }
 
@@ -198,9 +200,15 @@
     function fetchSummary(query) {
         const promptText = "{{ prompt_text | e }}";
         const sourceId = "pubmed";
-        const results = {{ pubmed_results|tojson }};
-        const fallbackResults = {{ pubmed_fallback_results|tojson }};
-        const promptParams = {{ prompt_params|tojson }};
+        // Use empty arrays if results are undefined
+        const results = {{ pubmed_results|tojson|default('[]') }};
+        const fallbackResults = {{ pubmed_fallback_results|tojson|default('[]') }};
+        const promptParams = {{ prompt_params|tojson|default('{}') }};
+
+        if (!promptText || results.length === 0) {
+            $("#pubmed-results .summary p").text("No summary generated due to missing prompt or results.");
+            return;
+        }
 
         $.ajax({
             url: "{{ url_for('search_summary') }}",
@@ -320,4 +328,5 @@
         startProgressUpdates();
     });
 </script>
+
 {% endblock %}
