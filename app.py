@@ -19,6 +19,10 @@ from email_validator import validate_email, EmailNotValidError
 from openai import OpenAI
 from utils import esearch, efetch, parse_e_fetch_xml, search_fda_label_api, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler, GoogleScholarSearchHandler
 
+# Configure logging before NLTK imports
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 import nltk
 import nltk.data
 
