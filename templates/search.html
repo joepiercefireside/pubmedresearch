@@ -10,7 +10,7 @@
                     <input type="text" class="form-control" name="query" placeholder="Enter search query..." value="{{ query }}" required>
                 </div>
                 <div class="mb-3">
-                    <select class="form-control" name="prompt_id">
+                    <select class="form-control" name="prompt_id" id="prompt_id">
                         <option value="">Select a prompt...</option>
                         {% for prompt in prompts %}
                             <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
@@ -18,7 +18,7 @@
                     </select>
                 </div>
                 <div class="mb-3">
-                    <textarea class="form-control" name="prompt_text" placeholder="Enter custom prompt..." rows="4">{{ prompt_text }}</textarea>
+                    <textarea class="form-control" name="prompt_text" id="prompt_text" placeholder="Enter custom prompt..." rows="4">{{ prompt_text }}</textarea>
                 </div>
                 <div class="mb-3">
                     <div class="form-check">
@@ -150,7 +150,7 @@
     </div>
     <div class="chat-modal" id="chat-modal">
         <div class="chat-modal-content">
-            <span class="close-chat">&times;</span>
+            <span class="close-chat">×</span>
             <h5 class="card-title">Chat with Research Assistant</h5>
             <div class="chat-history card-body" id="chat-history">
                 <!-- Chat messages will be appended here -->
@@ -167,6 +167,9 @@
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
+    // Pass prompts array from server
+    const prompts = {{ prompts|tojson }};
+
     // Search progress updates
     function startProgressUpdates() {
         const query = "{{ query | e }}";
@@ -195,14 +198,23 @@
         window.location = url;
     }
 
-    // Chat modal functionality
+    // Populate prompt text on dropdown change
     $(document).ready(function() {
+        const promptSelect = $('#prompt_id');
+        const promptTextArea = $('#prompt_text');
         const chatBubble = $('#chat-bubble');
         const chatModal = $('#chat-modal');
         const closeChat = $('.close-chat');
         const chatForm = $('#chat-form');
         const chatHistory = $('#chat-history');
         const chatMessage = $('#chat-message');
+
+        // Update prompt text when prompt is selected
+        promptSelect.change(function() {
+            const selectedId = $(this).val();
+            const selectedPrompt = prompts.find(p => p.id === selectedId);
+            promptTextArea.val(selectedPrompt ? selectedPrompt.prompt_text : '');
+        });
 
         // Toggle chat modal
         chatBubble.click(function() {
