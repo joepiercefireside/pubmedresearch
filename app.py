@@ -23,6 +23,7 @@ import nltk
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('averaged_perceptron_tagger')
+nltk.download('wordnet')  # Added to fix Resource wordnet not found error
 
 from dotenv import load_dotenv
 load_dotenv()
