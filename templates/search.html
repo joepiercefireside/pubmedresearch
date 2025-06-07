@@ -179,8 +179,12 @@
             source.onmessage = function(event) {
                 const data = JSON.parse(event.data);
                 progressDiv.innerHTML = `<div class="alert alert-info">Status: ${data.status}</div>`;
-                if (data.status.includes("complete") || data.status.includes("error")) {
+                if (data.status.includes("complete")) {
                     source.close();
+                    fetchSummary(query);
+                } else if (data.status.includes("error")) {
+                    source.close();
+                    progressDiv.innerHTML = `<div class="alert alert-danger">Error: ${data.status}</div>`;
                 }
             };
             source.onerror = function() {
@@ -188,6 +192,42 @@
                 source.close();
             };
         }
+    }
+
+    // Fetch and display AI summary
+    function fetchSummary(query) {
+        const promptText = "{{ prompt_text | e }}";
+        const sourceId = "pubmed";
+        const results = {{ pubmed_results|tojson }};
+        const fallbackResults = {{ pubmed_fallback_results|tojson }};
+        const promptParams = {{ prompt_params|tojson }};
+
+        $.ajax({
+            url: "{{ url_for('search_summary') }}",
+            type: "POST",
+            data: {
+                query: query,
+                prompt_text: promptText,
+                results: JSON.stringify(results),
+                fallback_results: JSON.stringify(fallbackResults),
+                prompt_params: JSON.stringify(promptParams),
+                source_id: sourceId
+            },
+            success: function(response) {
+                const summaryDiv = $("#pubmed-results .summary p");
+                if (response.status === "success") {
+                    summaryDiv.text(response.prompt_output);
+                    if (response.fallback_prompt_output) {
+                        summaryDiv.append(`<br><strong>Fallback Summary:</strong> ${response.fallback_prompt_output}`);
+                    }
+                } else {
+                    summaryDiv.text(`Error: ${response.message}`);
+                }
+            },
+            error: function() {
+                $("#pubmed-results .summary p").text("Error: Failed to fetch AI summary.");
+            }
+        });
     }
 
     // Apply filters
