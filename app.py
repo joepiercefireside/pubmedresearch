@@ -541,25 +541,25 @@ def search():
 
     if request.method == 'POST':
         if not query:
-    update_search_progress(current_user.id, query, "error: Query cannot be empty")
-    return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[])
+            update_search_progress(current_user.id, query, "error: Query cannot be empty")
+            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[])
 
-if not sources_selected:
-    update_search_progress(current_user.id, query, "error: At least one search source must be selected")
-    return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[])
-        
+        if not sources_selected:
+            update_search_progress(current_user.id, query, "error: At least one search source must be selected")
+            return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[])
+
         update_search_progress(current_user.id, query, "contacting APIs")
-        
+
         try:
             keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
             if not keywords_with_synonyms:
                 update_search_progress(current_user.id, query, "error: No valid keywords found")
-                return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources)
-            
+                return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[])
+
             prompt_params = parse_prompt(selected_prompt_text) or {}
             prompt_params['sort_by'] = sort_by
             summary_result_count = prompt_params.get('summary_result_count', 20)
-            
+
             sources = []
             total_results = 0
             pubmed_results = []
@@ -567,31 +567,31 @@ if not sources_selected:
             googlescholar_results = []
             pubmed_fallback_results = []
             all_results = []
-            
+
             for source_id in sources_selected:
                 if source_id not in search_handlers:
                     logger.warning(f"Unknown source: {source_id}")
                     continue
-                
+
                 handler = search_handlers[source_id]
                 update_search_progress(current_user.id, query, f"executing {handler.name} search")
-                
+
                 primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
-                
+
                 primary_results = primary_results or []
                 fallback_results = fallback_results or []
-                
+
                 if primary_results:
                     update_search_progress(current_user.id, query, f"ranking {handler.name} results")
                     ranked_results = handler.rank_results(query, primary_results, prompt_params)
                 else:
                     ranked_results = []
-                
+
                 summary = ""
                 if selected_prompt_text and (ranked_results or primary_results):
                     update_search_progress(current_user.id, query, f"generating {handler.name} summary")
                     summary = handler.generate_summary(query, ranked_results, selected_prompt_text, prompt_params)
-                
+
                 source_data = {
                     'id': handler.source_id,
                     'name': handler.name,
@@ -602,7 +602,7 @@ if not sources_selected:
                     },
                     'summary': summary
                 }
-                
+
                 if source_id == 'pubmed':
                     if primary_results or fallback_results:
                         conn = get_db_connection()
@@ -618,62 +618,66 @@ if not sources_selected:
                     fda_results = primary_results
                 elif source_id == 'googlescholar':
                     googlescholar_results = primary_results
-                
+
                 total_results += len(primary_results) + len(fallback_results)
                 sources.append(source_data)
-                
+
                 all_results.extend([dict(r, source_id=source_id) for r in primary_results])
                 all_results.extend([dict(r, source_id=source_id) for r in fallback_results])
-            
+
             logger.debug(f"Before filtering: sources={len(sources)}, total_results={total_results}, filter_sources={filter_sources}, sources_selected={sources_selected}")
             if isinstance(filter_sources, list) and filter_sources and isinstance(sources_selected, list) and len(sources_selected) > 1:
                 sources = [s for s in sources if s['id'] in filter_sources]
                 total_results = sum(len(s['results']['all']) + len(s['results']['fallback']) for s in sources)
                 all_results = [r for r in all_results if r['source_id'] in filter_sources]
             logger.debug(f"After filtering: sources={len(sources)}, total_results={total_results}")
-            
+
             start_idx = (page - 1) * per_page
             end_idx = start_idx + per_page
-            
+
             for source in sources:
                 source['results']['ranked'] = source['results']['ranked'][start_idx:end_idx]
                 source['results']['all'] = source['results']['all'][start_idx:end_idx]
                 source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
-            
+
             total_pages = (total_results + per_page - 1) // per_page
-            
+
             result_ids = save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
-            
+
             session['latest_search_result_ids'] = json.dumps(result_ids)
             session['latest_query'] = query
-            
+
             update_search_progress(current_user.id, query, "complete")
-            
-return render_template(
-    'search.html', 
-    prompts=prompts, 
-    prompt_id=prompt_id, 
-    prompt_text=selected_prompt_text, 
-    sources=[], 
-    total_results=0, 
-    page=page, 
-    per_page=per_page,
-    username=current_user.email, 
-    has_prompt=bool(selected_prompt_text), 
-    prompt_params={}, 
-    summary_result_count=5, 
-    search_older=False, 
-    start_year=None,
-    sort_by=sort_by,
-    filter_sources=filter_sources,
-    pubmed_results=[],
-    pubmed_fallback_results=[]
-)
+
+            return render_template(
+                'search.html', 
+                sources=sources,
+                total_results=total_results,
+                page=page,
+                per_page=per_page,
+                total_pages=total_pages,
+                query=query, 
+                prompts=prompts, 
+                prompt_id=prompt_id,
+                prompt_text=selected_prompt_text,
+                summary_result_count=summary_result_count,
+                username=current_user.email,
+                has_prompt=bool(selected_prompt_text),
+                prompt_params=prompt_params,
+                search_older=search_older,
+                start_year=start_year,
+                sort_by=sort_by,
+                filter_sources=filter_sources,
+                pubmed_results=pubmed_results,
+                fda_results=fda_results,
+                googlescholar_results=googlescholar_results,
+                pubmed_fallback_results=pubmed_fallback_results
+            )
         except Exception as e:
             logger.error(f"API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources)
-    
+            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[])
+
     return render_template(
         'search.html', 
         prompts=prompts, 
@@ -690,7 +694,9 @@ return render_template(
         search_older=False, 
         start_year=None,
         sort_by=sort_by,
-        filter_sources=filter_sources
+        filter_sources=filter_sources,
+        pubmed_results=[],
+        pubmed_fallback_results=[]
     )
 
 @app.route('/search_summary', methods=['POST'])
