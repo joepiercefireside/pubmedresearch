@@ -98,46 +98,79 @@ class PubMedSearchHandler(SearchHandler):
             Ensure the response is valid JSON and contains only the array of ranking objects.
             """
             
-            completion = client.chat.completions.create(
-                model="grok-3",
-                messages=[
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": context}
-                ],
-                max_tokens=2000
-            )
-            
-            response_text = completion.choices[0].message.content.strip()
-            logger.info(f"Grok ranking response for pubmed: {response_text[:200]}...")
-            
-            # Remove code block markers if present
-            if response_text.startswith('```json'):
-                response_text = response_text[7:].rstrip('```')
-            elif response_text.startswith('```'):
-                response_text = response_text[3:].rstrip('```')
-            
-            ranked_indices = json.loads(response_text)
-            
-            valid_indices = {i for i in range(len(results))}
-            ranked_results = []
-            seen_indices = set()
-            
-            for item in ranked_indices:
-                index = item.get('index')
-                if index in valid_indices and index not in seen_indices:
-                    ranked_results.append(results[index])
-                    seen_indices.add(index)
-            
-            for i, result in enumerate(results):
-                if i not in seen_indices:
-                    ranked_results.append(result)
-            
-            logger.info(f"pubmed ranked {len(ranked_results)} results: indices {[r.get('index', i) for i, r in enumerate(ranked_results)]}")
-            return ranked_results
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    completion = client.chat.completions.create(
+                        model="grok-3",
+                        messages=[
+                            {"role": "system", "content": prompt},
+                            {"role": "user", "content": context}
+                        ],
+                        max_tokens=2000
+                    )
+                    
+                    response_text = completion.choices[0].message.content.strip()
+                    logger.info(f"Grok ranking response for pubmed: {response_text[:200]}...")
+                    
+                    # Remove code block markers if present
+                    if response_text.startswith('```json'):
+                        response_text = response_text[7:].rstrip('```')
+                    elif response_text.startswith('```'):
+                        response_text = response_text[3:].rstrip('```')
+                    
+                    # Attempt to parse JSON, truncate to last valid object if malformed
+                    try:
+                        ranked_indices = json.loads(response_text)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON parsing failed: {str(e)}, attempting to truncate response")
+                        # Find last valid object
+                        last_valid_pos = response_text.rfind('}')
+                        if last_valid_pos > 0:
+                            truncated_response = response_text[:last_valid_pos + 1] + ']'
+                            try:
+                                ranked_indices = json.loads(truncated_response)
+                                logger.info(f"Successfully parsed truncated JSON response")
+                            except json.JSONDecodeError as trunc_e:
+                                logger.error(f"Failed to parse truncated response: {str(trunc_e)}")
+                                if attempt < max_retries - 1:
+                                    logger.info(f"Retrying API call, attempt {attempt + 2}")
+                                    time.sleep(random.uniform(1, 3))
+                                    continue
+                                return results  # Fallback to unranked results
+                        else:
+                            if attempt < max_retries - 1:
+                                logger.info(f"Retrying API call, attempt {attempt + 2}")
+                                time.sleep(random.uniform(1, 3))
+                                continue
+                            return results  # Fallback to unranked results
+                    
+                    valid_indices = {i for i in range(len(results))}
+                    ranked_results = []
+                    seen_indices = set()
+                    
+                    for item in ranked_indices:
+                        index = item.get('index')
+                        if index in valid_indices and index not in seen_indices:
+                            ranked_results.append(results[index])
+                            seen_indices.add(index)
+                    
+                    for i, result in enumerate(results):
+                        if i not in seen_indices:
+                            ranked_results.append(result)
+                    
+                    logger.info(f"pubmed ranked {len(ranked_results)} results: indices {[r.get('index', i) for i, r in enumerate(ranked_results)]}")
+                    return ranked_results
+                
+                except Exception as api_e:
+                    logger.error(f"API error on attempt {attempt + 1}: {str(api_e)}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"Retrying API call, attempt {attempt + 2}")
+                        time.sleep(random.uniform(1, 3))
+                        continue
+                    logger.error(f"Max retries reached, returning unranked results")
+                    return results
         
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Grok ranking response for pubmed: {str(e)}, response: {response_text}")
-            return results
         except Exception as e:
             logger.error(f"Error ranking PubMed results: {str(e)}")
             return results

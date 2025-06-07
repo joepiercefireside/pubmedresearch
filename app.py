@@ -20,10 +20,24 @@ from openai import OpenAI
 from utils import esearch, efetch, parse_e_fetch_xml, search_fda_label_api, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler, GoogleScholarSearchHandler
 
 import nltk
-nltk.download('punkt')
-nltk.download('stopwords')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('wordnet')  # Added to fix Resource wordnet not found error
+import nltk.data
+
+# Set explicit NLTK data path
+nltk_data_dir = os.path.join(os.path.dirname(__file__), 'nltk_data')
+if not os.path.exists(nltk_data_dir):
+    os.makedirs(nltk_data_dir)
+nltk.data.path.append(nltk_data_dir)
+
+# Download NLTK resources with error handling
+try:
+    logger.info("Downloading NLTK resources")
+    nltk.download('punkt', download_dir=nltk_data_dir)
+    nltk.download('stopwords', download_dir=nltk_data_dir)
+    nltk.download('averaged_perceptron_tagger', download_dir=nltk_data_dir)
+    nltk.download('wordnet', download_dir=nltk_data_dir)
+    logger.info("NLTK resources downloaded successfully")
+except Exception as e:
+    logger.error(f"Failed to download NLTK resources: {str(e)}")
 
 from dotenv import load_dotenv
 load_dotenv()
