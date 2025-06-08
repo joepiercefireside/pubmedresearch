@@ -508,6 +508,8 @@ def search():
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
     # Clean up session to reduce cookie size
     session.pop('latest_search_result_ids', None)
+    import psutil
+    logger.debug(f"Memory usage: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
 
     page = int(request.args.get('page', 1))
     per_page = 20
@@ -520,6 +522,14 @@ def search():
     query = request.form.get('query', request.args.get('query', ''))
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
+    # Validate start_year
+    if start_year == "None" or not start_year:
+        start_year = None
+    else:
+        try:
+            start_year = int(start_year)
+        except ValueError:
+            start_year = None
     sources_selected = request.form.getlist('sources') or request.args.getlist('sources') or []
     logger.debug(f"Sources selected initialized: type={type(sources_selected)}, value={sources_selected}")
 
@@ -580,14 +590,13 @@ def search():
 
                 primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
 
-                primary_results = primary_results or []
-                fallback_results = fallback_results or []
+                primary_results = primary_results or [][:20]  # Limit to 20 results
+                fallback_results = fallback_results or [][:20]
 
+                ranked_results = []
                 if primary_results:
                     update_search_progress(current_user.id, query, f"ranking {handler.name} results")
                     ranked_results = handler.rank_results(query, primary_results, prompt_params)
-                else:
-                    ranked_results = []
 
                 summary = ""
                 if selected_prompt_text and (ranked_results or primary_results):
@@ -604,6 +613,7 @@ def search():
                     },
                     'summary': summary
                 }
+                logger.debug(f"Summary for {handler.name}: {summary[:200]}...")
 
                 if source_id == 'pubmed':
                     if primary_results or fallback_results:
@@ -645,7 +655,6 @@ def search():
             total_pages = (total_results + per_page - 1) // per_page
 
             result_ids = save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
-
             session['latest_search_result_ids'] = json.dumps(result_ids[:10])
             session['latest_query'] = query
 
@@ -679,27 +688,6 @@ def search():
             logger.error(f"API error: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[])
-
-    return render_template(
-        'search.html', 
-        prompts=prompts, 
-        prompt_id=prompt_id, 
-        prompt_text=selected_prompt_text, 
-        sources=[], 
-        total_results=0, 
-        page=page, 
-        per_page=per_page,
-        username=current_user.email, 
-        has_prompt=bool(selected_prompt_text), 
-        prompt_params={}, 
-        summary_result_count=5, 
-        search_older=False, 
-        start_year=None,
-        sort_by=sort_by,
-        filter_sources=filter_sources,
-        pubmed_results=[],
-        pubmed_fallback_results=[]
-    )
 
 @app.route('/search_summary', methods=['POST'])
 @login_required

@@ -7,10 +7,12 @@
         <div class="card-body">
             <form method="POST" action="{{ url_for('search') }}" id="search-form">
                 <div class="mb-3">
-                    <input type="text" class="form-control" name="query" placeholder="Enter search query..." value="{{ query }}" required>
+                    <label for="query" class="form-label">Search Query</label>
+                    <input type="text" class="form-control" name="query" id="query" placeholder="Enter search query..." value="{{ query }}" required aria-label="Search query">
                 </div>
                 <div class="mb-3">
-                    <select class="form-control" name="prompt_id" id="prompt_id">
+                    <label for="prompt_id" class="form-label">Select Prompt</label>
+                    <select class="form-control" name="prompt_id" id="prompt_id" aria-label="Select a prompt">
                         <option value="">Select a prompt...</option>
                         {% for prompt in prompts %}
                             <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
@@ -18,40 +20,42 @@
                     </select>
                 </div>
                 <div class="mb-3">
-                    <textarea class="form-control" name="prompt_text" id="prompt_text" placeholder="Enter custom prompt..." rows="4">{{ prompt_text }}</textarea>
+                    <label for="prompt_text" class="form-label">Custom Prompt</label>
+                    <textarea class="form-control" name="prompt_text" id="prompt_text" placeholder="Enter custom prompt..." rows="4" aria-label="Custom prompt">{{ prompt_text }}</textarea>
                 </div>
                 <div class="mb-3">
                     <div class="form-check">
-                        <input type="checkbox" class="form-check-input" name="search_older" id="search_older" {% if search_older %}checked{% endif %}>
+                        <input type="checkbox" class="form-check-input" name="search_older" id="search_older" {% if search_older %}checked{% endif %} aria-label="Search older articles">
                         <label class="form-check-label" for="search_older">Search older articles</label>
                     </div>
                 </div>
                 <div class="mb-3">
-                    <input type="number" class="form-control" name="start_year" placeholder="Start year" value="{{ start_year }}">
+                    <label for="start_year" class="form-label">Start Year</label>
+                    <input type="number" class="form-control" name="start_year" id="start_year" placeholder="Start year" value="{{ start_year if start_year != None }}" aria-label="Start year">
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Sources:</label>
                     <div class="form-check form-check-inline">
-                        <input type="checkbox" class="form-check-input" name="sources" value="pubmed" id="source_pubmed" checked>
+                        <input type="checkbox" class="form-check-input" name="sources" value="pubmed" id="source_pubmed" checked aria-label="PubMed source">
                         <label class="form-check-label" for="source_pubmed">PubMed</label>
                     </div>
                     <div class="form-check form-check-inline">
-                        <input type="checkbox" class="form-check-input" name="sources" value="fda" id="source_fda">
+                        <input type="checkbox" class="form-check-input" name="sources" value="fda" id="source_fda" aria-label="FDA.gov source">
                         <label class="form-check-label" for="source_fda">FDA.gov</label>
                     </div>
                     <div class="form-check form-check-inline">
-                        <input type="checkbox" class="form-check-input" name="sources" value="googlescholar" id="source_googlescholar">
+                        <input type="checkbox" class="form-check-input" name="sources" value="googlescholar" id="source_googlescholar" aria-label="Google Scholar source">
                         <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
                     </div>
                 </div>
                 <div class="mb-3">
-                    <label for="sort_by" class="form-label">Sort by:</label>
-                    <select class="form-control" name="sort_by" id="sort_by">
+                    <label for="sort_by" class="form-label">Sort by</label>
+                    <select class="form-control" name="sort_by" id="sort_by" aria-label="Sort by">
                         <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
                         <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Date</option>
                     </select>
                 </div>
-                <button type="submit" class="btn btn-primary">Search</button>
+                <button type="submit" class="btn btn-primary" title="Submit search">Search</button>
             </form>
             {% if error %}
                 <div class="alert alert-danger mt-3">{{ error }}</div>
@@ -69,7 +73,7 @@
                     <label class="form-label">Filter by source:</label>
                     {% for source in sources %}
                         <div class="form-check form-check-inline">
-                            <input type="checkbox" class="form-check-input" name="filter_sources" value="{{ source.id }}" {% if source.id in filter_sources %}checked{% endif %} onchange="applyFilters()">
+                            <input type="checkbox" class="form-check-input" name="filter_sources" value="{{ source.id }}" {% if source.id in filter_sources %}checked{% endif %} onchange="applyFilters()" aria-label="Filter by {{ source.name }}">
                             <label class="form-check-label">{{ source.name }}</label>
                         </div>
                     {% endfor %}
@@ -78,7 +82,7 @@
                 <ul class="nav nav-tabs" id="sourceTabs" role="tablist">
                     {% for source in sources %}
                         <li class="nav-item">
-                            <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-toggle="tab" href="#{{ source.id }}-results" role="tab" aria-controls="{{ source.id }}-results" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }}</a>
+                            <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-bs-toggle="tab" href="#{{ source.id }}-results" role="tab" aria-controls="{{ source.id }}-results" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }}</a>
                         </li>
                     {% endfor %}
                 </ul>
@@ -124,7 +128,11 @@
                             {% endif %}
                             <div class="summary mt-3" id="{{ source.id }}-summary">
                                 <h4>Summary</h4>
-                                <p>Loading...</p>
+                                {% if source.summary %}
+                                    <p>{{ source.summary|safe }}</p>
+                                {% else %}
+                                    <p>No summary generated due to missing prompt or results.</p>
+                                {% endif %}
                             </div>
                         </div>
                     {% endfor %}
@@ -133,17 +141,17 @@
                     <ul class="pagination">
                         {% if page > 1 %}
                             <li class="page-item">
-                                <a class="page-link" href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Previous</a>
+                                <a class="page-link" href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, sources=sources_selected) }}">Previous</a>
                             </li>
                         {% endif %}
                         {% for p in range(1, total_pages + 1) %}
                             <li class="page-item {% if p == page %}active{% endif %}">
-                                <a class="page-link" href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, filter_sources=filter_sources) }}">{{ p }}</a>
+                                <a class="page-link" href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, sources=sources_selected) }}">{{ p }}</a>
                             </li>
                         {% endfor %}
                         {% if page < total_pages %}
                             <li class="page-item">
-                                <a class="page-link" href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources) }}">Next</a>
+                                <a class="page-link" href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, sources=sources_selected) }}">Next</a>
                             </li>
                         {% endif %}
                     </ul>
@@ -153,20 +161,22 @@
     {% endif %}
 
     <!-- Chat Bubble and Pop-up Modal -->
-    <div class="chat-bubble" id="chat-bubble">
-        <i class="bi bi-chat-dots-fill"></i>
+    <div class="chat-bubble" id="chat-bubble" title="Open chat">
+        <i class="bi bi-chat-dots-fill" aria-hidden="true"></i>
+        <span class="visually-hidden">Open chat</span>
     </div>
     <div class="chat-modal" id="chat-modal">
         <div class="chat-modal-content">
-            <span class="close-chat">×</span>
+            <span class="close-chat" title="Close chat" aria-label="Close chat">×</span>
             <h5 class="card-title">Chat with Research Assistant</h5>
             <div class="chat-history card-body" id="chat-history">
                 <!-- Chat messages will be appended here -->
             </div>
             <form id="chat-form" class="card-footer">
                 <div class="input-group">
-                    <textarea class="form-control" name="message" id="chat-message" placeholder="Type your question..." required></textarea>
-                    <button type="submit" class="btn btn-primary">Send</button>
+                    <label for="chat-message" class="visually-hidden">Chat message</label>
+                    <textarea class="form-control" name="message" id="chat-message" placeholder="Type your question..." required aria-label="Chat message"></textarea>
+                    <button type="submit" class="btn btn-primary" title="Send message">Send</button>
                 </div>
             </form>
         </div>
@@ -190,7 +200,6 @@
                 progressDiv.innerHTML = `<div class="alert alert-info">Status: ${data.status}</div>`;
                 if (data.status.includes("complete")) {
                     source.close();
-                    fetchSummaries(query);
                 } else if (data.status.includes("error")) {
                     source.close();
                     progressDiv.innerHTML = `<div class="alert alert-danger">Error: ${data.status}</div>`;
@@ -205,51 +214,6 @@
         }
     }
 
-    // Fetch and display AI summaries for all sources
-    function fetchSummaries(query) {
-        const promptText = "{{ prompt_text | e }}";
-        const sources = {{ sources|tojson|default('[]') }};
-        const promptParams = {{ prompt_params|tojson|default('{}') }};
-
-        sources.forEach(source => {
-            const sourceId = source.id;
-            const results = source.results.all || [];
-            const fallbackResults = source.results.fallback || [];
-
-            if (!promptText || results.length === 0) {
-                $(`#${sourceId}-summary p`).text("No summary generated due to missing prompt or results.");
-                return;
-            }
-
-            $.ajax({
-                url: "{{ url_for('search_summary') }}",
-                type: "POST",
-                data: {
-                    query: query,
-                    prompt_text: promptText,
-                    results: JSON.stringify(results),
-                    fallback_results: JSON.stringify(fallbackResults),
-                    prompt_params: JSON.stringify(promptParams),
-                    source_id: sourceId
-                },
-                success: function(response) {
-                    const summaryDiv = $(`#${sourceId}-summary p`);
-                    if (response.status === "success") {
-                        summaryDiv.text(response.prompt_output);
-                        if (response.fallback_prompt_output) {
-                            summaryDiv.append(`<br><strong>Fallback Summary:</strong> ${response.fallback_prompt_output}`);
-                        }
-                    } else {
-                        summaryDiv.text(`Error: ${response.message}`);
-                    }
-                },
-                error: function() {
-                    $(`#${sourceId}-summary p`).text("Error: Failed to fetch AI summary.");
-                }
-            });
-        });
-    }
-
     // Apply filters while preserving search parameters
     function applyFilters() {
         const filterSources = Array.from(document.querySelectorAll('input[name="filter_sources"]:checked')).map(el => el.value);
@@ -260,8 +224,11 @@
         url.searchParams.set('prompt_id', "{{ prompt_id | e }}");
         url.searchParams.set('prompt_text', "{{ prompt_text | e }}");
         url.searchParams.set('search_older', "{{ search_older | e }}");
-        url.searchParams.set('start_year', "{{ start_year | e }}");
+        const startYear = "{{ start_year | e }}";
+        url.searchParams.set('start_year', startYear === "None" ? "" : startYear);
         url.searchParams.set('sort_by', "{{ sort_by | e }}");
+        url.searchParams.set('sources', {{ sources_selected|tojson|default('[]') }}.join(','));
+        console.log("Filter URL:", url.toString());
         window.location = url;
     }
 
@@ -275,6 +242,17 @@
         const chatForm = $('#chat-form');
         const chatHistory = $('#chat-history');
         const chatMessage = $('#chat-message');
+
+        // Initialize Bootstrap tabs
+        const tabElList = document.querySelectorAll('#sourceTabs .nav-link');
+        console.log("Tabs initialized:", tabElList.length);
+        tabElList.forEach(tabEl => {
+            tabEl.addEventListener('click', (e) => {
+                e.preventDefault();
+                const tab = new bootstrap.Tab(tabEl);
+                tab.show();
+            });
+        });
 
         // Update prompt text when prompt is selected
         promptSelect.change(function() {
