@@ -14,7 +14,6 @@ import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
 import time
 import re
-import email_validator
 from email_validator import validate_email, EmailNotValidError
 from openai import OpenAI
 from utils import esearch, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler, GoogleScholarSearchHandler
@@ -73,18 +72,24 @@ app.jinja_env.filters['datetimeformat'] = datetimeformat
 def init_progress_db():
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS search_progress
-                 (user_id TEXT, query TEXT="''", status TEXT NOT NULL, timestamp REAL NOT NULL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
-                 (query TEXT PRIMARY KEY, response TEXT NOT NULL, timestamp REAL NOT NULL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS search_history
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, query TEXT NOT NULL, prompt_text TEXT, sources TEXT NOT NULL, result_ids TEXT NOT NULL, timestamp REAL NOT NULL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS chat_history
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, session_id TEXT NOT NULL, message TEXT NOT NULL, is_user BOOLEAN NOT NULL, timestamp REAL NOT NULL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS user_settings
-                 (user_id TEXT PRIMARY KEY, chat_memory_retention_hours INTEGER DEFAULT 24)''')
-    conn.commit()
-    conn.close()
+    try:
+        c.execute('''CREATE TABLE IF NOT EXISTS search_progress
+                     (user_id TEXT, query TEXT DEFAULT '', status TEXT NOT NULL, timestamp REAL NOT NULL)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
+                     (query TEXT PRIMARY KEY, response TEXT NOT NULL, timestamp REAL NOT NULL)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS search_history
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, query TEXT NOT NULL, prompt_text TEXT, sources TEXT NOT NULL, result_ids TEXT NOT NULL, timestamp REAL NOT NULL)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS chat_history
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, session_id TEXT NOT NULL, message TEXT NOT NULL, is_user BOOLEAN NOT NULL, timestamp REAL NOT NULL)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS user_settings
+                     (user_id TEXT PRIMARY KEY, chat_memory_retention_hours INTEGER DEFAULT 24)''')
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error initializing SQLite database: {str(e)}")
+        raise
+    finally:
+        c.close()
+        conn.close()
 
 init_progress_db()
 
@@ -441,7 +446,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 "email_content": error_message,
                 "status": "error",
                 "email_sent": email_sent,
-                "message_id": None
+                "message_id": response_headers.get('X-Message-Id', 'Not provided') if email_sent else None
             }
         raise
 
@@ -665,7 +670,7 @@ def search():
 
             prompt_params = parse_prompt(selected_prompt_text) or {}
             prompt_params['sort_by'] = sort_by
-            summary_result_count = prompt_params.get('summary_result_count', 3)  # Default to 3 for prompt alignment
+            summary_result_count = prompt_params.get('summary_result_count', 3)
 
             sources = []
             total_results = 0
@@ -702,7 +707,7 @@ def search():
                         'all': primary_results,
                         'fallback': fallback_results
                     },
-                    'summary': ''  # Remove per-source summaries
+                    'summary': ''
                 }
 
                 if source_id == 'pubmed':
