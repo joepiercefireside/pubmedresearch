@@ -2,10 +2,9 @@ import requests
 import xml.etree.ElementTree as ET
 import logging
 import nltk
-from nltk.corpus import wordnet
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
+from nltk import pos_tag
 import json
 from openai import OpenAI
 import os
@@ -13,6 +12,21 @@ import re
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+BIOMEDICAL_VOCAB = {
+    "diabetes": ["Diabetes Mellitus", "insulin resistance"],
+    "weight loss": ["obesity", "body weight reduction"],
+    "treatment": ["therapy", "intervention"],
+    "disease": ["disorder", "condition"],
+    "statins": ["HMG-CoA reductase inhibitors", "atorvastatin"],
+    "heart disease": ["cardiovascular disease", "coronary artery disease"],
+    "cardiovascular": ["heart-related", "circulatory"],
+    "blood pressure": ["hypertension", "BP"],
+    "hypertension": ["high blood pressure", "elevated BP"],
+    "risk": ["hazard", "danger"],
+    "smoking": ["smoke", "tobacco"],
+    "pregnancy": ["gestation", "maternity"]
+}
 
 def esearch(term, db='pubmed', retmax=100, date_range=None, start_year=None):
     base_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db={db}&term={term}&retmax={retmax}&retmode=json"
@@ -32,49 +46,84 @@ def esearch(term, db='pubmed', retmax=100, date_range=None, start_year=None):
 
 def extract_keywords_and_date(query, search_older=False, start_year=None):
     try:
-        tokens = word_tokenize(query.lower())
-        stop_words = set(stopwords.words('english'))
-        lemmatizer = WordNetLemmatizer()
+        query_lower = query.lower()
+        tokens = word_tokenize(query)
+        tagged = pos_tag(tokens)
+        stop_words = set(stopwords.words('english')).union({
+            'provide', 'information', 'discuss', 'discusses', 'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 
+            'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to', 'available'
+        })
         
         keywords = []
-        for token in tokens:
-            if token.isalnum() and token not in stop_words:
-                lemma = lemmatizer.lemmatize(token)
-                synonyms = [lemma]
-                for syn in wordnet.synsets(lemma):
-                    for l in syn.lemmas():
-                        if l.name().lower() not in synonyms and len(synonyms) < 2:  # Limit synonyms
-                            synonyms.append(l.name().lower())
-                keywords.append((lemma, synonyms))
+        current_phrase = []
+        for word, tag in tagged:
+            if word.lower() in stop_words:
+                if current_phrase:
+                    keywords.append(' '.join(current_phrase))
+                    current_phrase = []
+                continue
+            if tag.startswith('NN') or tag.startswith('JJ'):
+                current_phrase.append(word.lower())
+            else:
+                if current_phrase:
+                    keywords.append(' '.join(current_phrase))
+                    current_phrase = []
+        if current_phrase:
+            keywords.append(' '.join(current_phrase))
+        
+        split_keywords = []
+        for kw in keywords:
+            if ' ' in kw:
+                split_keywords.extend(kw.split())
+            else:
+                split_keywords.append(kw)
+        
+        keywords = list(set(split_keywords))[:5]
+        
+        keywords_with_synonyms = []
+        for kw in keywords:
+            synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:2]
+            keywords_with_synonyms.append((kw, synonyms))
         
         today = datetime.now()
-        if search_older:
-            date_range = f"{start_year or 2000}/01/01:{today.strftime('%Y/%m/%d')}"
+        default_start_year = today.year - 5
+        date_range = None
+        
+        if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
+            start_year = int(since_match.group(1))
+            date_range = f"{start_year}/01/01:{today.strftime('%Y/%m/%d')}"
+        elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
+            year = int(year_match.group(1))
+            date_range = f"{year}/01/01:{year}/12/31"
+        elif 'past year' in query_lower:
+            date_range = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
+        elif 'past week' in query_lower:
+            date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
         else:
-            date_range = f"{today.year-5}/01/01:{today.strftime('%Y/%m/%d')}"  # Search 5 years back
-        start_year_int = int(start_year) if start_year else None
-        logger.info(f"Extracted keywords: {keywords}, Date range: {date_range}")
-        return keywords, date_range, start_year_int
+            start_year_int = int(start_year) if search_older and start_year else default_start_year
+            date_range = f"{start_year_int}/01/01:{today.strftime('%Y/%m/%d')}"
+        
+        logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
+        return keywords_with_synonyms, date_range, start_year_int if search_older and start_year else default_start_year
     except Exception as e:
         logger.error(f"Error extracting keywords and date: {str(e)}")
         return [], None, None
 
-def build_pubmed_query(keywords, date_range):
+def build_pubmed_query(keywords_with_synonyms, date_range):
     try:
         query_parts = []
-        for keyword, synonyms in keywords:
-            # Simplify query for relevance
-            if keyword in ['good', 'thing', 'evidence']:  # Skip overly broad terms
-                continue
-            syn_query = " OR ".join([f'"{syn}"[All Fields]' for syn in [keyword] + synonyms])
-            query_parts.append(f"({syn_query})")
-        query = " AND ".join(query_parts) if query_parts else "smoking AND pregnancy"
-        query += f" AND {date_range}[dp]"
+        for keyword, synonyms in keywords_with_synonyms:
+            terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms]
+            term_query = " OR ".join(terms)
+            query_parts.append(f"({term_query})")
+        
+        query = " AND ".join(query_parts) if query_parts else ""
+        query = f"({query}) AND {date_range}[dp]" if query else f"{date_range}[dp]"
         logger.info(f"Built PubMed query: {query}")
         return query
     except Exception as e:
         logger.error(f"Error building PubMed query: {str(e)}")
-        return "smoking AND pregnancy"
+        return ""
 
 class SearchHandler:
     def __init__(self):
@@ -83,9 +132,6 @@ class SearchHandler:
     
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         return [], []
-    
-    def rank_results(self, query, results, prompt_params):
-        return results
     
     def query_grok_api(self, system_prompt, context):
         try:
@@ -102,8 +148,7 @@ class SearchHandler:
                 max_tokens=1000
             )
             response = completion.choices[0].message.content.strip()
-            # Sanitize response to ensure valid JSON
-            response = re.sub(r'[^\x20-\x7E\n]', '', response)  # Remove non-printable characters
+            response = re.sub(r'[^\x20-\x7E\n]', '', response)
             return response
         except Exception as e:
             logger.error(f"Error querying Grok API: {str(e)}")
@@ -121,12 +166,6 @@ class PubMedSearchHandler(SearchHandler):
             logger.info(f"Executing PubMed search: {pubmed_query}")
             pmids = esearch(pubmed_query, retmax=100, date_range=date_range, start_year=start_year)
             logger.info(f"PubMed ESearch result: {len(pmids)} PMIDs")
-            
-            if not pmids:
-                # Fallback to broader query
-                fallback_query = f"smoking AND pregnancy AND {date_range}[dp]"
-                pmids = esearch(fallback_query, retmax=100, date_range=date_range, start_year=start_year)
-                logger.info(f"PubMed fallback ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
                 return [], []
@@ -179,33 +218,6 @@ class PubMedSearchHandler(SearchHandler):
         except Exception as e:
             logger.error(f"Error in PubMed search: {str(e)}")
             return [], []
-    
-    def rank_results(self, query, results, prompt_params):
-        try:
-            context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}" for r in results])
-            system_prompt = f"""
-            Rank the following articles by relevance to the query '{query}' (1 = most relevant). Focus on how well each article addresses quitting smoking during pregnancy. Provide a JSON array of objects with 'index' (original position, 0-based) and 'explanation' (brief reason for ranking). Limit to top {len(results)} results.
-            """
-            response = self.query_grok_api(system_prompt, context)
-            ranked_indices = json.loads(response)
-            logger.info(f"Grok ranking response for pubmed: {response[:200]}...")
-            
-            ranked_results = []
-            seen_indices = set()
-            for rank in ranked_indices:
-                idx = rank.get('index', -1)
-                if 0 <= idx < len(results) and idx not in seen_indices:
-                    ranked_results.append(results[idx])
-                    seen_indices.add(idx)
-            
-            for i, result in enumerate(results):
-                if i not in seen_indices:
-                    ranked_results.append(result)
-            
-            return ranked_results
-        except Exception as e:
-            logger.error(f"Failed to rank PubMed results: {str(e)}")
-            return results
 
 class FDASearchHandler(SearchHandler):
     def __init__(self):
@@ -215,7 +227,7 @@ class FDASearchHandler(SearchHandler):
     
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         try:
-            keywords = " ".join([kw for kw, _ in keywords_with_synonyms if kw not in ['good', 'thing', 'evidence']])  # Filter broad terms
+            keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
             url = f"https://api.fda.gov/drug/label.json?search={keywords}&limit=100"
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -227,7 +239,7 @@ class FDASearchHandler(SearchHandler):
                 abstract = item.get('description', [''])[0] or item.get('indications_and_usage', [''])[0]
                 date = item.get('effective_time', 'N/A')
                 abstract = abstract.replace('"', "'").replace('\n', ' ').strip()
-                if title and abstract and ('smoking' in abstract.lower() or 'pregnancy' in abstract.lower()):
+                if title and abstract:
                     results.append({
                         'title': title,
                         'abstract': abstract[:1000],
@@ -242,33 +254,6 @@ class FDASearchHandler(SearchHandler):
         except Exception as e:
             logger.error(f"Error in FDA search: {str(e)}")
             return [], []
-    
-    def rank_results(self, query, results, prompt_params):
-        try:
-            context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nDate: {r.get('publication_date', 'N/A')}" for r in results])
-            system_prompt = f"""
-            Rank the following FDA articles by relevance to the query '{query}' (1 = most relevant). Focus on smoking cessation or pregnancy-related content. Provide a JSON array of objects with 'index' (original position, 0-based) and 'explanation' (brief reason for ranking). Limit to top {len(results)} results.
-            """
-            response = self.query_grok_api(system_prompt, context)
-            ranked_indices = json.loads(response)
-            logger.info(f"Grok ranking response for fda: {response[:200]}...")
-            
-            ranked_results = []
-            seen_indices = set()
-            for rank in ranked_indices:
-                idx = rank.get('index', -1)
-                if 0 <= idx < len(results) and idx not in seen_indices:
-                    ranked_results.append(results[idx])
-                    seen_indices.add(idx)
-            
-            for i, result in enumerate(results):
-                if i not in seen_indices:
-                    ranked_results.append(result)
-            
-            return ranked_results
-        except Exception as e:
-            logger.error(f"Failed to rank FDA results: {str(e)}")
-            return results
 
 class GoogleScholarSearchHandler(SearchHandler):
     def __init__(self):
@@ -278,7 +263,7 @@ class GoogleScholarSearchHandler(SearchHandler):
     
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         try:
-            keywords = " ".join([kw for kw, _ in keywords_with_synonyms if kw not in ['good', 'thing', 'evidence']])
+            keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
             api_key = os.environ.get('SCRAPERAPI_KEY')
             if not api_key:
                 logger.warning("SCRAPERAPI_KEY not set, using fallback search")
@@ -319,30 +304,3 @@ class GoogleScholarSearchHandler(SearchHandler):
         except Exception as e:
             logger.error(f"Error in Google Scholar search: {str(e)}")
             return [], []
-    
-    def rank_results(self, query, results, prompt_params):
-        try:
-            context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}" for r in results])
-            system_prompt = f"""
-            Rank the following articles by relevance to the query '{query}' (1 = most relevant). Focus on quitting smoking during pregnancy. Provide a JSON array of objects with 'index' (original position, 0-based) and 'explanation' (brief reason for ranking). Limit to top {len(results)} results.
-            """
-            response = self.query_grok_api(system_prompt, context)
-            ranked_indices = json.loads(response)
-            logger.info(f"Grok ranking response for googlescholar: {response[:200]}...")
-            
-            ranked_results = []
-            seen_indices = set()
-            for rank in ranked_indices:
-                idx = rank.get('index', -1)
-                if 0 <= idx < len(results) and idx not in seen_indices:
-                    ranked_results.append(results[idx])
-                    seen_indices.add(idx)
-            
-            for i, result in enumerate(results):
-                if i not in seen_indices:
-                    ranked_results.append(result)
-            
-            return ranked_results
-        except Exception as e:
-            logger.error(f"Failed to rank Google Scholar results: {str(e)}")
-            return results
