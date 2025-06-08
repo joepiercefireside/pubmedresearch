@@ -127,17 +127,17 @@
                                     <ul class="pagination">
                                         {% if page[source.id] > 1 %}
                                             <li class="page-item">
-                                                <a class="page-link" href="{{ url_for('search', **{f'page_{source.id}': page[source.id]-1}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Previous</a>
+                                                <a class="page-link" href="{{ url_for('search', **{'page_' + source.id: page[source.id]-1}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Previous</a>
                                             </li>
                                         {% endif %}
                                         {% for p in range(1, total_pages[source.id] + 1) %}
                                             <li class="page-item {% if p == page[source.id] %}active{% endif %}">
-                                                <a class="page-link" href="{{ url_for('search', **{f'page_{source.id}': p}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">{{ p }}</a>
+                                                <a class="page-link" href="{{ url_for('search', **{'page_' + source.id: p}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">{{ p }}</a>
                                             </li>
                                         {% endfor %}
                                         {% if page[source.id] < total_pages[source.id] %}
                                             <li class="page-item">
-                                                <a class="page-link" href="{{ url_for('search', **{f'page_{source.id}': page[source.id]+1}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Next</a>
+                                                <a class="page-link" href="{{ url_for('search', **{'page_' + source.id: page[source.id]+1}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Next</a>
                                             </li>
                                         {% endif %}
                                     </ul>
