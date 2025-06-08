@@ -68,6 +68,12 @@
     {% if sources %}
         <div class="card mt-3">
             <div class="card-body">
+                {% if combined_summary %}
+                    <div class="summary mt-3">
+                        <h2>AI Summary</h2>
+                        <p>{{ combined_summary|safe }}</p>
+                    </div>
+                {% endif %}
                 <h2>Search Results ({{ total_results }})</h2>
                 <div class="mb-3">
                     <label class="form-label">Filter by source:</label>
@@ -126,14 +132,6 @@
                                     </div>
                                 {% endfor %}
                             {% endif %}
-                            <div class="summary mt-3" id="{{ source.id }}-summary">
-                                <h4>Summary</h4>
-                                {% if source.summary %}
-                                    <p>{{ source.summary|safe }}</p>
-                                {% else %}
-                                    <p>No summary generated due to missing prompt or results.</p>
-                                {% endif %}
-                            </div>
                         </div>
                     {% endfor %}
                 </div>
@@ -161,9 +159,9 @@
     {% endif %}
 
     <!-- Chat Bubble and Pop-up Modal -->
-    <div class="chat-bubble" id="chat-bubble" title="Open chat">
-        <i class="bi bi-chat-dots-fill" aria-hidden="true"></i>
-        <span class="visually-hidden">Open chat</span>
+    <div class="chat-bubble" id="chat-bubble" title="Click Here to Chat with Results">
+        <i class="bi bi-chat-square-dots-fill" aria-hidden="true"></i>
+        <span class="visually-hidden">Click Here to Chat with Results</span>
     </div>
     <div class="chat-modal" id="chat-modal">
         <div class="chat-modal-content">
@@ -264,6 +262,7 @@
         // Toggle chat modal
         chatBubble.click(function() {
             chatModal.show();
+            chatForm.show(); // Ensure form is visible
         });
 
         closeChat.click(function() {
@@ -299,6 +298,7 @@
                                 <p>${response.message}</p>
                             </div>
                         `);
+                        chatForm.show(); // Ensure form remains visible
                     } else {
                         chatHistory.append(`
                             <div class="message assistant-message error mb-2 p-2 bg-danger-subtle rounded">
@@ -306,6 +306,7 @@
                                 <p>Error: ${response.message}</p>
                             </div>
                         `);
+                        chatForm.show();
                     }
                     chatHistory.scrollTop(chatHistory[0].scrollHeight);
                 },
@@ -316,6 +317,7 @@
                             <p>Error: Failed to communicate with server.</p>
                         </div>
                     `);
+                    chatForm.show();
                     chatHistory.scrollTop(chatHistory[0].scrollHeight);
                 }
             });

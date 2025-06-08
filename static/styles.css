@@ -3,15 +3,15 @@ body {
     margin: 0;
     padding: 0;
     background-color: #f5f5f5;
-    -webkit-text-size-adjust: 100%; /* For older browsers */
-    text-size-adjust: 100%; /* Standard property */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 .container {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
-    white-space: normal; /* Fallback for text-wrap */
+    white-space: normal;
 }
 
 h1, h2, h3, h5, h6 {
@@ -178,7 +178,6 @@ nav ul li a:hover {
     text-decoration: underline;
 }
 
-/* Modal styling for test notification */
 .modal-content {
     border-radius: 6px;
 }
@@ -209,7 +208,6 @@ nav ul li a:hover {
     overflow-y: auto;
 }
 
-/* Card styling for notifications and prompts */
 .card {
     background-color: white;
     padding: 15px;
@@ -218,7 +216,6 @@ nav ul li a:hover {
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-/* Specific styling for the search button */
 .search-form .btn {
     background-color: #00689B !important;
     color: white !important;
@@ -232,7 +229,6 @@ nav ul li a:hover {
     background-color: #005f8a !important;
 }
 
-/* Hamburger menu styles */
 .hamburger {
     display: none;
     cursor: pointer;
@@ -269,29 +265,36 @@ nav ul li a:hover {
     left: 20px;
     background-color: #007bff;
     color: white;
-    width: 60px; /* Slightly larger for better visibility */
-    height: 60px;
-    border-radius: 50%;
+    padding: 10px 15px;
+    border-radius: 25px;
     display: flex;
     align-items: center;
-    justify-content: center;
     cursor: pointer;
-    font-size: 28px; /* Larger icon */
+    font-size: 16px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.3);
     z-index: 1000;
     transition: background-color 0.3s, transform 0.2s;
 }
 
+.chat-bubble i {
+    margin-right: 8px;
+    font-size: 20px;
+}
+
+.chat-bubble span {
+    font-size: 14px;
+}
+
 .chat-bubble:hover {
     background-color: #0056b3;
-    transform: scale(1.1); /* Subtle zoom on hover */
+    transform: scale(1.05);
 }
 
 .chat-modal {
     display: none;
     position: fixed;
-    bottom: 90px; /* Adjusted to align above chat bubble */
-    left: 20px; /* Moved to left side */
+    bottom: 90px;
+    left: 20px;
     width: 350px;
     max-height: 500px;
     background-color: white;
@@ -303,7 +306,7 @@ nav ul li a:hover {
 
 @media (max-width: 400px) {
     .chat-modal {
-        width: 90%; /* Responsive width for small screens */
+        width: 90%;
         left: 5%;
     }
 }
@@ -377,6 +380,8 @@ nav ul li a:hover {
     padding: 10px;
     background-color: #fff;
     border-top: 1px solid #ddd;
+    position: sticky;
+    bottom: 0;
 }
 
 #chat-form textarea {
