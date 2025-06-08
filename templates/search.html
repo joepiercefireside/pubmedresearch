@@ -74,28 +74,16 @@
                         <p>{{ combined_summary|safe }}</p>
                     </div>
                 {% endif %}
-                <h2>Search Results ({{ total_results }})</h2>
-                <div class="mb-3">
-                    <label class="form-label">Filter by source:</label>
-                    {% for source in sources %}
-                        <div class="form-check form-check-inline">
-                            <input type="checkbox" class="form-check-input" name="filter_sources" value="{{ source.id }}" {% if source.id in filter_sources %}checked{% endif %} onchange="applyFilters()" aria-label="Filter by {{ source.name }}">
-                            <label class="form-check-label">{{ source.name }}</label>
-                        </div>
-                    {% endfor %}
-                </div>
-                <!-- Bootstrap Tabs -->
                 <ul class="nav nav-tabs" id="sourceTabs" role="tablist">
                     {% for source in sources %}
                         <li class="nav-item">
-                            <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-bs-toggle="tab" href="#{{ source.id }}-results" role="tab" aria-controls="{{ source.id }}-results" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }}</a>
+                            <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-bs-toggle="tab" href="#{{ source.id }}-results" role="tab" aria-controls="{{ source.id }}-results" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }} ({{ total_results[source.id]|default(0) }})</a>
                         </li>
                     {% endfor %}
                 </ul>
                 <div class="tab-content" id="sourceTabsContent">
                     {% for source in sources %}
                         <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ source.id }}-results" role="tabpanel" aria-labelledby="{{ source.id }}-tab">
-                            <h3>{{ source.name }} Results</h3>
                             {% if source.results.ranked %}
                                 <h4>Top Ranked Results</h4>
                                 {% for result in source.results.ranked %}
@@ -134,33 +122,34 @@
                                     </div>
                                 {% endfor %}
                             {% endif %}
+                            {% if total_pages[source.id]|default(0) > 1 %}
+                                <nav aria-label="Page navigation for {{ source.name }}" class="mt-3">
+                                    <ul class="pagination">
+                                        {% if page[source.id] > 1 %}
+                                            <li class="page-item">
+                                                <a class="page-link" href="{{ url_for('search', **{f'page_{source.id}': page[source.id]-1}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Previous</a>
+                                            </li>
+                                        {% endif %}
+                                        {% for p in range(1, total_pages[source.id] + 1) %}
+                                            <li class="page-item {% if p == page[source.id] %}active{% endif %}">
+                                                <a class="page-link" href="{{ url_for('search', **{f'page_{source.id}': p}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">{{ p }}</a>
+                                            </li>
+                                        {% endfor %}
+                                        {% if page[source.id] < total_pages[source.id] %}
+                                            <li class="page-item">
+                                                <a class="page-link" href="{{ url_for('search', **{f'page_{source.id}': page[source.id]+1}, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Next</a>
+                                            </li>
+                                        {% endif %}
+                                    </ul>
+                                </nav>
+                            {% endif %}
                         </div>
                     {% endfor %}
                 </div>
-                <nav aria-label="Page navigation" class="mt-3">
-                    <ul class="pagination">
-                        {% if page > 1 %}
-                            <li class="page-item">
-                                <a class="page-link" href="{{ url_for('search', page=page-1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, sources=sources_selected) }}">Previous</a>
-                            </li>
-                        {% endif %}
-                        {% for p in range(1, total_pages + 1) %}
-                            <li class="page-item {% if p == page %}active{% endif %}">
-                                <a class="page-link" href="{{ url_for('search', page=p, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, sources=sources_selected) }}">{{ p }}</a>
-                            </li>
-                        {% endfor %}
-                        {% if page < total_pages %}
-                            <li class="page-item">
-                                <a class="page-link" href="{{ url_for('search', page=page+1, query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, filter_sources=filter_sources, sources=sources_selected) }}">Next</a>
-                            </li>
-                        {% endif %}
-                    </ul>
-                </nav>
             </div>
         </div>
     {% endif %}
 
-    <!-- Chat Bubble and Pop-up Modal -->
     <div class="chat-bubble" id="chat-bubble" title="Click Here to Chat with Results">
         <i class="bi bi-chat-square-dots-fill" aria-hidden="true"></i>
         <span class="chat-bubble-text">Click Here to Chat with Results</span>
@@ -169,9 +158,7 @@
         <div class="chat-modal-content">
             <span class="close-chat" title="Close chat" aria-label="Close chat">×</span>
             <h5 class="card-title">Chat with Research Assistant</h5>
-            <div class="chat-history card-body" id="chat-history">
-                <!-- Chat messages will be appended here -->
-            </div>
+            <div class="chat-history card-body" id="chat-history"></div>
             <form id="chat-form" class="card-footer">
                 <div class="input-group">
                     <label for="chat-message" class="visually-hidden">Chat message</label>
@@ -186,10 +173,8 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // Pass prompts array from server
     const prompts = {{ prompts|tojson }};
 
-    // Search progress updates
     function startProgressUpdates() {
         const query = "{{ query | e }}";
         const progressDiv = document.getElementById("search-progress");
@@ -221,53 +206,6 @@
         }
     }
 
-    // Apply filters via AJAX to preserve state
-    function applyFilters() {
-        const filterSources = Array.from(document.querySelectorAll('input[name="filter_sources"]:checked')).map(el => el.value);
-        const searchData = {
-            query: "{{ query | e }}",
-            prompt_id: "{{ prompt_id | e }}",
-            prompt_text: "{{ prompt_text | e }}",
-            search_older: "{{ search_older | e }}",
-            start_year: "{{ start_year | e }}" === "None" ? "" : "{{ start_year | e }}",
-            sort_by: "{{ sort_by | e }}",
-            sources: {{ sources_selected|tojson|default('[]') }},
-            filter_sources: filterSources,
-            page: 1
-        };
-        
-        $.ajax({
-            url: '{{ url_for("search") }}',
-            type: 'POST',
-            data: searchData,
-            success: function(response) {
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(response, 'text/html');
-                const newResults = doc.querySelector('.card.mt-3');
-                if (newResults) {
-                    document.querySelector('.card.mt-3').outerHTML = newResults.outerHTML;
-                    // Re-initialize tabs
-                    const tabElList = document.querySelectorAll('#sourceTabs .nav-link');
-                    tabElList.forEach(tabEl => {
-                        tabEl.addEventListener('click', (e) => {
-                            e.preventDefault();
-                            const tab = new bootstrap.Tab(tabEl);
-                            tab.show();
-                        });
-                    });
-                    console.log("Filter applied, results updated:", filterSources);
-                } else {
-                    console.error("No results found in response");
-                }
-            },
-            error: function(xhr, status, error) {
-                console.error("Filter AJAX error:", status, error);
-                document.getElementById('search-progress').innerHTML = `<div class="alert alert-danger">Error applying filters.</div>`;
-            }
-        });
-    }
-
-    // Populate prompt text on dropdown change
     $(document).ready(function() {
         const promptSelect = $('#prompt_id');
         const promptTextArea = $('#prompt_text');
@@ -278,7 +216,6 @@
         const chatHistory = $('#chat-history');
         const chatMessage = $('#chat-message');
 
-        // Initialize Bootstrap tabs
         const tabElList = document.querySelectorAll('#sourceTabs .nav-link');
         console.log("Tabs initialized:", tabElList.length);
         tabElList.forEach(tabEl => {
@@ -289,14 +226,12 @@
             });
         });
 
-        // Update prompt text when prompt is selected
         promptSelect.change(function() {
             const selectedId = $(this).val();
             const selectedPrompt = prompts.find(p => p.id === selectedId);
             promptTextArea.val(selectedPrompt ? selectedPrompt.prompt_text : '');
         });
 
-        // Toggle chat modal
         chatBubble.click(function() {
             chatModal.show();
             chatForm.show();
@@ -306,13 +241,11 @@
             chatModal.hide();
         });
 
-        // Handle chat form submission
         chatForm.submit(function(e) {
             e.preventDefault();
             const message = chatMessage.val().trim();
             if (!message) return;
 
-            // Append user message
             chatHistory.append(`
                 <div class="message user-message mb-2 p-2 bg-light rounded">
                     <strong>You (${new Date().toLocaleString()}):</strong>
@@ -322,7 +255,6 @@
             chatMessage.val('');
             chatHistory.scrollTop(chatHistory[0].scrollHeight);
 
-            // Send message to server
             $.ajax({
                 url: '{{ url_for("chat_message") }}',
                 type: 'POST',
@@ -332,7 +264,7 @@
                         chatHistory.append(`
                             <div class="message assistant-message mb-2 p-2 bg-info-subtle rounded">
                                 <strong>Assistant (${new Date().toLocaleString()}):</strong>
-                                <p>${response.message}</p>
+                                <p>${response.message.replace(/\n/g, '<br>')}</p>
                             </div>
                         `);
                         chatForm.show();
@@ -360,7 +292,6 @@
             });
         });
 
-        // Initialize progress updates
         startProgressUpdates();
     });
 </script>

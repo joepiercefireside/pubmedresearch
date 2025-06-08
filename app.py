@@ -597,23 +597,18 @@ def search():
         cur.close()
         conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
-    # Clean up session to reduce cookie size
     session.pop('latest_search_result_ids', None)
     import psutil
     logger.debug(f"Memory usage: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
 
-    page = int(request.args.get('page', 1))
+    page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'fda', 'googlescholar']}
     per_page = 20
     sort_by = request.form.get('sort_by', request.args.get('sort_by', 'relevance'))
-    filter_sources = request.form.getlist('filter_sources') or request.args.getlist('filter_sources') or []
-    logger.debug(f"Filter sources initialized: type={type(filter_sources)}, value={filter_sources}")
-
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
     prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
     query = request.form.get('query', request.args.get('query', ''))
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
-    # Validate start_year
     if start_year == "None" or not start_year:
         start_year = None
     else:
@@ -634,7 +629,7 @@ def search():
             logger.warning(f"Prompt ID {prompt_id} not found in prompts")
             selected_prompt_text = ''
 
-    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50] if prompt_text else 'None'}..., query={query[:50] if query else 'None'}..., search_older={search_older}, start_year={start_year}, sources={sources_selected}, page={page}, sort_by={sort_by}, filter_sources={filter_sources}")
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50] if prompt_text else 'None'}..., query={query[:50] if query else 'None'}..., search_older={search_older}, start_year={start_year}, sources={sources_selected}, page={page}, sort_by={sort_by}")
 
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
@@ -646,18 +641,18 @@ def search():
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
             return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, 
-                                   prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, 
+                                   prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                    summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
         if not sources_selected:
             update_search_progress(current_user.id, query, "error: At least one search source must be selected")
             return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, 
-                                   prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, 
+                                   prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                    summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
         update_search_progress(current_user.id, query, "contacting APIs")
 
@@ -666,17 +661,17 @@ def search():
             if not keywords_with_synonyms:
                 update_search_progress(current_user.id, query, "error: No valid keywords found")
                 return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, 
-                                       prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, 
+                                       prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                        username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                        summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                       filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                       pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
             prompt_params = parse_prompt(selected_prompt_text) or {}
             prompt_params['sort_by'] = sort_by
             summary_result_count = prompt_params.get('summary_result_count', 3)
 
             sources = []
-            total_results = 0
+            total_results = {}
             pubmed_results = []
             fda_results = []
             googlescholar_results = []
@@ -734,55 +729,44 @@ def search():
                 elif source_id == 'googlescholar':
                     googlescholar_results = primary_results
 
-                total_results += len(primary_results) + len(fallback_results)
+                source_total = len(primary_results) + len(fallback_results)
+                total_results[source_id] = source_total
                 sources.append(source_data)
 
                 all_results.extend([dict(r, source_id=source_id) for r in primary_results])
                 all_results.extend([dict(r, source_id=source_id) for r in fallback_results])
                 all_ranked_results.extend([dict(r, source_id=source_id) for r in ranked_results[:summary_result_count]])
 
-            logger.debug(f"Before filtering: sources={len(sources)}, total_results={total_results}, filter_sources={filter_sources}, sources_selected={sources_selected}")
-            if isinstance(filter_sources, list) and filter_sources and isinstance(sources_selected, list) and len(sources_selected) > 1:
-                sources = [s for s in sources if s['id'] in filter_sources]
-                total_results = sum(len(s['results']['all']) + len(s['results']['fallback']) for s in sources)
-                all_results = [r for r in all_results if r['source_id'] in filter_sources]
-                all_ranked_results = [r for r in all_ranked_results if r['source_id'] in filter_sources]
-            logger.debug(f"After filtering: sources={len(sources)}, total_results={total_results}")
-
-            start_idx = (page - 1) * per_page
-            end_idx = start_idx + per_page
+            total_pages = {source_id: (total_results.get(source_id, 0) + per_page - 1) // per_page for source_id in total_results}
 
             for source in sources:
+                source_page = page.get(source['id'], 1)
+                start_idx = (source_page - 1) * per_page
+                end_idx = start_idx + per_page
                 source['results']['ranked'] = source['results']['ranked'][start_idx:end_idx]
                 source['results']['all'] = source['results']['all'][start_idx:end_idx]
                 source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
 
-            total_pages = (total_results + per_page - 1) // per_page
-
-            # Generate single combined summary
             combined_summary = ""
             if selected_prompt_text and all_ranked_results:
                 update_search_progress(current_user.id, query, "generating combined summary")
-                context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}" 
-                                     for r in all_ranked_results[:summary_result_count]])
-                try:
-                    api_key = os.environ.get('XAI_API_KEY')
-                    if not api_key:
-                        raise ValueError("XAI_API_KEY not set")
-                    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-                    completion = client.chat.completions.create(
-                        model="grok-3",
-                        messages=[
-                            {"role": "system", "content": selected_prompt_text},
-                            {"role": "user", "content": context}
-                        ],
-                        max_tokens=1000
-                    )
-                    combined_summary = completion.choices[0].message.content.strip()
-                    logger.info(f"Generated combined summary: length={len(combined_summary)}")
-                except Exception as e:
-                    logger.error(f"Error generating combined summary: {str(e)}")
-                    combined_summary = f"Unable to generate summary: {str(e)}"
+                summaries = []
+                for source_id in ['pubmed', 'fda', 'googlescholar']:
+                    source_results = [r for r in all_ranked_results if r['source_id'] == source_id][:3]
+                    if source_results:
+                        context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}" 
+                                             for r in source_results])
+                        system_prompt = f"""
+                        Summarize the abstracts of the following {source_id} articles in simple, easy-to-understand terms. Provide one paragraph per article, up to 3 paragraphs. Do not repeat the query or include additional text beyond the summaries.
+                        """
+                        try:
+                            response = query_grok_api(system_prompt, context)
+                            summaries.append(f"{source_id.capitalize()} Summaries:\n{response}")
+                        except Exception as e:
+                            logger.error(f"Error generating {source_id} summary: {str(e)}")
+                            summaries.append(f"{source_id.capitalize()} Summaries: Unable to generate summary: {str(e)}")
+                combined_summary = "\n\n".join(summaries)
+                logger.info(f"Generated combined summary: length={len(combined_summary)}")
 
             result_ids = save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
             session['latest_search_result_ids'] = json.dumps(result_ids[:10])
@@ -790,14 +774,14 @@ def search():
 
             update_search_progress(current_user.id, query, "complete")
 
-            logger.debug("Rendering search template for POST request")
+            logger.debug("Rendering search template for POST/GET request")
             return render_template(
                 'search.html', 
                 sources=sources,
                 total_results=total_results,
+                total_pages=total_pages,
                 page=page,
                 per_page=per_page,
-                total_pages=total_pages,
                 query=query, 
                 prompts=prompts, 
                 prompt_id=prompt_id,
@@ -809,7 +793,6 @@ def search():
                 search_older=search_older,
                 start_year=start_year,
                 sort_by=sort_by,
-                filter_sources=filter_sources,
                 pubmed_results=pubmed_results,
                 fda_results=fda_results,
                 googlescholar_results=googlescholar_results,
@@ -821,10 +804,10 @@ def search():
             logger.error(f"API error in POST/GET: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, 
-                                   prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, 
+                                   prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                    summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   filter_sources=filter_sources, pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
     logger.debug("Rendering search template for GET request")
     return render_template(
@@ -833,8 +816,9 @@ def search():
         prompt_id=prompt_id, 
         prompt_text=selected_prompt_text, 
         sources=[],
-        total_results=0, 
-        page=page, 
+        total_results={},
+        total_pages={},
+        page=page,
         per_page=per_page,
         username=current_user.email, 
         has_prompt=bool(selected_prompt_text), 
@@ -843,7 +827,6 @@ def search():
         search_older=False, 
         start_year=None,
         sort_by=sort_by,
-        filter_sources=filter_sources,
         pubmed_results=[],
         pubmed_fallback_results=[],
         sources_selected=sources_selected,
@@ -922,7 +905,7 @@ def chat_message():
         chat_history = get_chat_history(current_user.id, session_id, retention_hours)
         
         query = session.get('latest_query', '')
-        search_results = get_search_results(current_user.id, query)  # Use PostgreSQL
+        search_results = get_search_results(current_user.id, query)
         context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:10]])
         
         with open('static/templates/chatbot_prompt.txt', 'r', encoding='utf-8') as f:
@@ -932,6 +915,18 @@ def chat_message():
         full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
         
         response = query_grok_api(system_prompt, full_context)
+        # Format response for clarity if requesting summaries
+        if "summary" in user_message.lower() and "top" in user_message.lower():
+            formatted_response = ""
+            for source_id in ['pubmed', 'fda', 'googlescholar']:
+                source_results = [r for r in search_results if r['source_id'] == source_id][:3]
+                if source_results:
+                    context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}" for r in source_results])
+                    summary_prompt = f"Summarize the abstracts of the following {source_id} articles in simple terms. Provide one paragraph per article, up to 3 paragraphs."
+                    summary = query_grok_api(summary_prompt, context)
+                    formatted_response += f"{source_id.capitalize()} Summaries:\n{summary}\n\n"
+            response = formatted_response.strip() or response
+        
         save_chat_message(current_user.id, session_id, response, False)
         
         return jsonify({'status': 'success', 'message': response})
