@@ -245,7 +245,7 @@ def get_db_connection():
 
 class User(UserMixin):
     def __init__(self, id, email, admin=False):
-        self.id = id
+        self.id = str(id)
         self.email = email
         self.admin = admin
 
@@ -549,7 +549,7 @@ def search_progress():
     def stream_progress():
         try:
             if not current_user or not hasattr(current_user, 'id'):
-                yield f"data: {{'status': 'error: User not authenticated'}}\n\n"
+                yield 'data: {"status": "error: User not authenticated"}\n\n'
                 return
             query = request.args.get('query', '')
             last_status = None
@@ -561,13 +561,15 @@ def search_progress():
                               (current_user.id, query))
                     result = c.fetchone()
                     if result and result[0] != last_status:
-                        yield f"data: {{'status': '{result[0].replace('\'', '\\\'')}'}}\n\n"
+                        escaped_status = result[0].replace("'", "\\'")
+                        yield 'data: {"status": "' + escaped_status + '"}\n\n'
                         last_status = result[0]
                     if result and result[0].startswith(("complete", "error")):
                         break
                 except sqlite3.Error as e:
                     logger.error(f"Error in search_progress: {str(e)}")
-                    yield f"data: {{'status': 'error: {str(e).replace('\'', '\\\'')}'}}\n\n"
+                    escaped_error = str(e).replace("'", "\\'")
+                    yield 'data: {"status": "error: ' + escaped_error + '"}\n\n'
                     break
                 finally:
                     c.close()
@@ -575,7 +577,8 @@ def search_progress():
                 time.sleep(1)
         except Exception as e:
             logger.error(f"Error in search_progress stream: {str(e)}")
-            yield f"data: {{'status': 'error: {str(e).replace('\'', '\\\'')}'}}\n\n"
+            escaped_error = str(e).replace("'", "\\'")
+            yield 'data: {"status": "error: ' + escaped_error + '"}\n\n'
     
     return Response(stream_progress(), mimetype='text/event-stream')
 
