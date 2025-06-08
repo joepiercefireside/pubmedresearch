@@ -55,7 +55,7 @@
                         <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Date</option>
                     </select>
                 </div>
-                <button type="submit" class="btn btn-primary" title="Submit search">Search</button>
+                <button type="submit" class="btn btn-primary" title="Submit search" aria-label="Submit search">Search</button>
             </form>
             {% if error %}
                 <div class="alert alert-danger mt-3">{{ error }}</div>
@@ -97,26 +97,28 @@
                         <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ source.id }}-results" role="tabpanel" aria-labelledby="{{ source.id }}-tab">
                             <h3>{{ source.name }} Results</h3>
                             {% if source.results.ranked %}
-                                <h4>Ranked Results</h4>
+                                <h4>Top Ranked Results</h4>
                                 {% for result in source.results.ranked %}
-                                    <div class="result mb-3 p-3 border rounded">
+                                    <div class="result mb-3 p-3 border rounded result-card">
                                         <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors }}</p>
-                                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal }}</p>
-                                        <p class="mb-1"><strong>Date:</strong> {{ result.publication_date }}</p>
-                                        <p>{{ result.abstract or result.summary|truncate(200) }}</p>
+                                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
+                                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
+                                        <p class="mb-1"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
+                                        <p>{{ result.abstract|default(result.summary|default('No abstract available'))|truncate(200) }}</p>
                                     </div>
                                 {% endfor %}
+                            {% else %}
+                                <p>No ranked results available.</p>
                             {% endif %}
                             {% if source.results.all %}
                                 <h4>All Results</h4>
                                 {% for result in source.results.all %}
                                     <div class="result mb-3 p-3 border rounded">
                                         <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors }}</p>
-                                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal }}</p>
-                                        <p class="mb-1"><strong>Date:</strong> {{ result.publication_date }}</p>
-                                        <p>{{ result.abstract or result.summary|truncate(200) }}</p>
+                                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
+                                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
+                                        <p class="mb-1"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
+                                        <p>{{ result.abstract|default(result.summary|default('No abstract available'))|truncate(200) }}</p>
                                     </div>
                                 {% endfor %}
                             {% endif %}
@@ -125,10 +127,10 @@
                                 {% for result in source.results.fallback %}
                                     <div class="result mb-3 p-3 border rounded">
                                         <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors }}</p>
-                                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal }}</p>
-                                        <p class="mb-1"><strong>Date:</strong> {{ result.publication_date }}</p>
-                                        <p>{{ result.abstract or result.summary|truncate(200) }}</p>
+                                        <p class="mb-1"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
+                                        <p class="mb-1"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
+                                        <p class="mb-1"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
+                                        <p>{{ result.abstract|default(result.summary|default('No abstract available'))|truncate(200) }}</p>
                                     </div>
                                 {% endfor %}
                             {% endif %}
@@ -161,7 +163,7 @@
     <!-- Chat Bubble and Pop-up Modal -->
     <div class="chat-bubble" id="chat-bubble" title="Click Here to Chat with Results">
         <i class="bi bi-chat-square-dots-fill" aria-hidden="true"></i>
-        <span class="visually-hidden">Click Here to Chat with Results</span>
+        <span class="chat-bubble-text">Click Here to Chat with Results</span>
     </div>
     <div class="chat-modal" id="chat-modal">
         <div class="chat-modal-content">
@@ -174,7 +176,7 @@
                 <div class="input-group">
                     <label for="chat-message" class="visually-hidden">Chat message</label>
                     <textarea class="form-control" name="message" id="chat-message" placeholder="Type your question..." required aria-label="Chat message"></textarea>
-                    <button type="submit" class="btn btn-primary" title="Send message">Send</button>
+                    <button type="submit" class="btn btn-primary" title="Send message" aria-label="Send message">Send</button>
                 </div>
             </form>
         </div>
@@ -194,17 +196,24 @@
         if (query) {
             const source = new EventSource("{{ url_for('search_progress') }}?query=" + encodeURIComponent(query));
             source.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                progressDiv.innerHTML = `<div class="alert alert-info">Status: ${data.status}</div>`;
-                if (data.status.includes("complete")) {
-                    source.close();
-                } else if (data.status.includes("error")) {
-                    source.close();
-                    progressDiv.innerHTML = `<div class="alert alert-danger">Error: ${data.status}</div>`;
+                try {
+                    const data = JSON.parse(event.data);
+                    progressDiv.innerHTML = `<div class="alert alert-info">Status: ${data.status}</div>`;
+                    console.log("Progress update:", data.status);
+                    if (data.status.includes("complete")) {
+                        source.close();
+                    } else if (data.status.includes("error")) {
+                        source.close();
+                        progressDiv.innerHTML = `<div class="alert alert-danger">Error: ${data.status}</div>`;
+                    }
+                } catch (e) {
+                    console.error("Error parsing progress update:", e, event.data);
+                    progressDiv.innerHTML = `<div class="alert alert-danger">Error parsing search progress.</div>`;
                 }
             };
             source.onerror = function() {
-                progressDiv.innerHTML = "<div class='alert alert-danger'>Error fetching search progress.</div>";
+                console.error("EventSource error for search progress");
+                progressDiv.innerHTML = `<div class="alert alert-danger">Error fetching search progress.</div>`;
                 source.close();
             };
         } else {
@@ -212,22 +221,50 @@
         }
     }
 
-    // Apply filters while preserving search parameters
+    // Apply filters via AJAX to preserve state
     function applyFilters() {
         const filterSources = Array.from(document.querySelectorAll('input[name="filter_sources"]:checked')).map(el => el.value);
-        const url = new URL(window.location);
-        url.searchParams.set('filter_sources', filterSources.join(','));
-        // Preserve search parameters
-        url.searchParams.set('query', "{{ query | e }}");
-        url.searchParams.set('prompt_id', "{{ prompt_id | e }}");
-        url.searchParams.set('prompt_text', "{{ prompt_text | e }}");
-        url.searchParams.set('search_older', "{{ search_older | e }}");
-        const startYear = "{{ start_year | e }}";
-        url.searchParams.set('start_year', startYear === "None" ? "" : startYear);
-        url.searchParams.set('sort_by', "{{ sort_by | e }}");
-        url.searchParams.set('sources', {{ sources_selected|tojson|default('[]') }}.join(','));
-        console.log("Filter URL:", url.toString());
-        window.location = url;
+        const searchData = {
+            query: "{{ query | e }}",
+            prompt_id: "{{ prompt_id | e }}",
+            prompt_text: "{{ prompt_text | e }}",
+            search_older: "{{ search_older | e }}",
+            start_year: "{{ start_year | e }}" === "None" ? "" : "{{ start_year | e }}",
+            sort_by: "{{ sort_by | e }}",
+            sources: {{ sources_selected|tojson|default('[]') }},
+            filter_sources: filterSources,
+            page: 1
+        };
+        
+        $.ajax({
+            url: '{{ url_for("search") }}',
+            type: 'POST',
+            data: searchData,
+            success: function(response) {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(response, 'text/html');
+                const newResults = doc.querySelector('.card.mt-3');
+                if (newResults) {
+                    document.querySelector('.card.mt-3').outerHTML = newResults.outerHTML;
+                    // Re-initialize tabs
+                    const tabElList = document.querySelectorAll('#sourceTabs .nav-link');
+                    tabElList.forEach(tabEl => {
+                        tabEl.addEventListener('click', (e) => {
+                            e.preventDefault();
+                            const tab = new bootstrap.Tab(tabEl);
+                            tab.show();
+                        });
+                    });
+                    console.log("Filter applied, results updated:", filterSources);
+                } else {
+                    console.error("No results found in response");
+                }
+            },
+            error: function(xhr, status, error) {
+                console.error("Filter AJAX error:", status, error);
+                document.getElementById('search-progress').innerHTML = `<div class="alert alert-danger">Error applying filters.</div>`;
+            }
+        });
     }
 
     // Populate prompt text on dropdown change
@@ -262,7 +299,7 @@
         // Toggle chat modal
         chatBubble.click(function() {
             chatModal.show();
-            chatForm.show(); // Ensure form is visible
+            chatForm.show();
         });
 
         closeChat.click(function() {
@@ -298,7 +335,7 @@
                                 <p>${response.message}</p>
                             </div>
                         `);
-                        chatForm.show(); // Ensure form remains visible
+                        chatForm.show();
                     } else {
                         chatHistory.append(`
                             <div class="message assistant-message error mb-2 p-2 bg-danger-subtle rounded">

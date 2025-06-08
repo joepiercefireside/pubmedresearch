@@ -116,7 +116,7 @@ def save_search_results(user_id, query, results):
             result_id = hashlib.md5(json.dumps(result, sort_keys=True).encode()).hexdigest()
             cur.execute(
                 "INSERT INTO search_results (user_id, query, source_id, result_data) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (user_id, query, result.get('source_id', 'unknown'), json.dumps(result))
+                (str(user_id), query, result.get('source_id', 'unknown'), json.dumps(result))
             )
             result_ids.append(result_id)
         conn.commit()
@@ -133,8 +133,8 @@ def get_search_results(user_id, query):
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT result_data FROM search_results WHERE user_id = %s AND query = %s ORDER BY created_at DESC LIMIT 100",
-            (user_id, query)
+            "SELECT result_data FROM search_results WHERE user_id = %s::text AND query = %s ORDER BY created_at DESC LIMIT 100",
+            (str(user_id), query)
         )
         results = [json.loads(row[0]) for row in cur.fetchall()]
         return results
@@ -561,13 +561,13 @@ def search_progress():
                               (current_user.id, query))
                     result = c.fetchone()
                     if result and result[0] != last_status:
-                        yield f"data: {{'status': '{result[0]}'}}\n\n"
+                        yield f"data: {{'status': '{result[0].replace('\'', '\\\'')}'}}\n\n"
                         last_status = result[0]
-                    if result and result[0] in ["complete", "error"]:
+                    if result and result[0].startswith(("complete", "error")):
                         break
                 except sqlite3.Error as e:
                     logger.error(f"Error in search_progress: {str(e)}")
-                    yield f"data: {{'status': 'error: {str(e)}'}}\n\n"
+                    yield f"data: {{'status': 'error: {str(e).replace('\'', '\\\'')}'}}\n\n"
                     break
                 finally:
                     c.close()
@@ -575,7 +575,7 @@ def search_progress():
                 time.sleep(1)
         except Exception as e:
             logger.error(f"Error in search_progress stream: {str(e)}")
-            yield f"data: {{'status': 'error: {str(e)}'}}\n\n"
+            yield f"data: {{'status': 'error: {str(e).replace('\'', '\\\'')}'}}\n\n"
     
     return Response(stream_progress(), mimetype='text/event-stream')
 
@@ -619,12 +619,12 @@ def search():
         except ValueError:
             start_year = None
     sources_selected = request.form.getlist('sources') or request.args.getlist('sources') or []
-    logger.debug(f"Sources selected initialized: type={type(sources_selected)}, value={sources_selected}")
+    logger.debug(f"Sources selected: type={type(sources_selected)}, value={sources_selected}")
 
     selected_prompt_text = prompt_text
     if prompt_id and not prompt_text:
         for prompt in prompts:
-            if prompt['id'] == prompt_id:
+            if str(prompt['id']) == prompt_id:
                 selected_prompt_text = prompt['prompt_text']
                 break
         else:
@@ -639,7 +639,7 @@ def search():
         'googlescholar': GoogleScholarSearchHandler()
     }
 
-    if request.method == 'POST':
+    if request.method == 'POST' or (request.method == 'GET' and query and sources_selected):
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
             return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, 
@@ -815,7 +815,7 @@ def search():
                 combined_summary=combined_summary
             )
         except Exception as e:
-            logger.error(f"API error in POST: {str(e)}")
+            logger.error(f"API error in POST/GET: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results=0, page=page, per_page=per_page, 
@@ -829,7 +829,7 @@ def search():
         prompts=prompts, 
         prompt_id=prompt_id, 
         prompt_text=selected_prompt_text, 
-        sources=[], 
+        sources=[],
         total_results=0, 
         page=page, 
         per_page=per_page,
@@ -879,7 +879,7 @@ def chat():
             
             search_results = get_search_results(current_user.id, session.get('latest_query', ''))  # Use PostgreSQL
             query = session.get('latest_query', '')
-            context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', r.get('date', 'N/A'))}" for r in search_results])
+            context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:10]])
             
             with open('static/templates/chatbot_prompt.txt', 'r', encoding='utf-8') as f:
                 system_prompt = f.read()
@@ -920,7 +920,7 @@ def chat_message():
         
         query = session.get('latest_query', '')
         search_results = get_search_results(current_user.id, query)  # Use PostgreSQL
-        context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', r.get('date', 'N/A'))}" for r in search_results])
+        context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', r.get('summary', ''))}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:10]])
         
         with open('static/templates/chatbot_prompt.txt', 'r', encoding='utf-8') as f:
             system_prompt = f.read()
