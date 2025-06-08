@@ -367,7 +367,7 @@ class GoogleScholarSearchHandler(SearchHandler):
     def search(self, query, keywords_with_synonyms, date_range, start_year_int):
         search_terms = []
         for keyword, synonyms in keywords_with_synonyms:
-            terms = [keyword] + synonyms
+            terms = [keyword]  # Use primary keyword only to reduce query size
             search_terms.extend([t.strip().replace('+', ' ') for t in terms if t.strip()])
         if not search_terms:
             return [], []
@@ -376,13 +376,11 @@ class GoogleScholarSearchHandler(SearchHandler):
         user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:89.0) Gecko/20100101 Firefox/89.0'
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.101 Safari/537.36'
         ]
         
         session = requests.Session()
-        retries = Retry(total=7, backoff_factor=3, status_forcelist=[403, 429], allowed_methods=["GET"])
+        retries = Retry(total=3, backoff_factor=1, status_forcelist=[403, 429], allowed_methods=["GET"])
         session.mount('https://', HTTPAdapter(max_retries=retries))
         
         try:
@@ -403,9 +401,11 @@ class GoogleScholarSearchHandler(SearchHandler):
                 proxies = {
                     'https': f'http://scraperapi:{self.proxy}@proxy-server.scraperapi.com:8001'
                 }
+            else:
+                logger.warning("No SCRAPER_API_KEY set; Google Scholar may return 403 errors")
             
-            time.sleep(random.uniform(2, 5))  # Randomized delay
-            response = session.get(base_url, params=params, headers=headers, proxies=proxies, timeout=20, verify=False if self.proxy else True)
+            time.sleep(random.uniform(1, 3))  # Reduced delay
+            response = session.get(base_url, params=params, headers=headers, proxies=proxies, timeout=10, verify=False if self.proxy else True)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')

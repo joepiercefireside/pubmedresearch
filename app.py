@@ -506,6 +506,8 @@ def search():
     cur.close()
     conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
+    # Clean up session to reduce cookie size
+    session.pop('latest_search_result_ids', None)
 
     page = int(request.args.get('page', 1))
     per_page = 20
@@ -644,7 +646,7 @@ def search():
 
             result_ids = save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
 
-            session['latest_search_result_ids'] = json.dumps(result_ids)
+            session['latest_search_result_ids'] = json.dumps(result_ids[:10])
             session['latest_query'] = query
 
             update_search_progress(current_user.id, query, "complete")
