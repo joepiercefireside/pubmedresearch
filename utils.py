@@ -9,7 +9,7 @@ import json
 from openai import OpenAI
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         tagged = pos_tag(tokens)
         stop_words = set(stopwords.words('english')).union({
             'provide', 'information', 'discuss', 'discusses', 'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 
-            'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to', 'available'
+            'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to', 'available', 'looking'
         })
         
         keywords = []
@@ -168,6 +168,16 @@ class PubMedSearchHandler(SearchHandler):
             logger.info(f"PubMed ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
+                # Fallback query with broader date range (10 years)
+                today = datetime.now()
+                fallback_date_range = f"{today.year-10}/01/01:{today.strftime('%Y/%m/%d')}"
+                fallback_query = " AND ".join([f'"{kw}"[All Fields]' for kw, _ in keywords_with_synonyms]) if keywords_with_synonyms else query
+                fallback_query = f"({fallback_query}) AND {fallback_date_range}[dp]"
+                logger.info(f"Executing PubMed fallback search: {fallback_query}")
+                pmids = esearch(fallback_query, retmax=100, date_range=fallback_date_range)
+                logger.info(f"PubMed fallback ESearch result: {len(pmids)} PMIDs")
+            
+            if not pmids:
                 return [], []
             
             efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={','.join(pmids)}&retmode=xml"
@@ -219,42 +229,6 @@ class PubMedSearchHandler(SearchHandler):
             logger.error(f"Error in PubMed search: {str(e)}")
             return [], []
 
-class FDASearchHandler(SearchHandler):
-    def __init__(self):
-        super().__init__()
-        self.source_id = "fda"
-        self.name = "FDA.gov"
-    
-    def search(self, query, keywords_with_synonyms, date_range, start_year):
-        try:
-            keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
-            url = f"https://api.fda.gov/drug/label.json?search={keywords}&limit=100"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            results = []
-            for item in data.get('results', []):
-                title = item.get('openfda', {}).get('brand_name', ['Unknown'])[0]
-                abstract = item.get('description', [''])[0] or item.get('indications_and_usage', [''])[0]
-                date = item.get('effective_time', 'N/A')
-                abstract = abstract.replace('"', "'").replace('\n', ' ').strip()
-                if title and abstract:
-                    results.append({
-                        'title': title,
-                        'abstract': abstract[:1000],
-                        'url': f"https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid={item.get('id', '')}",
-                        'publication_date': date,
-                        'authors': 'N/A',
-                        'journal': 'FDA.gov'
-                    })
-            
-            logger.info(f"FDA API returned {len(results)} results for query: {keywords}")
-            return results, []
-        except Exception as e:
-            logger.error(f"Error in FDA search: {str(e)}")
-            return [], []
-
 class GoogleScholarSearchHandler(SearchHandler):
     def __init__(self):
         super().__init__()
@@ -269,7 +243,7 @@ class GoogleScholarSearchHandler(SearchHandler):
                 logger.warning("SCRAPERAPI_KEY not set, using fallback search")
                 return [], []
             
-            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=10"
+            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=20"
             response = requests.get(url, timeout=20, verify=False)
             response.raise_for_status()
             

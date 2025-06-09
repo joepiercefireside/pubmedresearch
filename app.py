@@ -19,7 +19,7 @@ from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from scipy.spatial.distance import cosine
-from utils import esearch, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, FDASearchHandler, GoogleScholarSearchHandler
+from utils import esearch, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, GoogleScholarSearchHandler
 import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
@@ -533,7 +533,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
-        'fda': FDASearchHandler(),
         'googlescholar': GoogleScholarSearchHandler()
     }
     
@@ -681,7 +680,7 @@ def schedule_notification_rules():
 
 @app.route('/')
 def index():
-    if current_user.is_authenticated:
+    if current_user is not None and current_user.is_authenticated:
         return redirect(url_for('search'))
     return render_template('index.html', username=None)
 
@@ -743,8 +742,9 @@ def logout():
 def search_progress():
     def stream_progress():
         try:
-            if not current_user.is_authenticated:
+            if current_user is None or not hasattr(current_user, 'is_authenticated') or not current_user.is_authenticated:
                 logger.debug("Skipping progress updates for unauthenticated user")
+                yield 'data: {"status": "error: User not authenticated"}\n\n'
                 return
             query = request.args.get('query', '')
             last_status = None
@@ -796,7 +796,7 @@ def search():
     import psutil
     logger.debug(f"Memory usage: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
 
-    page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'fda', 'googlescholar']}
+    page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'googlescholar']}
     per_page = 20
     sort_by = request.form.get('sort_by', request.args.get('sort_by', 'relevance'))
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
@@ -828,7 +828,6 @@ def search():
 
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
-        'fda': FDASearchHandler(),
         'googlescholar': GoogleScholarSearchHandler()
     }
 
@@ -868,7 +867,6 @@ def search():
             sources = []
             total_results = {}
             pubmed_results = []
-            fda_results = []
             googlescholar_results = []
             pubmed_fallback_results = []
             all_results = []
@@ -919,8 +917,6 @@ def search():
                             conn.close()
                         pubmed_results = primary_results
                         pubmed_fallback_results = fallback_results
-                elif source_id == 'fda':
-                    fda_results = primary_results
                 elif source_id == 'googlescholar':
                     googlescholar_results = primary_results
 
@@ -946,7 +942,7 @@ def search():
             if selected_prompt_text and all_ranked_results:
                 update_search_progress(current_user.id, query, "generating combined summary")
                 summaries = []
-                for source_id in ['pubmed', 'fda', 'googlescholar']:
+                for source_id in ['pubmed', 'googlescholar']:
                     source_results = [r for r in all_ranked_results if r['source_id'] == source_id][:summary_result_count]
                     if source_results:
                         context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}" 
@@ -989,7 +985,6 @@ Summarize the abstracts of the following {source_id} articles in simple, easy-to
                 start_year=start_year,
                 sort_by=sort_by,
                 pubmed_results=pubmed_results,
-                fda_results=fda_results,
                 googlescholar_results=googlescholar_results,
                 pubmed_fallback_results=pubmed_fallback_results,
                 sources_selected=sources_selected,
@@ -1112,7 +1107,7 @@ def chat_message():
         response = query_grok_api(system_prompt, full_context)
         if "summary" in user_message.lower() and "top" in user_message.lower():
             formatted_response = ""
-            for source_id in ['pubmed', 'fda', 'googlescholar']:
+            for source_id in ['pubmed', 'googlescholar']:
                 source_results = [r for r in search_results if r['source_id'] == source_id][:3]
                 if source_results:
                     context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}" for r in source_results])

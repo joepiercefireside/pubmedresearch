@@ -40,10 +40,6 @@
                         <label class="form-check-label" for="source_pubmed">PubMed</label>
                     </div>
                     <div class="form-check form-check-inline">
-                        <input type="checkbox" class="form-check-input" name="sources" value="fda" id="source_fda" aria-label="FDA.gov source">
-                        <label class="form-check-label" for="source_fda">FDA.gov</label>
-                    </div>
-                    <div class="form-check form-check-inline">
                         <input type="checkbox" class="form-check-input" name="sources" value="googlescholar" id="source_googlescholar" aria-label="Google Scholar source">
                         <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
                     </div>
@@ -128,33 +124,27 @@
                                         {% if page[source.id] > 1 %}
                                             <li class="page-item">
                                                 {% if source.id == 'pubmed' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_pubmed=page[source.id]-1, page_fda=page.get('fda', 1), page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Previous</a>
-                                                {% elif source.id == 'fda' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_fda=page[source.id]-1, page_pubmed=page.get('pubmed', 1), page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Previous</a>
+                                                    <a class="page-link" href="{{ url_for('search', page_pubmed=page[source.id]-1, page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}" aria-label="Previous page for {{ source.name }}">Previous</a>
                                                 {% elif source.id == 'googlescholar' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_googlescholar=page[source.id]-1, page_pubmed=page.get('pubmed', 1), page_fda=page.get('fda', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Previous</a>
+                                                    <a class="page-link" href="{{ url_for('search', page_googlescholar=page[source.id]-1, page_pubmed=page.get('pubmed', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}" aria-label="Previous page for {{ source.name }}">Previous</a>
                                                 {% endif %}
                                             </li>
                                         {% endif %}
                                         {% for p in range(1, total_pages[source.id] + 1) %}
                                             <li class="page-item {% if p == page[source.id] %}active{% endif %}">
                                                 {% if source.id == 'pubmed' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_pubmed=p, page_fda=page.get('fda', 1), page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">{{ p }}</a>
-                                                {% elif source.id == 'fda' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_fda=p, page_pubmed=page.get('pubmed', 1), page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">{{ p }}</a>
+                                                    <a class="page-link" href="{{ url_for('search', page_pubmed=p, page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}" aria-label="Page {{ p }} for {{ source.name }}">{{ p }}</a>
                                                 {% elif source.id == 'googlescholar' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_googlescholar=p, page_pubmed=page.get('pubmed', 1), page_fda=page.get('fda', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">{{ p }}</a>
+                                                    <a class="page-link" href="{{ url_for('search', page_googlescholar=p, page_pubmed=page.get('pubmed', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}" aria-label="Page {{ p }} for {{ source.name }}">{{ p }}</a>
                                                 {% endif %}
                                             </li>
                                         {% endfor %}
                                         {% if page[source.id] < total_pages[source.id] %}
                                             <li class="page-item">
                                                 {% if source.id == 'pubmed' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_pubmed=page[source.id]+1, page_fda=page.get('fda', 1), page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Next</a>
-                                                {% elif source.id == 'fda' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_fda=page[source.id]+1, page_pubmed=page.get('pubmed', 1), page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Next</a>
+                                                    <a class="page-link" href="{{ url_for('search', page_pubmed=page[source.id]+1, page_googlescholar=page.get('googlescholar', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}" aria-label="Next page for {{ source.name }}">Next</a>
                                                 {% elif source.id == 'googlescholar' %}
-                                                    <a class="page-link" href="{{ url_for('search', page_googlescholar=page[source.id]+1, page_pubmed=page.get('pubmed', 1), page_fda=page.get('fda', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}">Next</a>
+                                                    <a class="page-link" href="{{ url_for('search', page_googlescholar=page[source.id]+1, page_pubmed=page.get('pubmed', 1), query=query, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, sort_by=sort_by, sources=sources_selected) }}" aria-label="Next page for {{ source.name }}">Next</a>
                                                 {% endif %}
                                             </li>
                                         {% endif %}
@@ -168,13 +158,13 @@
         </div>
     {% endif %}
 
-    <div class="chat-bubble" id="chat-bubble" title="Click Here to Chat with Results">
+    <div class="chat-bubble" id="chat-bubble" title="Open chat with results" aria-label="Open chat with results">
         <i class="bi bi-chat-square-dots-fill" aria-hidden="true"></i>
         <span class="chat-bubble-text">Click Here to Chat with Results</span>
     </div>
     <div class="chat-modal" id="chat-modal">
         <div class="chat-modal-content">
-            <span class="close-chat" title="Close chat" aria-label="Close chat">×</span>
+            <button type="button" class="close-chat" title="Close chat" aria-label="Close chat">×</button>
             <h5 class="card-title">Chat with Research Assistant</h5>
             <div class="chat-history card-body" id="chat-history"></div>
             <form id="chat-form" class="card-footer">
