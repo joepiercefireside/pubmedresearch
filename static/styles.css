@@ -1,22 +1,46 @@
 /* General Styles */
 html {
-    text-size-adjust: 100%; /* Replace -webkit-text-size-adjust for broader compatibility */
+    text-size-adjust: 100%; /* Compatible with Chrome 54+, Firefox, Edge */
     font-family: Arial, sans-serif;
 }
 
 body {
     margin: 0;
     padding: 0;
-    background-color: #f8fafc;
+    background-color: #f5f5f5; /* Restored from old_styles.css */
 }
 
 .container {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
+    overflow-wrap: break-word; /* Fallback for text-wrap */
+    white-space: normal;
+}
+
+h1, h2, h3, h5, h6 {
+    color: #00689b; /* Restored from old_styles.css */
+    margin-bottom: 15px;
 }
 
 /* Form Styles */
+.form-group {
+    margin-bottom: 15px; /* Restored from old_styles.css */
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.form-group input, .form-group textarea, .form-group select {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
 .form-control {
     border: 1px solid #ced4da;
     border-radius: 0.25rem;
@@ -27,22 +51,45 @@ body {
     margin-top: 0.3rem;
 }
 
+button, .btn {
+    background-color: #00689b;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover, .btn:hover {
+    background-color: #005f8a; /* Restored from old_styles.css */
+}
+
 .btn-primary {
     background-color: #00689b;
     border-color: #00689b;
 }
 
 .btn-primary:hover {
-    background-color: #00517a;
-    border-color: #00517a;
+    background-color: #005f8a;
+    border-color: #005f8a;
+}
+
+.search-form .btn {
+    background-color: #00689b !important;
+    color: white !important;
+}
+
+.search-form .btn:hover {
+    background-color: #005f8a !important;
 }
 
 /* Card Styles */
 .card {
-    border: 1px solid #dee2e6;
-    border-radius: 0.25rem;
-    background-color: #fff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    background-color: white;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Restored from old_styles.css */
 }
 
 .card-body {
@@ -60,12 +107,189 @@ body {
 }
 
 /* Result Styles */
+.results {
+    margin-top: 20px; /* Restored from old_styles.css */
+}
+
 .result-card {
-    background-color: #f9f9f9;
+    background-color: white;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s;
+    border-left: 4px solid #00689b; /* Restored from old_styles.css */
+}
+
+.result-card:hover {
+    transform: translateY(-2px);
 }
 
 .result {
+    background-color: #f9f9f9;
     border: 1px solid #e9ecef;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+}
+
+.result-title a {
+    color: #00689b;
+    text-decoration: none;
+    font-size: 1em;
+}
+
+.result-title a:hover {
+    text-decoration: underline;
+}
+
+.result-abstract {
+    color: #333;
+    margin: 10px 0;
+    line-height: 1.4;
+}
+
+.result-meta {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.result-meta span {
+    margin-right: 15px;
+}
+
+/* Navigation Bar */
+nav {
+    background-color: #00689b;
+    padding: 10px 0; /* Restored from old_styles.css */
+}
+
+.navbar-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 20px;
+}
+
+.navbar-brand {
+    display: flex;
+    align-items: center;
+}
+
+.navbar-logo {
+    height: 40px;
+    margin-right: 10px;
+}
+
+.navbar-title {
+    color: white;
+    font-size: 1.5em;
+    font-weight: bold;
+}
+
+.navbar-right {
+    display: flex;
+    align-items: center;
+}
+
+.navbar-user {
+    color: white;
+    margin-right: 20px;
+    font-size: 1em;
+}
+
+nav ul {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+}
+
+nav ul li {
+    margin: 0 15px;
+}
+
+nav ul li a {
+    color: white;
+    text-decoration: none;
+    font-weight: bold;
+}
+
+nav ul li a:hover {
+    text-decoration: underline;
+}
+
+.hamburger {
+    display: none;
+    cursor: pointer;
+    font-size: 24px;
+    color: white;
+}
+
+@media (max-width: 768px) {
+    .hamburger {
+        display: block;
+    }
+    .nav-links {
+        display: none;
+        flex-direction: column;
+        position: absolute;
+        background-color: #00689b;
+        width: 100%;
+        top: 60px;
+        left: 0;
+        padding: 10px 0;
+    }
+    .nav-links.active {
+        display: flex;
+    }
+    .nav-links li {
+        margin: 10px 0;
+        text-align: center;
+    }
+}
+
+/* Modal Styles */
+.modal-content {
+    border-radius: 6px; /* Restored from old_styles.css */
+}
+
+.modal-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-body ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+.modal-body ul li {
+    margin-bottom: 15px;
+}
+
+.modal-body pre {
+    background-color: #f8f9fa;
+    padding: 10px;
+    border-radius: 4px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* AI Response */
+.ai-response {
+    margin-top: 20px; /* Restored from old_styles.css */
+}
+
+.ai-response p {
+    margin-bottom: 15px;
+    line-height: 1.6;
 }
 
 /* Chat Bubble */
@@ -73,20 +297,31 @@ body {
     position: fixed;
     bottom: 20px;
     left: 20px;
-    background-color: #00689b;
-    color: #fff;
-    border-radius: 50%;
-    width: 60px;
-    height: 60px;
+    background-color: #00689b; /* Updated to match theme */
+    color: white;
+    padding: 10px 15px;
+    border-radius: 25px;
     display: flex;
     align-items: center;
-    justify-content: center;
     cursor: pointer;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    font-size: 16px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    z-index: 1000;
+    transition: background-color 0.3s, transform 0.2s; /* Restored from old_styles.css */
+}
+
+.chat-bubble i {
+    margin-right: 8px;
+    font-size: 20px;
+}
+
+.chat-bubble span {
+    font-size: 14px;
 }
 
 .chat-bubble:hover {
-    background-color: #00517a;
+    background-color: #005f8a;
+    transform: scale(1.05);
 }
 
 .chat-bubble-text {
@@ -94,7 +329,7 @@ body {
     position: absolute;
     left: 70px;
     background-color: #00689b;
-    color: #fff;
+    color: white;
     padding: 5px 10px;
     border-radius: 5px;
     white-space: nowrap;
@@ -108,46 +343,118 @@ body {
 .chat-modal {
     display: none;
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
+    bottom: 90px;
+    left: 20px;
+    width: 350px;
+    max-height: 500px;
+    background-color: white;
+    border-radius: 10px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     z-index: 1000;
+    overflow: hidden; /* Restored from old_styles.css */
+}
+
+@media (max-width: 400px) {
+    .chat-modal {
+        width: 90%;
+        left: 5%;
+    }
 }
 
 .chat-modal-content {
-    background-color: #fff;
-    margin: 15% auto;
-    padding: 20px;
-    border-radius: 0.25rem;
-    width: 90%;
-    max-width: 500px;
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
 }
 
 .close-chat {
-    float: right;
-    font-size: 1.5rem;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-size: 20px;
     cursor: pointer;
+    color: #333;
+}
+
+.close-chat:hover {
+    color: #ff0000;
+}
+
+.chat-modal h5 {
+    margin: 10px;
+    font-size: 16px;
+    color: #333;
 }
 
 .chat-history {
-    max-height: 300px;
+    flex-grow: 1;
     overflow-y: auto;
-    margin-bottom: 1rem;
+    padding: 10px;
+    background-color: #f9f9f9;
 }
 
 .message {
-    margin-bottom: 0.5rem;
+    margin-bottom: 10px;
+    padding: 8px;
+    border-radius: 5px;
 }
 
 .user-message {
-    text-align: right;
+    background-color: #e1f5fe;
+    margin-left: 20px;
 }
 
 .assistant-message {
-    text-align: left;
+    background-color: #f0f4c3;
+    margin-right: 20px;
+}
+
+.message.error {
+    background-color: #ffebee;
+    color: #c62828;
+}
+
+.message strong {
+    display: block;
+    font-size: 12px;
+    color: #555;
+}
+
+.message p {
+    margin: 5px 0;
+    font-size: 14px;
+}
+
+#chat-form {
+    display: flex;
+    padding: 10px;
+    background-color: #fff;
+    border-top: 1px solid #ddd;
+    position: sticky;
+    bottom: 0;
+}
+
+#chat-form textarea {
+    flex-grow: 1;
+    height: 40px;
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    resize: none;
+    margin-right: 5px;
+}
+
+#chat-form button {
+    padding: 5px 10px;
+    background-color: #00689b;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+#chat-form button:hover {
+    background-color: #005f8a;
 }
 
 /* Loading Animation */
@@ -164,8 +471,8 @@ body {
     }
 }
 
-/* Text Wrapping Fallback */
-.text-wrap {
-    overflow-wrap: break-word; /* Fallback for text-wrap, compatible with Safari */
-    white-space: normal;
+/* Error and Alert */
+.error {
+    color: red;
+    margin: 10px 0; /* Restored from old_styles.css */
 }
