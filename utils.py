@@ -10,6 +10,7 @@ from openai import OpenAI
 import os
 import re
 from datetime import datetime, timedelta
+import tenacity
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,12 @@ BIOMEDICAL_VOCAB = {
     "pregnancy": ["gestation", "maternity"]
 }
 
+@tenacity.retry(
+    stop=tenacity.stop_after_attempt(3),
+    wait=tenacity.wait_exponential(multiplier=1, min=2, max=60),
+    retry=tenacity.retry_if_exception_type(Exception),
+    before_sleep=lambda retry_state: logger.info(f"Retrying ESearch, attempt {retry_state.attempt_number}")
+)
 def esearch(term, db='pubmed', retmax=100, date_range=None, start_year=None):
     base_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db={db}&term={term}&retmax={retmax}&retmode=json"
     if date_range:
@@ -39,10 +46,10 @@ def esearch(term, db='pubmed', retmax=100, date_range=None, start_year=None):
         response = requests.get(base_url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        return data.get('esummaryresult', {}).get('idlist', [])
+        return data.get('esearchresult', {}).get('idlist', [])
     except Exception as e:
         logger.error(f"Error in ESearch: {str(e)}")
-        return []
+        raise
 
 def extract_keywords_and_date(query, search_older=False, start_year=None):
     try:
@@ -168,11 +175,10 @@ class PubMedSearchHandler(SearchHandler):
             logger.info(f"PubMed ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
-                # Fallback query with broader date range (10 years)
+                # Fallback query with broader date range (10 years) and all synonyms
                 today = datetime.now()
                 fallback_date_range = f"{today.year-10}/01/01:{today.strftime('%Y/%m/%d')}"
-                fallback_query = " AND ".join([f'"{kw}"[All Fields]' for kw, _ in keywords_with_synonyms]) if keywords_with_synonyms else query
-                fallback_query = f"({fallback_query}) AND {fallback_date_range}[dp]"
+                fallback_query = build_pubmed_query(keywords_with_synonyms, fallback_date_range)
                 logger.info(f"Executing PubMed fallback search: {fallback_query}")
                 pmids = esearch(fallback_query, retmax=100, date_range=fallback_date_range)
                 logger.info(f"PubMed fallback ESearch result: {len(pmids)} PMIDs")
@@ -235,6 +241,12 @@ class GoogleScholarSearchHandler(SearchHandler):
         self.source_id = "googlescholar"
         self.name = "Google Scholar"
     
+    @tenacity.retry(
+        stop=tenacity.stop_after_attempt(3),
+        wait=tenacity.wait_exponential(multiplier=1, min=2, max=60),
+        retry=tenacity.retry_if_exception_type(Exception),
+        before_sleep=lambda retry_state: logger.info(f"Retrying Google Scholar search, attempt {retry_state.attempt_number}")
+    )
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         try:
             keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
@@ -244,7 +256,7 @@ class GoogleScholarSearchHandler(SearchHandler):
                 return [], []
             
             url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=20"
-            response = requests.get(url, timeout=20, verify=False)
+            response = requests.get(url, timeout=30, verify=False)  # Increased timeout
             response.raise_for_status()
             
             from bs4 import BeautifulSoup
@@ -277,4 +289,4 @@ class GoogleScholarSearchHandler(SearchHandler):
             return results, []
         except Exception as e:
             logger.error(f"Error in Google Scholar search: {str(e)}")
-            return [], []
+            raise

@@ -744,8 +744,7 @@ def search_progress():
         try:
             if current_user is None or not hasattr(current_user, 'is_authenticated') or not current_user.is_authenticated:
                 logger.debug("Skipping progress updates for unauthenticated user")
-                yield 'data: {"status": "error: User not authenticated"}\n\n'
-                return
+                return  # Silent response
             query = request.args.get('query', '')
             last_status = None
             while True:
@@ -772,8 +771,7 @@ def search_progress():
                 time.sleep(1)
         except Exception as e:
             logger.error(f"Error in search_progress stream: {str(e)}")
-            escaped_error = str(e).replace("'", "\\'")
-            yield 'data: {"status": "error: ' + escaped_error + '"}\n\n'
+            yield 'data: {"status": "error: ' + str(e).replace("'", "\\'") + '"}\n\n'
     
     return Response(stream_progress(), mimetype='text/event-stream')
 
