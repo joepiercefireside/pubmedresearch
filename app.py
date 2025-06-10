@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, session, send_from_directory
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -47,6 +47,7 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key')
+app.config['SESSION_COOKIE_SECURE'] = True  # Ensure cookies are secure
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
@@ -61,6 +62,12 @@ sg = sendgrid.SendGridAPIClient(api_key=sendgrid_api_key) if sendgrid_api_key el
 
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 logger.info("Embedding model loaded at startup.")
+
+def datetimeformat(value, format='%Y-%m-%d %H:%M:%S'):
+    if isinstance(value, float):
+        return datetime.fromtimestamp(value).strftime(format)
+    return value
+app.jinja_env.filters['datetimeformat'] = datetimeformat
 
 def load_embedding_model():
     global embedding_model
@@ -166,9 +173,10 @@ def save_search_results(user_id, query, results):
     try:
         for result in results[:50]:
             result_id = hashlib.md5(json.dumps(result, sort_keys=True).encode()).hexdigest()
+            result_data = json.dumps(result)  # Ensure string serialization
             cur.execute(
                 "INSERT INTO search_results (user_id, query, source_id, result_data, created_at) VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (str(user_id), query, result.get('source_id', 'unknown'), json.dumps(result), datetime.now())
+                (str(user_id), query, result.get('source_id', 'unknown'), result_data, datetime.now())
             )
             result_ids.append(result_id)
         conn.commit()
@@ -188,7 +196,17 @@ def get_search_results(user_id, query):
             "SELECT result_data FROM search_results WHERE user_id = %s AND query = %s ORDER BY created_at DESC LIMIT 50",
             (str(user_id), query)
         )
-        results = [json.loads(row[0]) for row in cur.fetchall()]
+        results = []
+        for row in cur.fetchall():
+            try:
+                result_data = row[0]
+                if isinstance(result_data, str):
+                    results.append(json.loads(result_data))
+                else:
+                    results.append(result_data)
+            except json.JSONDecodeError as e:
+                logger.error(f"Error decoding JSON for search result: {str(e)}")
+                continue
         return results
     except Exception as e:
         logger.error(f"Error retrieving search results: {str(e)}")
@@ -365,7 +383,7 @@ def query_grok_api(prompt, context):
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": context}
             ],
-            max_tokens=4096  # Maximum for Grok-3
+            max_tokens=4096
         )
         return completion.choices[0].message.content
     except Exception as e:
@@ -689,7 +707,9 @@ def schedule_notification_rules():
 def index():
     if current_user.is_authenticated:
         return redirect(url_for('search'))
-    return render_template('index.html', username=None)
+    response = make_response(render_template('index.html', username=None))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -715,7 +735,9 @@ def register():
         finally:
             cur.close()
             conn.close()
-    return render_template('register.html', username=None)
+    response = make_response(render_template('register.html', username=None))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -732,7 +754,9 @@ def login():
                     flash('Your account is inactive. Please contact support at pubmedresearch@firesidetechnologies.com.', 'error')
                 else:
                     login_user(User(user[0], user[1], user[4], user[3]))
-                    return redirect(url_for('search'))
+                    response = make_response(redirect(url_for('search')))
+                    response.headers['X-Content-Type-Options'] = 'nosniff'
+                    return response
             flash('Invalid email or password.', 'error')
         except Exception as e:
             logger.error(f"Error during login: {str(e)}")
@@ -740,13 +764,24 @@ def login():
         finally:
             cur.close()
             conn.close()
-    return render_template('login.html', username=None)
+    response = make_response(render_template('login.html', username=None))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/logout')
 @login_required
 def logout():
     logout_user()
-    return redirect(url_for('login'))
+    response = make_response(redirect(url_for('login')))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    response = send_from_directory(app.static_folder, filename)
+    response.headers['Cache-Control'] = 'public, max-age=31536000'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/search_progress', methods=['GET'])
 def search_progress():
@@ -783,7 +818,9 @@ def search_progress():
             logger.error(f"Error in search_progress stream: {str(e)}")
             yield 'data: {"status": "error: ' + str(e).replace("'", "\\'") + '"}\n\n'
     
-    return Response(stream_progress(), mimetype='text/event-stream')
+    response = Response(stream_progress(), mimetype='text/event-stream')
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
@@ -840,19 +877,23 @@ def search():
     if request.method == 'POST' or (request.method == 'GET' and query and sources_selected):
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, 
+            response = make_response(render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                    summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
 
         if not sources_selected:
             update_search_progress(current_user.id, query, "error: At least one search source must be selected")
-            return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, 
+            response = make_response(render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                    summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
 
         update_search_progress(current_user.id, query, "contacting APIs")
 
@@ -860,11 +901,13 @@ def search():
             keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
             if not keywords_with_synonyms:
                 update_search_progress(current_user.id, query, "error: No valid keywords found")
-                return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, 
+                response = make_response(render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, 
                                        prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                        username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                        summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                       pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                       pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+                response.headers['X-Content-Type-Options'] = 'nosniff'
+                return response
 
             prompt_params = parse_prompt(selected_prompt_text) or {}
             prompt_params['sort_by'] = sort_by
@@ -963,7 +1006,7 @@ def search():
             update_search_progress(current_user.id, query, "complete")
 
             logger.debug("Rendering search template for POST/GET request")
-            return render_template(
+            response = make_response(render_template(
                 'search.html', 
                 sources=sources,
                 total_results=total_results,
@@ -986,18 +1029,22 @@ def search():
                 pubmed_fallback_results=pubmed_fallback_results,
                 sources_selected=sources_selected,
                 combined_summary=''  # Deprecated, use source-specific summaries
-            )
+            ))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
         except Exception as e:
             logger.error(f"API error in POST/GET: {str(e)}")
             update_search_progress(current_user.id, query, f"error: Search failed: {str(e)}")
-            return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, 
+            response = make_response(render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
                                    summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
 
     logger.debug("Rendering search template for GET request")
-    return render_template(
+    response = make_response(render_template(
         'search.html', 
         prompts=prompts, 
         prompt_id=prompt_id, 
@@ -1018,13 +1065,17 @@ def search():
         pubmed_fallback_results=[],
         sources_selected=sources_selected,
         combined_summary=''
-    )
+    ))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/chat', methods=['GET', 'POST'])
 @login_required
 def chat():
     if not current_user.is_authenticated:
-        return redirect(url_for('login'))
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
     
     session_id = session.get('chat_session_id', str(hashlib.md5(str(time.time()).encode()).hexdigest()))
     session['chat_session_id'] = session_id
@@ -1068,9 +1119,13 @@ def chat():
             except Exception as e:
                 flash(f"Error generating chat response: {str(e)}", "error")
         
-        return render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours)
+        response = make_response(render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
     
-    return render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours)
+    response = make_response(render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/chat_message', methods=['POST'])
 @login_required
@@ -1124,7 +1179,9 @@ def chat_message():
 @login_required
 def previous_searches():
     search_history = get_search_history(current_user.id)
-    return render_template('previous_searches.html', searches=search_history, username=current_user.email)
+    response = make_response(render_template('previous_searches.html', searches=search_history, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required
@@ -1162,7 +1219,9 @@ def prompt():
     finally:
         cur.close()
         conn.close()
-    return render_template('prompt.html', prompts=prompts, username=current_user.email)
+    response = make_response(render_template('prompt.html', prompts=prompts, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/prompt/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -1176,7 +1235,9 @@ def edit_prompt(id):
         
         if not prompt:
             flash('Prompt not found or you do not have permission to edit it.', 'error')
-            return redirect(url_for('prompt'))
+            response = make_response(redirect(url_for('prompt')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
         
         if request.method == 'POST':
             prompt_name = request.form.get('prompt_name')
@@ -1189,17 +1250,23 @@ def edit_prompt(id):
                                 (prompt_name, prompt_text, id, current_user.id))
                     conn.commit()
                     flash('Prompt updated successfully.', 'success')
-                    return redirect(url_for('prompt'))
+                    response = make_response(redirect(url_for('prompt')))
+                    response.headers['X-Content-Type-Options'] = 'nosniff'
+                    return response
                 except Exception as e:
                     logger.error(f"Failed to update prompt: {str(e)}")
                     conn.rollback()
                     flash(f'Failed to update prompt: {str(e)}', 'error')
         
-        return render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email)
+        response = make_response(render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
     except Exception as e:
         logger.error(f"Error in edit_prompt: {str(e)}")
         flash('An error occurred. Please try again.', 'error')
-        return redirect(url_for('prompt'))
+        response = make_response(redirect(url_for('prompt')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
     finally:
         cur.close()
         conn.close()
@@ -1215,7 +1282,9 @@ def delete_prompt(id):
         
         if not prompt:
             flash('Prompt not found or you do not have permission to delete it.', 'error')
-            return redirect(url_for('prompt'))
+            response = make_response(redirect(url_for('prompt')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
         
         cur.execute('DELETE FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
         conn.commit()
@@ -1228,7 +1297,9 @@ def delete_prompt(id):
         cur.close()
         conn.close()
     
-    return redirect(url_for('prompt'))
+    response = make_response(redirect(url_for('prompt')))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/notifications', methods=['GET', 'POST'])
 @login_required
@@ -1294,7 +1365,9 @@ def notifications():
     finally:
         cur.close()
         conn.close()
-    return render_template('notifications.html', notifications=notifications, username=current_user.email, pre_query=pre_query, pre_prompt=pre_prompt)
+    response = make_response(render_template('notifications.html', notifications=notifications, username=current_user.email, pre_query=pre_query, pre_prompt=pre_prompt))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/notifications/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
@@ -1311,7 +1384,9 @@ def edit_notification(id):
         
         if not notification:
             flash('Notification rule not found or you do not have permission to edit it.', 'error')
-            return redirect(url_for('notifications'))
+            response = make_response(redirect(url_for('notifications')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
         
         if request.method == 'POST':
             rule_name = request.form.get('rule_name')
@@ -1339,7 +1414,9 @@ def edit_notification(id):
                     conn.commit()
                     flash('Notification rule updated successfully.', 'success')
                     schedule_notification_rules()
-                    return redirect(url_for('notifications'))
+                    response = make_response(redirect(url_for('notifications')))
+                    response.headers['X-Content-Type-Options'] = 'nosniff'
+                    return response
                 except Exception as e:
                     logger.error(f"Error updating notification: {str(e)}")
                     conn.rollback()
@@ -1354,11 +1431,15 @@ def edit_notification(id):
             'email_format': notification[5],
             'sources': json.loads(notification[6]) if notification[6] else ['pubmed']
         }
-        return render_template('notification_edit.html', notification=notification_data, username=current_user.email)
+        response = make_response(render_template('notification_edit.html', notification=notification_data, username=current_user.email))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
     except Exception as e:
         logger.error(f"Error in edit_notification: {str(e)}")
         flash('An error occurred. Please try again.', 'error')
-        return redirect(url_for('notifications'))
+        response = make_response(redirect(url_for('notifications')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
     finally:
         cur.close()
         conn.close()
@@ -1374,7 +1455,9 @@ def delete_notification(id):
         
         if not notification:
             flash('Notification rule not found or you do not have permission to delete it.', 'error')
-            return redirect(url_for('notifications'))
+            response = make_response(redirect(url_for('notifications')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
         
         cur.execute('DELETE FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
         conn.commit()
@@ -1388,7 +1471,9 @@ def delete_notification(id):
         cur.close()
         conn.close()
     
-    return redirect(url_for('notifications'))
+    response = make_response(redirect(url_for('notifications')))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/notifications/test/<int:id>', methods=['GET'])
 @login_required
@@ -1461,7 +1546,9 @@ def test_email():
 
 @app.route('/help')
 def help():
-    return render_template('help.html', username=current_user.email if current_user.is_authenticated else None)
+    response = make_response(render_template('help.html', username=current_user.email if current_user.is_authenticated else None))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 schedule_notification_rules()
 

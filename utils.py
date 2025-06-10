@@ -102,6 +102,40 @@ def parse_efetch_xml(xml_content):
         logger.error(f"Error parsing EFetch XML: {str(e)}")
         return []
 
+def get_mesh_synonyms(keyword, api_key=None):
+    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=mesh&term={keyword}&retmode=json"
+    if api_key:
+        url += f"&api_key={api_key}"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        pmids = data.get('esearchresult', {}).get('idlist', [])
+        if pmids:
+            efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=mesh&id={pmids[0]}&retmode=xml"
+            if api_key:
+                efetch_url += f"&api_key={api_key}"
+            efetch_response = requests.get(efetch_url, timeout=10)
+            efetch_response.raise_for_status()
+            root = ET.fromstring(efetch_response.content)
+            synonyms = [term.text for term in root.findall(".//TermList/Term") if term.text]
+            return list(set(synonyms))[:3]
+        return []
+    except Exception as e:
+        logger.error(f"MeSH API error for {keyword}: {str(e)}")
+        return []
+
+def get_datamuse_synonyms(keyword):
+    url = f"https://api.datamuse.com/words?rel_syn={keyword}&max=5"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        return [item['word'] for item in data if 'word' in item][:3]
+    except Exception as e:
+        logger.error(f"Datamuse API error for {keyword}: {str(e)}")
+        return []
+
 def extract_keywords_and_date(query, search_older=False, start_year=None):
     try:
         query_lower = query.lower()
@@ -138,10 +172,15 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         
         keywords = list(set(split_keywords))[:5]
         
+        api_key = os.environ.get('PUBMED_API_KEY')
         keywords_with_synonyms = []
         for kw in keywords:
             synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:2]
-            keywords_with_synonyms.append((kw, synonyms))
+            if api_key:
+                synonyms.extend(get_mesh_synonyms(kw, api_key))
+            if not synonyms:  # Fallback to Datamuse for non-medical terms
+                synonyms.extend(get_datamuse_synonyms(kw))
+            keywords_with_synonyms.append((kw, list(set(synonyms))[:3]))
         
         today = datetime.now()
         default_start_year = today.year - 10
@@ -275,8 +314,8 @@ class GoogleScholarSearchHandler(SearchHandler):
                 logger.warning("SCRAPERAPI_KEY not set")
                 return [], []
             
-            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=10"
-            response = requests.get(url, timeout=30, verify=False)
+            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=20"
+            response = requests.get(url, timeout=30, verify=True)  # Enable SSL verification
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
