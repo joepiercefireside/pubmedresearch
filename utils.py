@@ -25,7 +25,8 @@ BIOMEDICAL_VOCAB = {
     "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction"],
     "cardiovascular": ["heart-related", "circulatory"],
     "blood pressure": ["hypertension", "BP"],
-    "hypertension": ["high blood pressure", "elevated BP"]
+    "hypertension": ["high blood pressure", "elevated BP"],
+    "cidp": ["chronic inflammatory demyelinating polyneuropathy"]
 }
 
 @sleep_and_retry
@@ -108,7 +109,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         tagged = pos_tag(tokens)
         stop_words = set(stopwords.words('english')).union({
             'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 
-            'between', 'only', 'related', 'to', 'available'
+            'between', 'only', 'related', 'to', 'available', 'discuss', 'provide'
         })
         
         keywords = []
@@ -202,7 +203,7 @@ class SearchHandler:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": context}
                 ],
-                max_tokens=1000
+                max_tokens=4096
             )
             response = completion.choices[0].message.content.strip()
             response = re.sub(r'[^\x20-\x7E\n]', '', response)

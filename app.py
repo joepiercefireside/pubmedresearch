@@ -164,7 +164,7 @@ def save_search_results(user_id, query, results):
     cur = conn.cursor()
     result_ids = []
     try:
-        for result in results[:50]:  # Limit to 50 to prevent DB bloat
+        for result in results[:50]:
             result_id = hashlib.md5(json.dumps(result, sort_keys=True).encode()).hexdigest()
             cur.execute(
                 "INSERT INTO search_results (user_id, query, source_id, result_data, created_at) VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
@@ -330,19 +330,19 @@ def validate_user_email(email):
 def parse_prompt(prompt_text):
     if not prompt_text:
         return {
-            'summary_result_count': 5,
-            'display_result_count': 20,
+            'summary_result_count': 3,
+            'display_result_count': 10,
             'limit_presentation': False
         }
     
     prompt_text_lower = prompt_text.lower()
-    summary_result_count = 5
+    summary_result_count = 3
     if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
-        summary_result_count = min(int(match.group(1)), 20)
+        summary_result_count = min(int(match.group(1)), 10)
     elif 'top' in prompt_text_lower:
-        summary_result_count = 5
+        summary_result_count = 3
     
-    display_result_count = 20
+    display_result_count = 10
     limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
     
     logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
@@ -365,7 +365,7 @@ def query_grok_api(prompt, context):
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": context}
             ],
-            max_tokens=1000
+            max_tokens=4096  # Maximum for Grok-3
         )
         return completion.choices[0].message.content
     except Exception as e:
@@ -373,10 +373,10 @@ def query_grok_api(prompt, context):
         raise
 
 def rank_results(query, results, prompt_params=None):
-    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    display_result_count = prompt_params.get('display_result_count', 10) if prompt_params else 10
     try:
         articles_context = []
-        for i, result in enumerate(results[:20]):  # Limit to 20 articles
+        for i, result in enumerate(results[:10]):
             article_text = f"Article {i+1}: Title: {result['title']}\nAbstract: {result.get('abstract', '')}\nAuthors: {result.get('authors', 'N/A')}\nJournal: {result.get('journal', 'N/A')}\nDate: {result.get('publication_date', 'N/A')}"
             articles_context.append(article_text)
         
@@ -431,16 +431,14 @@ Articles:
         return embedding_based_ranking(query, results, prompt_params)
 
 def embedding_based_ranking(query, results, prompt_params=None):
-    import psutil
-    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
-    logger.info(f"Memory usage before ranking: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
+    display_result_count = prompt_params.get('display_result_count', 10) if prompt_params else 10
     query_embedding = generate_embedding(query)
     if query_embedding is None:
         logger.error("Failed to generate query embedding")
         return results[:display_result_count]
     current_year = datetime.now().year
     
-    results = results[:20]  # Limit to 20
+    results = results[:10]
     embeddings = []
     texts = []
     for result in results:
@@ -453,9 +451,7 @@ def embedding_based_ranking(query, results, prompt_params=None):
     
     if texts:
         model = load_embedding_model()
-        logger.info(f"Memory usage before embeddings: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
         new_embeddings = model.encode(texts, convert_to_numpy=True)
-        logger.info(f"Memory usage after embeddings: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
         for i, (result, emb) in enumerate(zip(results[len(embeddings):], new_embeddings)):
             pmid = result.get('url', '').split('/')[-2] if 'pubmed' in result.get('url', '') else f"{result['title']}_{result['publication_date']}"
             if emb.shape[0] == 384:
@@ -489,7 +485,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     
     logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
     
-    summary_result_count = prompt_params.get('summary_result_count', 5) if prompt_params else 5
+    summary_result_count = prompt_params.get('summary_result_count', 3) if prompt_params else 3
     context_results = results[:summary_result_count]
     logger.info(f"Context results count for summary: {len(context_results)}")
     
@@ -522,7 +518,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         return ''.join(f'<p>{p}</p>' for p in output.split('\n\n') if p.strip())
 
 def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources, test_mode=False):
-    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, sources: {sources}, test_mode: {test_mode}, recipient: {user_email}")
+    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, sources: {sources}, test_mode={test_mode}, recipient: {user_email}")
     if not validate_user_email(user_email):
         raise ValueError(f"Invalid recipient email address: {user_email}")
     
@@ -552,11 +548,11 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             handler = search_handlers[source_id]
             primary_results, _ = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
             if primary_results:
-                ranked_results = rank_results(query, primary_results, {'display_result_count': 20})
-                results.extend([dict(r, source_id=source_id) for r in ranked_results[:10]])  # Limit to 10 per source
+                ranked_results = rank_results(query, primary_results, {'display_result_count': 10})
+                results.extend([dict(r, source_id=source_id) for r in ranked_results[:10]])
         
         if results:
-            save_search_results(user_id, query, results)  # Store results for notifications
+            save_search_results(user_id, query, results)
         
         logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
         if not results:
@@ -847,7 +843,7 @@ def search():
             return render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                   summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                   summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
                                    pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
         if not sources_selected:
@@ -855,7 +851,7 @@ def search():
             return render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                   summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                   summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
                                    pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
         update_search_progress(current_user.id, query, "contacting APIs")
@@ -867,12 +863,12 @@ def search():
                 return render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, 
                                        prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                        username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                       summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                       summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
                                        pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
             prompt_params = parse_prompt(selected_prompt_text) or {}
             prompt_params['sort_by'] = sort_by
-            summary_result_count = prompt_params.get('summary_result_count', 5)
+            summary_result_count = prompt_params.get('summary_result_count', 3)
 
             sources = []
             total_results = {}
@@ -892,13 +888,25 @@ def search():
 
                 primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
 
-                primary_results = primary_results or [][:20]  # Limit to 20
+                primary_results = primary_results or [][:20]
                 fallback_results = fallback_results or [][:20]
 
                 ranked_results = []
                 if primary_results:
                     update_search_progress(current_user.id, query, f"ranking {handler.name} results")
                     ranked_results = rank_results(query, primary_results, prompt_params)
+
+                source_summary = ""
+                if selected_prompt_text and ranked_results:
+                    update_search_progress(current_user.id, query, f"generating {handler.name} summary")
+                    context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}" 
+                                        for r in ranked_results[:summary_result_count]])
+                    try:
+                        response = query_grok_api(selected_prompt_text, context)
+                        source_summary = response
+                    except Exception as e:
+                        logger.error(f"Error generating {source_id} summary: {str(e)}")
+                        source_summary = f"Unable to generate summary: {str(e)}"
 
                 source_data = {
                     'id': handler.source_id,
@@ -908,7 +916,7 @@ def search():
                         'all': primary_results,
                         'fallback': fallback_results
                     },
-                    'summary': ''
+                    'summary': source_summary
                 }
 
                 if source_id == 'pubmed':
@@ -948,27 +956,6 @@ def search():
                 source['results']['all'] = source['results']['all'][start_idx:end_idx]
                 source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
 
-            combined_summary = ""
-            if selected_prompt_text and all_ranked_results:
-                update_search_progress(current_user.id, query, "generating combined summary")
-                summaries = []
-                for source_id in ['pubmed', 'googlescholar']:
-                    source_results = [r for r in all_ranked_results if r['source_id'] == source_id][:summary_result_count]
-                    if source_results:
-                        context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}" 
-                                             for r in source_results])
-                        system_prompt = f"""
-Summarize the abstracts of the following {source_id} articles in simple, easy-to-understand terms. Provide one paragraph per article, up to {summary_result_count} paragraphs. Do not repeat the query or include additional text beyond the summaries.
-"""
-                        try:
-                            response = query_grok_api(system_prompt, context)
-                            summaries.append(f"{source_id.capitalize()} Summaries:\n{response}")
-                        except Exception as e:
-                            logger.error(f"Error generating {source_id} summary: {str(e)}")
-                            summaries.append(f"{source_id.capitalize()} Summaries: Unable to generate summary: {str(e)}")
-                combined_summary = "\n\n".join(summaries)
-                logger.info(f"Generated combined summary: length={len(combined_summary)}")
-
             result_ids = save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
             session['latest_search_result_ids'] = json.dumps(result_ids[:10])
             session['latest_query'] = query
@@ -998,7 +985,7 @@ Summarize the abstracts of the following {source_id} articles in simple, easy-to
                 googlescholar_results=googlescholar_results,
                 pubmed_fallback_results=pubmed_fallback_results,
                 sources_selected=sources_selected,
-                combined_summary=combined_summary
+                combined_summary=''  # Deprecated, use source-specific summaries
             )
         except Exception as e:
             logger.error(f"API error in POST/GET: {str(e)}")
@@ -1006,7 +993,7 @@ Summarize the abstracts of the following {source_id} articles in simple, easy-to
             return render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                   summary_result_count=5, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                   summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
                                    pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='')
 
     logger.debug("Rendering search template for GET request")
@@ -1023,7 +1010,7 @@ Summarize the abstracts of the following {source_id} articles in simple, easy-to
         username=current_user.email, 
         has_prompt=bool(selected_prompt_text), 
         prompt_params={}, 
-        summary_result_count=5, 
+        summary_result_count=3, 
         search_older=False, 
         start_year=None,
         sort_by=sort_by,
