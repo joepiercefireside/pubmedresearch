@@ -3,8 +3,8 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
-import logging
 import json
+import logging
 import sqlite3
 import hashlib
 from datetime import datetime, timedelta
