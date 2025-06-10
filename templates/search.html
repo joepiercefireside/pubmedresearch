@@ -40,7 +40,7 @@
                         <label class="form-check-label" for="source_pubmed">PubMed</label>
                     </div>
                     <div class="form-check form-check-inline">
-                        <input type="checkbox" class="form-check-input" name="sources" value="googlescholar" id="source_googlescholar" aria-label="Google Scholar source">
+                        <input type="checkbox" class="form-check-input" name="sources" value="googlescholar" id="source_googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %} aria-label="Google Scholar source">
                         <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
                     </div>
                 </div>
@@ -83,12 +83,12 @@
                             {% if source.results.ranked %}
                                 <h4>Top Ranked Results</h4>
                                 {% for result in source.results.ranked %}
-                                    <div class="result mb-3 p-3 border rounded result-card">
+                                    <div class="result-card mb-3 p-3 border rounded">
                                         <h5><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
                                         <p class="mb-1"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
                                         <p class="mb-1"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
                                         <p class="mb-1"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                                        <p>{{ result.abstract|default(result.summary|default('No abstract available'))|truncate(200) }}</p>
+                                        <p>{{ result.abstract|default('No abstract available')|truncate(200) }}</p>
                                     </div>
                                 {% endfor %}
                             {% else %}
@@ -102,7 +102,7 @@
                                         <p class="mb-1"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
                                         <p class="mb-1"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
                                         <p class="mb-1"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                                        <p>{{ result.abstract|default(result.summary|default('No abstract available'))|truncate(200) }}</p>
+                                        <p>{{ result.abstract|default('No abstract available')|truncate(200) }}</p>
                                     </div>
                                 {% endfor %}
                             {% endif %}
@@ -114,7 +114,7 @@
                                         <p class="mb-1"><strong>Authors:</strong> {{ result.authors|default('N/A') }}</p>
                                         <p class="mb-1"><strong>Journal:</strong> {{ result.journal|default('N/A') }}</p>
                                         <p class="mb-1"><strong>Date:</strong> {{ result.publication_date|default('N/A') }}</p>
-                                        <p>{{ result.abstract|default(result.summary|default('No abstract available'))|truncate(200) }}</p>
+                                        <p>{{ result.abstract|default('No abstract available')|truncate(200) }}</p>
                                     </div>
                                 {% endfor %}
                             {% endif %}

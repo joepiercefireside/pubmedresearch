@@ -11,37 +11,40 @@ import os
 import re
 from datetime import datetime, timedelta
 import tenacity
+from ratelimit import limits, sleep_and_retry
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 BIOMEDICAL_VOCAB = {
-    "diabetes": ["Diabetes Mellitus", "insulin resistance"],
-    "weight loss": ["obesity", "body weight reduction"],
-    "treatment": ["therapy", "intervention"],
-    "disease": ["disorder", "condition"],
-    "statins": ["HMG-CoA reductase inhibitors", "atorvastatin"],
-    "heart disease": ["cardiovascular disease", "coronary artery disease"],
+    "diabetes": ["Diabetes Mellitus", "insulin resistance", "type 2 diabetes"],
+    "weight loss": ["obesity", "body weight reduction", "fat loss"],
+    "treatment": ["therapy", "intervention", "management"],
+    "disease": ["disorder", "condition", "pathology"],
+    "statins": ["HMG-CoA reductase inhibitors", "atorvastatin", "simvastatin"],
+    "heart disease": ["cardiovascular disease", "coronary artery disease", "myocardial infarction"],
     "cardiovascular": ["heart-related", "circulatory"],
     "blood pressure": ["hypertension", "BP"],
-    "hypertension": ["high blood pressure", "elevated BP"],
-    "risk": ["hazard", "danger"],
-    "smoking": ["smoke", "tobacco"],
-    "pregnancy": ["gestation", "maternity"]
+    "hypertension": ["high blood pressure", "elevated BP"]
 }
 
+@sleep_and_retry
+@limits(calls=10, period=1)
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(3),
     wait=tenacity.wait_exponential(multiplier=1, min=2, max=60),
     retry=tenacity.retry_if_exception_type(Exception),
     before_sleep=lambda retry_state: logger.info(f"Retrying ESearch, attempt {retry_state.attempt_number}")
 )
-def esearch(term, db='pubmed', retmax=100, date_range=None, start_year=None):
-    base_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db={db}&term={term}&retmax={retmax}&retmode=json"
+def esearch(term, db='pubmed', retmax=100, date_range=None, start_year=None, api_key=None):
+    base_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db={db}&term={term}&retmax={retmax}&retmode=json&sort=relevance"
     if date_range:
-        base_url += f"&datetype=pdat&mindate={date_range.split(':')[0]}&maxdate={date_range.split(':')[1]}"
-    if start_year:
+        start_date, end_date = date_range.split(':')
+        base_url += f"&datetype=pdat&mindate={start_date}&maxdate={end_date}"
+    elif start_year:
         base_url += f"&datetype=pdat&mindate={start_year}/01/01"
-    
+    if api_key:
+        base_url += f"&api_key={api_key}"
     try:
         response = requests.get(base_url, timeout=10)
         response.raise_for_status()
@@ -51,14 +54,61 @@ def esearch(term, db='pubmed', retmax=100, date_range=None, start_year=None):
         logger.error(f"Error in ESearch: {str(e)}")
         raise
 
+@sleep_and_retry
+@limits(calls=10, period=1)
+def efetch(pmids, api_key=None):
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    params = {
+        "db": "pubmed",
+        "id": ",".join(map(str, pmids)),
+        "retmode": "xml",
+        "api_key": api_key
+    }
+    try:
+        response = requests.get(url, params=params, timeout=20)
+        response.raise_for_status()
+        return response.content
+    except Exception as e:
+        logger.error(f"Error in EFetch: {str(e)}")
+        raise
+
+def parse_efetch_xml(xml_content):
+    try:
+        root = ET.fromstring(xml_content)
+        articles = []
+        for article in root.findall(".//PubmedArticle"):
+            pmid = article.find(".//PMID").text if article.find(".//PMID") is not None else "N/A"
+            title = article.find(".//ArticleTitle").text if article.find(".//ArticleTitle") is not None else "No title"
+            abstract_elem = article.find(".//AbstractText")
+            abstract = abstract_elem.text or "" if abstract_elem is not None else ""
+            authors = [author.find("LastName").text for author in article.findall(".//Author") 
+                       if author.find("LastName") is not None]
+            journal = article.find(".//Journal/Title")
+            journal = journal.text if journal is not None else "N/A"
+            pub_date = article.find(".//PubDate/Year")
+            pub_date = pub_date.text if pub_date is not None else "N/A"
+            logger.info(f"Parsed article: PMID={pmid}, Date={pub_date}, Abstract={'Present' if abstract else 'Missing'}")
+            articles.append({
+                "title": title,
+                "abstract": abstract,
+                "authors": ", ".join(authors) if authors else "N/A",
+                "journal": journal,
+                "publication_date": pub_date,
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+            })
+        return articles
+    except Exception as e:
+        logger.error(f"Error parsing EFetch XML: {str(e)}")
+        return []
+
 def extract_keywords_and_date(query, search_older=False, start_year=None):
     try:
         query_lower = query.lower()
         tokens = word_tokenize(query)
         tagged = pos_tag(tokens)
         stop_words = set(stopwords.words('english')).union({
-            'provide', 'information', 'discuss', 'discusses', 'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 
-            'of', 'for', 'any', 'articles', 'that', 'show', 'between', 'only', 'related', 'to', 'available', 'looking'
+            'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 
+            'between', 'only', 'related', 'to', 'available'
         })
         
         keywords = []
@@ -93,7 +143,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
             keywords_with_synonyms.append((kw, synonyms))
         
         today = datetime.now()
-        default_start_year = today.year - 5
+        default_start_year = today.year - 10
         date_range = None
         
         if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
@@ -171,66 +221,35 @@ class PubMedSearchHandler(SearchHandler):
         try:
             pubmed_query = build_pubmed_query(keywords_with_synonyms, date_range)
             logger.info(f"Executing PubMed search: {pubmed_query}")
-            pmids = esearch(pubmed_query, retmax=100, date_range=date_range, start_year=start_year)
+            api_key = os.environ.get('PUBMED_API_KEY')
+            pmids = esearch(pubmed_query, retmax=100, date_range=date_range, start_year=start_year, api_key=api_key)
             logger.info(f"PubMed ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
-                # Fallback query with broader date range (10 years) and all synonyms
                 today = datetime.now()
                 fallback_date_range = f"{today.year-10}/01/01:{today.strftime('%Y/%m/%d')}"
                 fallback_query = build_pubmed_query(keywords_with_synonyms, fallback_date_range)
                 logger.info(f"Executing PubMed fallback search: {fallback_query}")
-                pmids = esearch(fallback_query, retmax=100, date_range=fallback_date_range)
+                pmids = esearch(fallback_query, retmax=100, date_range=fallback_date_range, api_key=api_key)
                 logger.info(f"PubMed fallback ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
                 return [], []
             
-            efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={','.join(pmids)}&retmode=xml"
-            response = requests.get(efetch_url, timeout=20)
-            response.raise_for_status()
-            xml_data = ET.fromstring(response.content)
+            efetch_xml = efetch(pmids, api_key=api_key)
+            results = parse_efetch_xml(efetch_xml)
             
-            results = []
-            for article in xml_data.findall('.//PubmedArticle'):
-                pmid = article.find('.//PMID').text if article.find('.//PMID') is not None else 'N/A'
-                title = article.find('.//ArticleTitle').text if article.find('.//ArticleTitle') is not None else 'No title'
-                
-                abstract_elem = article.find('.//Abstract/AbstractText')
-                abstract = abstract_elem.text if abstract_elem is not None else ''
-                
-                authors = []
-                for author in article.findall('.//Author'):
-                    last_name = author.find('LastName').text if author.find('LastName') is not None else ''
-                    initials = author.find('Initials').text if author.find('Initials') is not None else ''
-                    if last_name:
-                        authors.append(f"{last_name} {initials}")
-                authors_str = ", ".join(authors) if authors else "N/A"
-                
-                journal = article.find('.//Journal/Title').text if article.find('.//Journal/Title') is not None else 'N/A'
-                
-                pub_date = article.find('.//PubDate')
-                if pub_date is not None:
-                    year = pub_date.find('Year').text if pub_date.find('Year') is not None else ''
-                    month = pub_date.find('Month').text if pub_date.find('Month') is not None else ''
-                    day = pub_date.find('Day').text if pub_date.find('Day') is not None else ''
-                    date_str = f"{year}-{month}-{day}" if year and month and day else year
-                else:
-                    date_str = 'N/A'
-                
-                result = {
-                    'title': title,
-                    'abstract': abstract,
-                    'authors': authors_str,
-                    'journal': journal,
-                    'publication_date': date_str,
-                    'url': f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-                }
-                logger.info(f"Parsed article: PMID={pmid}, Date={date_str}, Abstract={'Present' if abstract else 'Absent'}")
-                results.append(result)
+            primary_results = [
+                r for r in results
+                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) >= start_year
+            ]
+            fallback_results = [
+                r for r in results
+                if r['publication_date'] and r['publication_date'].isdigit() and int(r['publication_date']) < start_year
+            ]
             
-            logger.info(f"PubMed results: {len(results)} primary, 0 fallback")
-            return results, []
+            logger.info(f"PubMed results: {len(primary_results)} primary, {len(fallback_results)} fallback")
+            return primary_results, fallback_results
         except Exception as e:
             logger.error(f"Error in PubMed search: {str(e)}")
             return [], []
@@ -243,7 +262,7 @@ class GoogleScholarSearchHandler(SearchHandler):
     
     @tenacity.retry(
         stop=tenacity.stop_after_attempt(3),
-        wait=tenacity.wait_exponential(multiplier=1, min=2, max=60),
+        wait=tenacity.wait_exponential(multiplier=1, min=5, max=30),
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Google Scholar search, attempt {retry_state.attempt_number}")
     )
@@ -252,14 +271,13 @@ class GoogleScholarSearchHandler(SearchHandler):
             keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
             api_key = os.environ.get('SCRAPERAPI_KEY')
             if not api_key:
-                logger.warning("SCRAPERAPI_KEY not set, using fallback search")
+                logger.warning("SCRAPERAPI_KEY not set")
                 return [], []
             
-            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=20"
-            response = requests.get(url, timeout=30, verify=False)  # Increased timeout
+            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=10"
+            response = requests.get(url, timeout=30, verify=False)
             response.raise_for_status()
             
-            from bs4 import BeautifulSoup
             soup = BeautifulSoup(response.text, 'html.parser')
             results = []
             
@@ -276,6 +294,9 @@ class GoogleScholarSearchHandler(SearchHandler):
                 authors_elem = item.find('div', class_='gs_a')
                 authors = authors_elem.text.strip() if authors_elem else 'N/A'
                 
+                if title == 'No title' and not abstract:
+                    continue
+                
                 results.append({
                     'title': title,
                     'abstract': abstract,
@@ -289,4 +310,4 @@ class GoogleScholarSearchHandler(SearchHandler):
             return results, []
         except Exception as e:
             logger.error(f"Error in Google Scholar search: {str(e)}")
-            raise
+            return [], []

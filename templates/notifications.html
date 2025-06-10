@@ -7,30 +7,26 @@
     <form method="POST">
       <div class="mb-3">
         <label for="rule_name" class="form-label">Rule Name</label>
-        <input type="text" class="form-control" id="rule_name" name="rule_name" placeholder="e.g., Heart Disease Alerts">
+        <input type="text" class="form-control" id="rule_name" name="rule_name" placeholder="e.g., Heart Disease Alerts" required aria-label="Rule name">
       </div>
       <div class="mb-3">
         <label for="keywords" class="form-label">Keywords</label>
-        <input type="text" class="form-control" id="keywords" name="keywords" value="{{ pre_query|default('') }}" placeholder="e.g., heart disease, cardiovascular, hypertension">
+        <input type="text" class="form-control" id="keywords" name="keywords" value="{{ pre_query|default('') }}" placeholder="e.g., heart disease, cardiovascular, hypertension" required aria-label="Keywords">
       </div>
       <div class="mb-3">
         <label class="form-label">Search Sources</label>
         <div class="form-check">
-          <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" checked>
+          <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" checked aria-label="PubMed source">
           <label class="form-check-label" for="source_pubmed">PubMed</label>
         </div>
         <div class="form-check">
-          <input type="checkbox" class="form-check-input" id="source_fda" name="sources" value="fda">
-          <label class="form-check-label" for="source_fda">FDA.gov</label>
-        </div>
-        <div class="form-check">
-          <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar">
+          <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %} aria-label="Google Scholar source">
           <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
         </div>
       </div>
       <div class="mb-3">
         <label for="timeframe" class="form-label">Timeframe</label>
-        <select class="form-control" id="timeframe" name="timeframe">
+        <select class="form-control" id="timeframe" name="timeframe" required aria-label="Timeframe">
           <option value="daily">Daily</option>
           <option value="weekly">Weekly</option>
           <option value="monthly">Monthly</option>
@@ -39,17 +35,17 @@
       </div>
       <div class="mb-3">
         <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
-        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="e.g., Provide a summary of results">{{ pre_prompt|default('') }}</textarea>
+        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="e.g., Provide a summary of results" aria-label="Prompt text">{{ pre_prompt|default('') }}</textarea>
       </div>
       <div class="mb-3">
         <label for="email_format" class="form-label">Email Format</label>
-        <select class="form-control" id="email_format" name="email_format">
+        <select class="form-control" id="email_format" name="email_format" required aria-label="Email format">
           <option value="summary">Summary</option>
           <option value="list">List</option>
           <option value="detailed">Detailed</option>
         </select>
       </div>
-      <button type="submit" class="btn btn-primary">Add Rule</button>
+      <button type="submit" class="btn btn-primary" aria-label="Add rule">Add Rule</button>
     </form>
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -66,9 +62,9 @@
     <form id="test-email-form" method="POST" action="{{ url_for('test_email') }}">
       <div class="mb-3">
         <label for="test-email" class="form-label">Recipient Email (leave blank to use your email)</label>
-        <input type="email" class="form-control" id="test-email" name="email" placeholder="e.g., your_email@example.com">
+        <input type="email" class="form-control" id="test-email" name="email" placeholder="e.g., your_email@example.com" aria-label="Test email">
       </div>
-      <button type="submit" class="btn btn-secondary">Send Test Email</button>
+      <button type="submit" class="btn btn-secondary" aria-label="Send test email">Send Test Email</button>
     </form>
     <div id="test-email-result" class="mt-3" style="display: none;"></div>
   </div>
@@ -100,9 +96,9 @@
                 <td>{{ notification.email_format.capitalize() }}</td>
                 <td>{{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td>
-                  <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning">Edit</a>
-                  <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#testModal-{{ notification.id }}">Test</button>
-                  <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}">Delete</button>
+                  <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning" aria-label="Edit notification">Edit</a>
+                  <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#testModal-{{ notification.id }}" aria-label="Test notification">Test</button>
+                  <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}" aria-label="Delete notification">Delete</button>
                   <!-- Test Modal -->
                   <div class="modal fade" id="testModal-{{ notification.id }}" tabindex="-1" aria-labelledby="testModalLabel-{{ notification.id }}" aria-hidden="true">
                     <div class="modal-dialog modal-lg">
@@ -127,7 +123,7 @@
                           <div id="test-error-{{ notification.id }}" class="alert alert-danger" style="display: none;"></div>
                         </div>
                         <div class="modal-footer">
-                          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" aria-label="Close modal">Close</button>
                         </div>
                       </div>
                     </div>
@@ -145,8 +141,8 @@
                         </div>
                         <div class="modal-footer">
                           <form action="{{ url_for('delete_notification', id=notification.id) }}" method="POST">
-                            <button type="submit" class="btn btn-danger">Delete</button>
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-danger" aria-label="Delete rule">Delete</button>
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" aria-label="Cancel">Cancel</button>
                           </form>
                         </div>
                       </div>

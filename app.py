@@ -19,7 +19,7 @@ from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from scipy.spatial.distance import cosine
-from utils import esearch, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, GoogleScholarSearchHandler
+from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, SearchHandler, PubMedSearchHandler, GoogleScholarSearchHandler
 import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
@@ -59,14 +59,11 @@ if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = sendgrid.SendGridAPIClient(api_key=sendgrid_api_key) if sendgrid_api_key else None
 
-embedding_model = None
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+logger.info("Embedding model loaded at startup.")
 
 def load_embedding_model():
     global embedding_model
-    if embedding_model is None:
-        logger.info("Loading sentence-transformers model...")
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        logger.info("Model loaded.")
     return embedding_model
 
 def generate_embedding(text):
@@ -167,11 +164,11 @@ def save_search_results(user_id, query, results):
     cur = conn.cursor()
     result_ids = []
     try:
-        for result in results:
+        for result in results[:50]:  # Limit to 50 to prevent DB bloat
             result_id = hashlib.md5(json.dumps(result, sort_keys=True).encode()).hexdigest()
             cur.execute(
-                "INSERT INTO search_results (user_id, query, source_id, result_data) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (str(user_id), query, result.get('source_id', 'unknown'), json.dumps(result))
+                "INSERT INTO search_results (user_id, query, source_id, result_data, created_at) VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                (str(user_id), query, result.get('source_id', 'unknown'), json.dumps(result), datetime.now())
             )
             result_ids.append(result_id)
         conn.commit()
@@ -188,7 +185,7 @@ def get_search_results(user_id, query):
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT result_data FROM search_results WHERE user_id = %s::text AND query = %s ORDER BY created_at DESC LIMIT 100",
+            "SELECT result_data FROM search_results WHERE user_id = %s AND query = %s ORDER BY created_at DESC LIMIT 50",
             (str(user_id), query)
         )
         results = [json.loads(row[0]) for row in cur.fetchall()]
@@ -299,20 +296,21 @@ def get_db_connection():
     return conn
 
 class User(UserMixin):
-    def __init__(self, id, email, admin=False):
+    def __init__(self, id, email, admin=False, status='trial'):
         self.id = str(id)
         self.email = email
         self.admin = admin
+        self.status = status
 
 @login_manager.user_loader
 def load_user(user_id):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT id, email, admin FROM users WHERE id = %s", (user_id,))
+        cur.execute("SELECT id, email, admin, status FROM users WHERE id = %s", (user_id,))
         user = cur.fetchone()
         if user:
-            return User(user[0], user[1], user[2])
+            return User(user[0], user[1], user[2], user[3])
         return None
     except Exception as e:
         logger.error(f"Error loading user: {str(e)}")
@@ -333,7 +331,7 @@ def parse_prompt(prompt_text):
     if not prompt_text:
         return {
             'summary_result_count': 5,
-            'display_result_count': 80,
+            'display_result_count': 20,
             'limit_presentation': False
         }
     
@@ -344,7 +342,7 @@ def parse_prompt(prompt_text):
     elif 'top' in prompt_text_lower:
         summary_result_count = 5
     
-    display_result_count = 80
+    display_result_count = 20
     limit_presentation = ('show only' in prompt_text_lower or 'present only' in prompt_text_lower)
     
     logger.info(f"Parsed prompt: summary_result_count={summary_result_count}, display_result_count={display_result_count}, limit_presentation={limit_presentation}")
@@ -375,11 +373,10 @@ def query_grok_api(prompt, context):
         raise
 
 def rank_results(query, results, prompt_params=None):
-    display_result_count = prompt_params.get('display_result_count', 80) if prompt_params else 80
-    
+    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
     try:
         articles_context = []
-        for i, result in enumerate(results):
+        for i, result in enumerate(results[:20]):  # Limit to 20 articles
             article_text = f"Article {i+1}: Title: {result['title']}\nAbstract: {result.get('abstract', '')}\nAuthors: {result.get('authors', 'N/A')}\nJournal: {result.get('journal', 'N/A')}\nDate: {result.get('publication_date', 'N/A')}"
             articles_context.append(article_text)
         
@@ -403,8 +400,12 @@ Articles:
             response = cached_response
         else:
             response = query_grok_api(ranking_prompt, context)
-            cache_grok_response(cache_key, response)
-        
+            try:
+                json.loads(response)
+                cache_grok_response(cache_key, response)
+            except json.JSONDecodeError as je:
+                logger.error(f"Invalid JSON from Grok: {str(je)}")
+                raise
         logger.info(f"Grok ranking response: {response[:200]}...")
         ranking = json.loads(response)
         if not isinstance(ranking, list):
@@ -430,13 +431,16 @@ Articles:
         return embedding_based_ranking(query, results, prompt_params)
 
 def embedding_based_ranking(query, results, prompt_params=None):
-    display_result_count = prompt_params.get('display_result_count', 80) if prompt_params else 80
+    import psutil
+    display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    logger.info(f"Memory usage before ranking: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
     query_embedding = generate_embedding(query)
     if query_embedding is None:
         logger.error("Failed to generate query embedding")
         return results[:display_result_count]
     current_year = datetime.now().year
     
+    results = results[:20]  # Limit to 20
     embeddings = []
     texts = []
     for result in results:
@@ -449,7 +453,9 @@ def embedding_based_ranking(query, results, prompt_params=None):
     
     if texts:
         model = load_embedding_model()
+        logger.info(f"Memory usage before embeddings: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
         new_embeddings = model.encode(texts, convert_to_numpy=True)
+        logger.info(f"Memory usage after embeddings: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
         for i, (result, emb) in enumerate(zip(results[len(embeddings):], new_embeddings)):
             pmid = result.get('url', '').split('/')[-2] if 'pubmed' in result.get('url', '') else f"{result['title']}_{result['publication_date']}"
             if emb.shape[0] == 384:
@@ -503,7 +509,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         if cached_response:
             output = cached_response
         else:
-            output = query_grok_api(prompt_text, context)
+            output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
             cache_grok_response(cache_key, output)
         
         paragraphs = output.split('\n\n')
@@ -545,8 +551,12 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 continue
             handler = search_handlers[source_id]
             primary_results, _ = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
-            if primary_results is not None:
-                results.extend([dict(r, source_id=source_id) for r in primary_results])
+            if primary_results:
+                ranked_results = rank_results(query, primary_results, {'display_result_count': 20})
+                results.extend([dict(r, source_id=source_id) for r in ranked_results[:10]])  # Limit to 10 per source
+        
+        if results:
+            save_search_results(user_id, query, results)  # Store results for notifications
         
         logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
         if not results:
@@ -618,6 +628,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 )
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
+                logger.info(f"Error email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
                 email_sent = True
             except Exception as email_e:
                 logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
@@ -680,7 +691,7 @@ def schedule_notification_rules():
 
 @app.route('/')
 def index():
-    if current_user is not None and current_user.is_authenticated:
+    if current_user.is_authenticated:
         return redirect(url_for('search'))
     return render_template('index.html', username=None)
 
@@ -718,11 +729,14 @@ def login():
         conn = get_db_connection()
         cur = conn.cursor()
         try:
-            cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
+            cur.execute("SELECT id, email, password_hash, status, admin FROM users WHERE email = %s", (email,))
             user = cur.fetchone()
             if user and check_password_hash(user[2], password):
-                login_user(User(user[0], user[1]))
-                return redirect(url_for('search'))
+                if user[3] == 'inactive':
+                    flash('Your account is inactive. Please contact support at pubmedresearch@firesidetechnologies.com.', 'error')
+                else:
+                    login_user(User(user[0], user[1], user[4], user[3]))
+                    return redirect(url_for('search'))
             flash('Invalid email or password.', 'error')
         except Exception as e:
             logger.error(f"Error during login: {str(e)}")
@@ -744,7 +758,7 @@ def search_progress():
         try:
             if current_user is None or not hasattr(current_user, 'is_authenticated') or not current_user.is_authenticated:
                 logger.debug("Skipping progress updates for unauthenticated user")
-                return  # Silent response
+                return
             query = request.args.get('query', '')
             last_status = None
             while True:
@@ -791,8 +805,6 @@ def search():
         conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
     session.pop('latest_search_result_ids', None)
-    import psutil
-    logger.debug(f"Memory usage: {psutil.Process().memory_info().rss / 1024**2:.2f} MB")
 
     page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'googlescholar']}
     per_page = 20
@@ -880,7 +892,7 @@ def search():
 
                 primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
 
-                primary_results = primary_results or [][:20]
+                primary_results = primary_results or [][:20]  # Limit to 20
                 fallback_results = fallback_results or [][:20]
 
                 ranked_results = []
@@ -904,8 +916,8 @@ def search():
                         conn = get_db_connection()
                         cur = conn.cursor()
                         try:
-                            cur.execute("INSERT INTO search_cache (query, results) VALUES (%s, %s)", 
-                                        (query, json.dumps(primary_results + fallback_results)))
+                            cur.execute("INSERT INTO search_cache (query, results, created_at) VALUES (%s, %s, %s)", 
+                                        (query, json.dumps(primary_results + fallback_results), datetime.now()))
                             conn.commit()
                         except Exception as e:
                             logger.error(f"Error caching search results: {str(e)}")
