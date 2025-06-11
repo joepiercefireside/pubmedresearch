@@ -103,7 +103,8 @@ def parse_efetch_xml(xml_content):
                 "authors": ", ".join(authors) if authors else "N/A",
                 "journal": journal,
                 "publication_date": pub_date,
-                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                "source_id": "pubmed"  # Added for consistency
             })
         return articles
     except Exception as e:
@@ -350,7 +351,8 @@ class GoogleScholarSearchHandler(SearchHandler):
                     'authors': authors,
                     'journal': 'Google Scholar',
                     'publication_date': 'N/A',
-                    'url': url
+                    'url': url,
+                    'source_id': 'googlescholar'  # Added for consistency
                 })
             
             logger.info(f"Google Scholar returned {len(results)} results for query: {keywords}")
@@ -383,7 +385,8 @@ class GoogleScholarSearchHandler(SearchHandler):
                         'authors': authors,
                         'journal': 'Google Scholar',
                         'publication_date': 'N/A',
-                        'url': url
+                        'url': url,
+                        'source_id': 'googlescholar'  # Added for consistency
                     })
                 logger.info(f"Direct Google Scholar returned {len(results)} results for query: {simple_keywords}")
                 return results, []

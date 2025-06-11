@@ -5,7 +5,7 @@ import json
 import hashlib
 import re
 import time
-from datetime import datetime  # Added for datetime.now()
+from datetime import datetime
 from scipy.spatial.distance import cosine
 from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler
 from core import app, logger, update_search_progress, query_grok_api, generate_embedding, get_cached_embedding, cache_embedding, get_db_connection, get_cached_grok_response, cache_grok_response
@@ -205,7 +205,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     if not context_results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
-    context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
+    context = "\n".join([f"Source: {r.get('source_id', 'unknown')}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
     
     MAX_CONTEXT_LENGTH = 8000
     if len(context) > MAX_CONTEXT_LENGTH:
@@ -271,10 +271,6 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
 def search_progress():
     def stream_progress():
         try:
-            if current_user is None or not hasattr(current_user, 'is_authenticated') or not current_user.is_authenticated:
-                logger.debug("Skipping progress updates for unauthenticated user")
-                yield 'data: {"status": "error: User not authenticated"}\n\n'
-                return
             query = request.args.get('query', '')
             last_status = None
             while True:
