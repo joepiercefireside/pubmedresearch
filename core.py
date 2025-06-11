@@ -1,11 +1,11 @@
-from flask import Flask, make_response
+from flask import Flask, make_response, render_template  # Added render_template for help route
 from flask_login import LoginManager
 import os
 import logging
 import sqlite3
 import psycopg2  # For get_db_connection
-import sendgrid  # Added for sg
-from sendgrid import SendGridAPIClient  # Added for sg
+import sendgrid  # For sg
+from sendgrid import SendGridAPIClient  # For sg
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from openai import OpenAI
@@ -160,6 +160,10 @@ def get_cached_embedding(pmid):
 def get_db_connection():
     conn = psycopg2.connect(os.environ['DATABASE_URL'])
     return conn
+
+@app.route('/help')
+def help():
+    return render_template('help.html')
 
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(3),
