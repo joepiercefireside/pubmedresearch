@@ -303,23 +303,52 @@ class GoogleScholarSearchHandler(SearchHandler):
     )
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         try:
-            keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
-            encoded_keywords = urllib.parse.quote_plus(keywords)
-            api_key = os.environ.get('SCRAPERAPI_KEY')
-            if not api_key:
+            keywords = "+".join([kw.replace(" ", "+") for kw, _ in keywords_with_synonyms])
+            serpapi_key = os.environ.get('SERPAPI_KEY')
+            
+            if serpapi_key:
+                logger.info(f"Using SerpApi for Google Scholar search: {keywords}")
+                serpapi_url = f"https://serpapi.com/search?engine=google_scholar&q={keywords}&num=20&api_key={serpapi_key}"
+                if start_year:
+                    serpapi_url += f"&as_ylo={start_year}"
+                
+                response = requests.get(serpapi_url, timeout=60)
+                response.raise_for_status()
+                data = response.json()
+                
+                results = []
+                if 'organic_results' in data:
+                    for item in data['organic_results'][:20]:
+                        results.append({
+                            'title': item.get('title', 'No title'),
+                            'abstract': item.get('snippet', ''),
+                            'authors': item.get('publication_info', {}).get('authors', 'N/A'),
+                            'journal': item.get('publication_info', {}).get('summary', 'Google Scholar').split(' - ')[0],
+                            'publication_date': item.get('publication_info', {}).get('summary', '').split(', ')[-1] if ', ' in item.get('publication_info', {}).get('summary', '') else 'N/A',
+                            'url': item.get('link', 'N/A'),
+                            'source_id': 'googlescholar'
+                        })
+                
+                logger.info(f"SerpApi Google Scholar returned {len(results)} results for query: {keywords}")
+                return results, []
+            
+            logger.info(f"Falling back to ScraperAPI for Google Scholar search: {keywords}")
+            scraperapi_key = os.environ.get('SCRAPERAPI_KEY')
+            if not scraperapi_key:
                 logger.error("SCRAPERAPI_KEY not set or invalid")
                 raise ValueError("SCRAPERAPI_KEY not set")
             
             headers = {"User-Agent": random.choice(USER_AGENTS)}
-            
-            test_url = f"https://api.scraperapi.com?api_key={api_key}&url=https://www.google.com"
+            test_url = f"https://api.scraperapi.com?api_key={scraperapi_key}&url=https://www.google.com"
             test_response = requests.get(test_url, headers=headers, timeout=60, verify=True)
             logger.debug(f"ScraperAPI test response status: {test_response.status_code}, content: {test_response.text[:200]}...")
             if test_response.status_code != 200:
                 logger.error(f"Invalid ScraperAPI key, status: {test_response.status_code}")
                 raise ValueError(f"ScraperAPI test request failed: {test_response.status_code}")
             
-            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={encoded_keywords}&num=20"
+            url = f"https://api.scraperapi.com?api_key={scraperapi_key}&url=https://scholar.google.com/scholar?q={keywords}&num=20"
+            if start_year:
+                url += f"&as_ylo={start_year}"
             response = requests.get(url, headers=headers, timeout=60, verify=True)
             response.raise_for_status()
             
@@ -328,7 +357,7 @@ class GoogleScholarSearchHandler(SearchHandler):
             soup = BeautifulSoup(response.text, 'html.parser')
             results = []
             
-            for item in soup.find_all('div', class_='gs_ri'):
+            for item in soup.find_all('div', class_='gs_r'):
                 logger.debug(f"Found result item: {item.get_text()[:200]}")
                 title_elem = item.find('h3', class_='gs_rt')
                 title = title_elem.text.strip() if title_elem else 'No title'
@@ -345,52 +374,25 @@ class GoogleScholarSearchHandler(SearchHandler):
                 if title == 'No title' and not abstract:
                     continue
                 
+                pub_info = authors_elem.text.split(' - ') if authors_elem else []
+                journal = pub_info[1] if len(pub_info) > 1 else 'Google Scholar'
+                pub_date = pub_info[-1] if len(pub_info) > 2 and pub_info[-1].isdigit() else 'N/A'
+                
+                if pub_date != 'N/A' and start_year and int(pub_date) < start_year:
+                    continue
+                
                 results.append({
                     'title': title,
                     'abstract': abstract,
                     'authors': authors,
-                    'journal': 'Google Scholar',
-                    'publication_date': 'N/A',
+                    'journal': journal,
+                    'publication_date': pub_date,
                     'url': url,
                     'source_id': 'googlescholar'
                 })
             
-            logger.info(f"Google Scholar returned {len(results)} results for query: {keywords}")
+            logger.info(f"ScraperAPI Google Scholar returned {len(results)} results for query: {keywords}")
             return results, []
         except Exception as e:
             logger.error(f"Error in Google Scholar search: {str(e)}")
-            try:
-                simple_keywords = urllib.parse.quote_plus(keywords.split()[0])
-                direct_url = f"https://scholar.google.com/scholar?q={simple_keywords}&num=10"
-                headers = {"User-Agent": random.choice(USER_AGENTS)}
-                direct_response = requests.get(direct_url, headers=headers, timeout=60, verify=True)
-                logger.debug(f"Direct Google Scholar response status: {direct_response.status_code}, content: {direct_response.text[:500]}...")
-                direct_response.raise_for_status()
-                soup = BeautifulSoup(direct_response.text, 'html.parser')
-                results = []
-                for item in soup.find_all('div', class_='gs_ri'):
-                    logger.debug(f"Found direct result item: {item.get_text()[:200]}")
-                    title_elem = item.find('h3', class_='gs_rt')
-                    title = title_elem.text.strip() if title_elem else 'No title'
-                    link_elem = title_elem.find('a') if title_elem else None
-                    url = link_elem['href'] if link_elem and link_elem.get('href') else 'N/A'
-                    abstract_elem = item.find('div', class_='gs_rs')
-                    abstract = abstract_elem.text.strip() if abstract_elem else ''
-                    authors_elem = item.find('div', class_='gs_a')
-                    authors = authors_elem.text.strip() if authors_elem else 'N/A'
-                    if title == 'No title' and not abstract:
-                        continue
-                    results.append({
-                        'title': title,
-                        'abstract': abstract,
-                        'authors': authors,
-                        'journal': 'Google Scholar',
-                        'publication_date': 'N/A',
-                        'url': url,
-                        'source_id': 'googlescholar'
-                    })
-                logger.info(f"Direct Google Scholar returned {len(results)} results for query: {simple_keywords}")
-                return results, []
-            except Exception as direct_e:
-                logger.error(f"Direct Google Scholar search failed: {str(direct_e)}")
-                return [], []
+            return [], []
