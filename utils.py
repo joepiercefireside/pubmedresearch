@@ -104,11 +104,14 @@ def parse_efetch_xml(xml_content):
         return []
 
 def get_mesh_synonyms(keyword, api_key=None):
+    if keyword.lower() in BIOMEDICAL_VOCAB:
+        logger.info(f"Using BIOMEDICAL_VOCAB for {keyword}")
+        return BIOMEDICAL_VOCAB[keyword.lower()][:3]
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=mesh&term={urllib.parse.quote(keyword)}&retmax=1&retmode=xml"
     if api_key:
         url += f"&api_key={api_key}"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=5)
         response.raise_for_status()
         root = ET.fromstring(response.content)
         id_list = root.findall(".//Id")
@@ -120,7 +123,7 @@ def get_mesh_synonyms(keyword, api_key=None):
         efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=mesh&id={descriptor_id}&retmode=xml"
         if api_key:
             efetch_url += f"&api_key={api_key}"
-        efetch_response = requests.get(efetch_url, timeout=10)
+        efetch_response = requests.get(efetch_url, timeout=5)
         efetch_response.raise_for_status()
         efetch_root = ET.fromstring(efetch_response.content)
         
@@ -135,7 +138,7 @@ def get_mesh_synonyms(keyword, api_key=None):
         return list(set(synonyms))[:3]
     except Exception as e:
         logger.error(f"MeSH API error for {keyword}: {str(e)}")
-        return []
+        return BIOMEDICAL_VOCAB.get(keyword.lower(), [])
 
 def get_datamuse_synonyms(keyword):
     url = f"https://api.datamuse.com/words?rel_syn={urllib.parse.quote(keyword)}&max=5"
@@ -183,13 +186,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         api_key = os.environ.get('PUBMED_API_KEY')
         keywords_with_synonyms = []
         for kw in keywords:
-            synonyms = BIOMEDICAL_VOCAB.get(kw.lower(), [])[:3]
-            if api_key:
-                mesh_synonyms = get_mesh_synonyms(kw, api_key)
-                if mesh_synonyms:
-                    synonyms.extend(mesh_synonyms)
-                else:
-                    logger.info(f"Falling back to BIOMEDICAL_VOCAB for {kw}")
+            synonyms = get_mesh_synonyms(kw, api_key)
             if not synonyms and kw.lower() not in BIOMEDICAL_VOCAB:
                 synonyms.extend(get_datamuse_synonyms(kw))
             keywords_with_synonyms.append((kw, list(set(synonyms))[:3]))
@@ -321,7 +318,7 @@ class GoogleScholarSearchHandler(SearchHandler):
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         try:
             keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
-            encoded_keywords = urllib.parse.quote(keywords)
+            encoded_keywords = urllib.parse.quote_plus(keywords)
             api_key = os.environ.get('SCRAPERAPI_KEY')
             if not api_key:
                 logger.error("SCRAPERAPI_KEY not set or invalid")
@@ -330,15 +327,16 @@ class GoogleScholarSearchHandler(SearchHandler):
             # Test ScraperAPI key validity
             test_url = f"https://api.scraperapi.com?api_key={api_key}&url=https://www.google.com"
             test_response = requests.get(test_url, timeout=10, verify=True)
+            logger.debug(f"ScraperAPI test response status: {test_response.status_code}, content: {test_response.text[:200]}...")
             if test_response.status_code != 200:
-                logger.error(f"Invalid ScraperAPI key or configuration, status: {test_response.status_code}")
+                logger.error(f"Invalid ScraperAPI key, status: {test_response.status_code}")
                 raise ValueError(f"ScraperAPI test request failed: {test_response.status_code}")
             
             url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={encoded_keywords}&num=20"
             response = requests.get(url, timeout=60, verify=True)
             response.raise_for_status()
             
-            logger.debug(f"ScraperAPI response: {response.text[:500]}...")
+            logger.debug(f"ScraperAPI response status: {response.status_code}, content: {response.text[:500]}...")
             
             soup = BeautifulSoup(response.text, 'html.parser')
             results = []
@@ -372,4 +370,35 @@ class GoogleScholarSearchHandler(SearchHandler):
             return results, []
         except Exception as e:
             logger.error(f"Error in Google Scholar search: {str(e)}")
-            return [], []
+            # Fallback to direct Google Scholar request
+            try:
+                direct_url = f"https://scholar.google.com/scholar?q={encoded_keywords}&num=10"
+                direct_response = requests.get(direct_url, timeout=30, verify=True)
+                logger.debug(f"Direct Google Scholar response status: {direct_response.status_code}, content: {direct_response.text[:500]}...")
+                direct_response.raise_for_status()
+                soup = BeautifulSoup(direct_response.text, 'html.parser')
+                results = []
+                for item in soup.find_all('div', class_='gs_r gs_or gs_scl'):
+                    title_elem = item.find('h3', class_='gs_rt')
+                    title = title_elem.text.strip() if title_elem else 'No title'
+                    link_elem = title_elem.find('a') if title_elem else None
+                    url = link_elem['href'] if link_elem and link_elem.get('href') else 'N/A'
+                    abstract_elem = item.find('div', class_='gs_rs')
+                    abstract = abstract_elem.text.strip() if abstract_elem else ''
+                    authors_elem = item.find('div', class_='gs_a')
+                    authors = authors_elem.text.strip() if authors_elem else 'N/A'
+                    if title == 'No title' and not abstract:
+                        continue
+                    results.append({
+                        'title': title,
+                        'abstract': abstract,
+                        'authors': authors,
+                        'journal': 'Google Scholar',
+                        'publication_date': 'N/A',
+                        'url': url
+                    })
+                logger.info(f"Direct Google Scholar returned {len(results)} results for query: {keywords}")
+                return results, []
+            except Exception as direct_e:
+                logger.error(f"Direct Google Scholar search failed: {str(direct_e)}")
+                return [], []
