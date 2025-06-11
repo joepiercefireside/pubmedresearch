@@ -18,7 +18,7 @@
                     <select class="form-control" id="prompt_id" name="prompt_id">
                         <option value="">None</option>
                         {% for prompt in prompts %}
-                            <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                            <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|escape }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -133,6 +133,12 @@ document.getElementById('searchForm').addEventListener('submit', function(event)
     searchButton.disabled = true;
     searchButton.textContent = 'Searching...';
     startProgressUpdates();
+});
+
+document.getElementById('prompt_id').addEventListener('change', function() {
+    const selectedOption = this.options[this.selectedIndex];
+    const promptText = selectedOption.getAttribute('data-prompt-text') || '';
+    document.getElementById('prompt_text').value = promptText;
 });
 
 function startProgressUpdates() {
