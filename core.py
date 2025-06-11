@@ -3,6 +3,7 @@ from flask_login import LoginManager
 import os
 import logging
 import sqlite3
+import psycopg2  # Added for get_db_connection
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from openai import OpenAI
@@ -148,6 +149,10 @@ def get_cached_embedding(pmid):
             return None
         return embedding
     return None
+
+def get_db_connection():
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    return conn
 
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(3),
