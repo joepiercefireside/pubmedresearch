@@ -1,38 +1,289 @@
-body {
+/* General Styles */
+html {
+    text-size-adjust: auto; /* Modern browsers */
+    -ms-text-size-adjust: auto; /* IE/Edge */
     font-family: Arial, sans-serif;
+}
+
+body {
+    margin: 0;
+    padding: 0;
     background-color: #f8f9fa;
+    font-family: Arial, sans-serif;
+}
+
+/* Navigation Bar */
+nav {
+    background-color: #00689b;
+    padding: 10px 0;
 }
 
 .navbar {
     margin-bottom: 20px;
 }
 
-.card {
-    margin-bottom: 20px;
+.navbar-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 20px;
 }
 
-.alert {
-    margin-top: 20px;
+.navbar-brand {
+    display: flex;
+    align-items: center;
 }
 
-.tab-content {
+.navbar-logo {
+    height: 40px;
+    margin-right: 10px;
+}
+
+.navbar-title {
+    color: white;
+    font-size: 1.5em;
+    font-weight: bold;
+}
+
+.navbar-right {
+    display: flex;
+    align-items: center;
+}
+
+.navbar-user {
+    color: white;
+    margin-right: 20px;
+    font-size: 1em;
+}
+
+nav ul {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+}
+
+nav ul li {
+    margin: 0 15px;
+}
+
+nav ul li a {
+    color: white;
+    text-decoration: none;
+    font-weight: bold;
+}
+
+nav ul li a:hover {
+    text-decoration: underline;
+}
+
+.hamburger {
+    display: none;
+    cursor: pointer;
+    font-size: 24px;
+    color: white;
+}
+
+@media (max-width: 768px) {
+    .hamburger {
+        display: block;
+    }
+    .nav-links {
+        display: none;
+        flex-direction: column;
+        position: absolute;
+        background-color: #00689b;
+        width: 100%;
+        top: 60px;
+        left: 0;
+        padding: 10px 0;
+    }
+    .nav-links.active {
+        display: flex;
+    }
+    .nav-links li {
+        margin: 10px 0;
+        text-align: center;
+    }
+}
+
+/* Container */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
     padding: 20px;
 }
 
-.pagination {
-    margin-top: 20px;
+/* Headings */
+h1, h2, h3, h5, h6 {
+    color: #00689b;
+    margin-bottom: 15px;
 }
 
-html {
-    text-size-adjust: auto; /* Modern browsers */
-    -ms-text-size-adjust: auto; /* IE/Edge */
+/* Form Styles */
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.form-group input, .form-group textarea, .form-group select {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+.form-control {
+    border: 1px solid #ced4da;
+    border-radius: 0.25rem;
+    padding: 0.375rem 0.75rem;
+}
+
+.form-control:focus {
+    border-color: #00689b;
+    box-shadow: 0 0 5px rgba(0, 104, 155, 0.3);
+}
+
+.form-check-input {
+    margin-top: 0.3rem;
+}
+
+.btn {
+    background-color: #00689b;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.btn:hover {
+    background-color: #005f8a;
+}
+
+.btn-primary {
+    background-color: #00689b;
+    border-color: #00689b;
+}
+
+.btn-primary:hover {
+    background-color: #005f8a;
+    border-color: #005f8a;
+}
+
+/* Card Styles */
+.card {
+    background-color: white;
+    margin-bottom: 20px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
 .card-header {
     font-weight: bold;
     background-color: #e9ecef;
+    padding: 1rem;
+}
+
+.card-body {
+    padding: 1.25rem;
 }
 
 .card-body p {
     margin-bottom: 0.5rem;
+}
+
+/* Navigation Tabs */
+.nav-tabs .nav-link {
+    color: #495057;
+    padding: 10px 20px;
+    font-weight: 500;
+}
+
+.nav-tabs .nav-link.active {
+    color: #00689b;
+    border-bottom: 3px solid #00689b;
+    background-color: #f9f9f9;
+}
+
+.nav-tabs .nav-link:hover {
+    color: #005f8a;
+    border-bottom: 1px solid #005f8a;
+}
+
+/* Result Styles */
+.result-card {
+    background-color: white;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-left: 4px solid #00689b;
+}
+
+.result-title a {
+    color: #00689b;
+    text-decoration: none;
+}
+
+.result-title a:hover {
+    text-decoration: underline;
+}
+
+.result-abstract {
+    color: #333;
+    margin: 10px 0;
+}
+
+.result-meta {
+    color: #666;
+    font-size: 0.9em;
+}
+
+/* Alerts */
+.alert {
+    margin-top: 20px;
+}
+
+/* Pagination */
+.pagination {
+    margin-top: 20px;
+}
+
+/* Tab Content */
+.tab-content {
+    padding: 20px;
+}
+
+/* Chat Bubble (for consistency with old_styles.css) */
+.chat-bubble {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    background-color: #00689b;
+    color: white;
+    padding: 10px 15px;
+    border-radius: 25px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    font-size: 16px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    z-index: 1000;
+}
+
+.chat-bubble i {
+    margin-right: 8px;
+    font-size: 20px;
+}
+
+.chat-bubble:hover {
+    background-color: #005f8a;
 }
