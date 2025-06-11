@@ -1,10 +1,11 @@
-from flask import render_template, request, Response, session, make_response
+from flask import render_template, request, Response, session, make_response, current_app
 from flask_login import login_required, current_user
 import psycopg2
 import json
 import hashlib
 import re
 import time
+import sqlite3
 from datetime import datetime
 from scipy.spatial.distance import cosine
 from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler
@@ -269,37 +270,38 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
 @app.route('/search_progress', methods=['GET'])
 @login_required
 def search_progress():
-    def stream_progress():
-        try:
-            query = request.args.get('query', '')
-            last_status = None
-            while True:
-                conn = sqlite3.connect('search_progress.db')
-                c = conn.cursor()
-                try:
-                    c.execute("SELECT status, timestamp FROM search_progress WHERE user_id = ? AND query = ? ORDER BY timestamp DESC LIMIT 1",
-                              (current_user.id, query))
-                    result = c.fetchone()
-                    if result and result[0] != last_status:
-                        escaped_status = result[0].replace("'", "\\'")
-                        yield 'data: {"status": "' + escaped_status + '"}\n\n'
-                        last_status = result[0]
-                    if result and result[0].startswith(("complete", "error")):
+    def stream_progress(user_id, query):
+        with app.app_context():
+            try:
+                last_status = None
+                while True:
+                    conn = sqlite3.connect('search_progress.db')
+                    c = conn.cursor()
+                    try:
+                        c.execute("SELECT status, timestamp FROM search_progress WHERE user_id = ? AND query = ? ORDER BY timestamp DESC LIMIT 1",
+                                  (user_id, query))
+                        result = c.fetchone()
+                        if result and result[0] != last_status:
+                            escaped_status = result[0].replace("'", "\\'")
+                            yield 'data: {"status": "' + escaped_status + '"}\n\n'
+                            last_status = result[0]
+                        if result and result[0].startswith(("complete", "error")):
+                            break
+                    except sqlite3.Error as e:
+                        logger.error(f"Error in search_progress: {str(e)}")
+                        escaped_error = str(e).replace("'", "\\'")
+                        yield 'data: {"status": "error: ' + escaped_error + '"}\n\n'
                         break
-                except sqlite3.Error as e:
-                    logger.error(f"Error in search_progress: {str(e)}")
-                    escaped_error = str(e).replace("'", "\\'")
-                    yield 'data: {"status": "error: ' + escaped_error + '"}\n\n'
-                    break
-                finally:
-                    c.close()
-                    conn.close()
-                time.sleep(1)
-        except Exception as e:
-            logger.error(f"Error in search_progress stream: {str(e)}")
-            yield 'data: {"status": "error: ' + str(e).replace("'", "\\'") + '"}\n\n'
+                    finally:
+                        c.close()
+                        conn.close()
+                    time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error in search_progress stream: {str(e)}")
+                yield 'data: {"status": "error: ' + str(e).replace("'", "\\'") + '"}\n\n'
     
-    response = Response(stream_progress(), mimetype='text/event-stream')
+    query = request.args.get('query', '')
+    response = Response(stream_progress(current_user.id, query), mimetype='text/event-stream')
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
 

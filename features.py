@@ -1,4 +1,4 @@
-from flask import render_template, request, redirect, url_for, flash, jsonify, make_response
+from flask import render_template, request, redirect, url_for, flash, jsonify, make_response, session
 from flask_login import login_required, current_user
 import psycopg2
 import json
@@ -12,6 +12,7 @@ from core import app, logger, update_search_progress, query_grok_api, scheduler,
 from search import save_search_results, get_search_results, rank_results
 from auth import validate_user_email
 from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler
+import sqlite3
 
 def save_search_history(user_id, query, prompt_text, sources, results):
     result_ids = save_search_results(user_id, query, results)

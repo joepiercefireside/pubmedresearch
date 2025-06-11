@@ -65,8 +65,8 @@
     {% if sources %}
         <ul class="nav nav-tabs mt-4" id="sourceTabs" role="tablist">
             {% for source in sources %}
-                <li class="nav-item">
-                    <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-toggle="tab" href="#{{ source.id }}" role="tab" aria-controls="{{ source.id }}" aria-selected="{{ loop.first|lower }}">{{ source.name }}</a>
+                <li class="nav-item" role="presentation">
+                    <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-toggle="tab" href="#{{ source.id }}" role="tab" aria-controls="{{ source.id }}" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }}</a>
                 </li>
             {% endfor %}
         </ul>
