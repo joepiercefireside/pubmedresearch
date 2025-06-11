@@ -524,6 +524,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
             output = cached_response
         else:
             output = query_grok_api(prompt_text or "Summarize the provided research articles.", context)
+            logger.info(f"Raw Grok response for summary: {output[:200]}...")
             cache_grok_response(cache_key, output)
         
         paragraphs = output.split('\n\n')

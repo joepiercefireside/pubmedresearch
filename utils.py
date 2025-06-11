@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import tenacity
 from ratelimit import limits, sleep_and_retry
 from bs4 import BeautifulSoup
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def parse_efetch_xml(xml_content):
         return []
 
 def get_mesh_synonyms(keyword, api_key=None):
-    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=mesh&term={keyword}[DescriptorName]&retmax=1&retmode=xml"
+    url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=mesh&term={urllib.parse.quote(keyword)}&retmax=1&retmode=xml"
     if api_key:
         url += f"&api_key={api_key}"
     try:
@@ -127,7 +128,7 @@ def get_mesh_synonyms(keyword, api_key=None):
         for term in efetch_root.findall(".//TermList/Term"):
             if term.text:
                 synonyms.append(term.text.lower())
-        for entry_term in efetch_root.findall(".//EntryTermList/EntryTerm"):
+        for entry_term in efetch_root.findall(".//ConceptList/Concept/TermList/Term"):
             if entry_term.text:
                 synonyms.append(entry_term.text.lower())
         
@@ -137,7 +138,7 @@ def get_mesh_synonyms(keyword, api_key=None):
         return []
 
 def get_datamuse_synonyms(keyword):
-    url = f"https://api.datamuse.com/words?rel_syn={keyword}&max=5"
+    url = f"https://api.datamuse.com/words?rel_syn={urllib.parse.quote(keyword)}&max=5"
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
@@ -159,7 +160,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         
         keywords = []
         current_phrase = []
-        for word, tag in tagged:
+        for i, (word, tag) in enumerate(tagged):
             if word.lower() in stop_words:
                 if current_phrase:
                     keywords.append(' '.join(current_phrase))
@@ -167,6 +168,9 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
                 continue
             if tag.startswith('NN') or tag.startswith('JJ'):
                 current_phrase.append(word.lower())
+            elif current_phrase and (i == len(tagged)-1 or tagged[i+1][0].lower() in stop_words):
+                keywords.append(' '.join(current_phrase))
+                current_phrase = []
             else:
                 if current_phrase:
                     keywords.append(' '.join(current_phrase))
@@ -186,7 +190,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
                     synonyms.extend(mesh_synonyms)
                 else:
                     logger.info(f"Falling back to BIOMEDICAL_VOCAB for {kw}")
-            if not synonyms and not kw.lower() in BIOMEDICAL_VOCAB:
+            if not synonyms and kw.lower() not in BIOMEDICAL_VOCAB:
                 synonyms.extend(get_datamuse_synonyms(kw))
             keywords_with_synonyms.append((kw, list(set(synonyms))[:3]))
         
@@ -317,14 +321,24 @@ class GoogleScholarSearchHandler(SearchHandler):
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         try:
             keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
+            encoded_keywords = urllib.parse.quote(keywords)
             api_key = os.environ.get('SCRAPERAPI_KEY')
             if not api_key:
                 logger.error("SCRAPERAPI_KEY not set or invalid")
                 raise ValueError("SCRAPERAPI_KEY not set")
             
-            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={keywords}&num=20"
+            # Test ScraperAPI key validity
+            test_url = f"https://api.scraperapi.com?api_key={api_key}&url=https://www.google.com"
+            test_response = requests.get(test_url, timeout=10, verify=True)
+            if test_response.status_code != 200:
+                logger.error(f"Invalid ScraperAPI key or configuration, status: {test_response.status_code}")
+                raise ValueError(f"ScraperAPI test request failed: {test_response.status_code}")
+            
+            url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={encoded_keywords}&num=20"
             response = requests.get(url, timeout=60, verify=True)
             response.raise_for_status()
+            
+            logger.debug(f"ScraperAPI response: {response.text[:500]}...")
             
             soup = BeautifulSoup(response.text, 'html.parser')
             results = []
