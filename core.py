@@ -1,4 +1,4 @@
-from flask import Flask, make_response, render_template  # Added render_template for help route
+from flask import Flask, make_response, render_template
 from flask_login import LoginManager
 import os
 import logging
@@ -7,6 +7,7 @@ import psycopg2  # For get_db_connection
 import sendgrid  # For sg
 from sendgrid import SendGridAPIClient  # For sg
 from datetime import datetime
+import time  # Added for time.time()
 from apscheduler.schedulers.background import BackgroundScheduler
 from openai import OpenAI
 import tenacity
