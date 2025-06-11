@@ -14,8 +14,15 @@ import tenacity
 from ratelimit import limits, sleep_and_retry
 from bs4 import BeautifulSoup
 import urllib.parse
+import random
 
 logger = logging.getLogger(__name__)
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36",
+]
 
 BIOMEDICAL_VOCAB = {
     "diabetes": ["Diabetes Mellitus", "insulin resistance", "type 2 diabetes"],
@@ -238,27 +245,6 @@ class SearchHandler:
     
     def search(self, query, keywords_with_synonyms, date_range, start_year):
         return [], []
-    
-    def query_grok_api(self, system_prompt, context):
-        try:
-            api_key = os.environ.get('XAI_API_KEY')
-            if not api_key:
-                raise ValueError("XAI_API_KEY not set")
-            client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-            completion = client.chat.completions.create(
-                model="grok-3",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": context}
-                ],
-                max_tokens=4096
-            )
-            response = completion.choices[0].message.content.strip()
-            response = re.sub(r'[^\x20-\x7E\n]', '', response)
-            return response
-        except Exception as e:
-            logger.error(f"Error querying Grok API: {str(e)}")
-            raise
 
 class PubMedSearchHandler(SearchHandler):
     def __init__(self):
@@ -324,16 +310,17 @@ class GoogleScholarSearchHandler(SearchHandler):
                 logger.error("SCRAPERAPI_KEY not set or invalid")
                 raise ValueError("SCRAPERAPI_KEY not set")
             
-            # Test ScraperAPI key validity
+            headers = {"User-Agent": random.choice(USER_AGENTS)}
+            
             test_url = f"https://api.scraperapi.com?api_key={api_key}&url=https://www.google.com"
-            test_response = requests.get(test_url, timeout=10, verify=True)
+            test_response = requests.get(test_url, headers=headers, timeout=30, verify=True)
             logger.debug(f"ScraperAPI test response status: {test_response.status_code}, content: {test_response.text[:200]}...")
             if test_response.status_code != 200:
                 logger.error(f"Invalid ScraperAPI key, status: {test_response.status_code}")
                 raise ValueError(f"ScraperAPI test request failed: {test_response.status_code}")
             
             url = f"https://api.scraperapi.com?api_key={api_key}&url=https://scholar.google.com/scholar?q={encoded_keywords}&num=20"
-            response = requests.get(url, timeout=60, verify=True)
+            response = requests.get(url, headers=headers, timeout=30, verify=True)
             response.raise_for_status()
             
             logger.debug(f"ScraperAPI response status: {response.status_code}, content: {response.text[:500]}...")
@@ -370,10 +357,11 @@ class GoogleScholarSearchHandler(SearchHandler):
             return results, []
         except Exception as e:
             logger.error(f"Error in Google Scholar search: {str(e)}")
-            # Fallback to direct Google Scholar request
             try:
-                direct_url = f"https://scholar.google.com/scholar?q={encoded_keywords}&num=10"
-                direct_response = requests.get(direct_url, timeout=30, verify=True)
+                simple_keywords = urllib.parse.quote_plus(keywords.split()[0])  # Use first keyword
+                direct_url = f"https://scholar.google.com/scholar?q={simple_keywords}&num=10"
+                headers = {"User-Agent": random.choice(USER_AGENTS)}
+                direct_response = requests.get(direct_url, headers=headers, timeout=30, verify=True)
                 logger.debug(f"Direct Google Scholar response status: {direct_response.status_code}, content: {direct_response.text[:500]}...")
                 direct_response.raise_for_status()
                 soup = BeautifulSoup(direct_response.text, 'html.parser')
@@ -397,7 +385,7 @@ class GoogleScholarSearchHandler(SearchHandler):
                         'publication_date': 'N/A',
                         'url': url
                     })
-                logger.info(f"Direct Google Scholar returned {len(results)} results for query: {keywords}")
+                logger.info(f"Direct Google Scholar returned {len(results)} results for query: {simple_keywords}")
                 return results, []
             except Exception as direct_e:
                 logger.error(f"Direct Google Scholar search failed: {str(direct_e)}")

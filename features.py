@@ -1,0 +1,684 @@
+from flask import render_template, request, redirect, url_for, flash, jsonify, make_response
+from flask_login import login_required, current_user
+import psycopg2
+import json
+import hashlib
+import time
+from datetime import datetime, timedelta
+from apscheduler.triggers.cron import CronTrigger
+import sendgrid
+from sendgrid.helpers.mail import Mail, Email, To, Content
+from core import app, logger, update_search_progress, query_grok_api, scheduler, sg
+from search import save_search_results, get_search_results, rank_results
+from auth import validate_user_email
+from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler
+
+def save_search_history(user_id, query, prompt_text, sources, results):
+    result_ids = save_search_results(user_id, query, results)
+    
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    try:
+        c.execute(
+            "INSERT INTO search_history (user_id, query, prompt_text, sources, result_ids, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, query, prompt_text, json.dumps(sources), json.dumps(result_ids), time.time())
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error saving search history: {str(e)}")
+        conn.rollback()
+    finally:
+        c.close()
+        conn.close()
+    logger.info(f"Saved search history for user={user_id}, query={query}")
+    return result_ids
+
+def get_search_history(user_id):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = ? ORDER BY timestamp DESC",
+                  (user_id,))
+        results = [
+            {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]), 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
+            for row in c.fetchall()
+        ]
+        return results
+    except sqlite3.Error as e:
+        logger.error(f"Error retrieving search history: {str(e)}")
+        return []
+    finally:
+        c.close()
+        conn.close()
+
+def save_chat_message(user_id, session_id, message, is_user):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO chat_history (user_id, session_id, message, is_user, timestamp) VALUES (?, ?, ?, ?, ?)",
+                  (user_id, session_id, message, is_user, time.time()))
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error saving chat message: {str(e)}")
+    finally:
+        c.close()
+        conn.close()
+
+def get_chat_history(user_id, session_id, retention_hours):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    try:
+        cutoff_time = time.time() - (retention_hours * 3600)
+        c.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = ? AND session_id = ? AND timestamp > ? ORDER BY timestamp ASC",
+                  (user_id, session_id, cutoff_time))
+        messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2]} for row in c.fetchall()]
+        return messages
+    except sqlite3.Error as e:
+        logger.error(f"Error retrieving chat history: {str(e)}")
+        return []
+    finally:
+        c.close()
+        conn.close()
+
+def get_user_settings(user_id):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    try:
+        c.execute("SELECT chat_memory_retention_hours FROM user_settings WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        return result[0] if result else 24
+    except sqlite3.Error as e:
+        logger.error(f"Error retrieving user settings: {str(e)}")
+        return 24
+    finally:
+        c.close()
+        conn.close()
+
+def update_user_settings(user_id, retention_hours):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    try:
+        c.execute("INSERT OR REPLACE INTO user_settings (user_id, chat_memory_retention_hours) VALUES (?, ?)",
+                  (user_id, retention_hours))
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error updating user settings: {str(e)}")
+    finally:
+        c.close()
+        conn.close()
+
+def get_db_connection():
+    conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
+    return conn
+
+def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources, test_mode=False):
+    logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, sources: {sources}, test_mode={test_mode}, recipient: {user_email}")
+    if not validate_user_email(user_email):
+        raise ValueError(f"Invalid recipient email address: {user_email}")
+    
+    query = keywords
+    today = datetime.now()
+    timeframe_ranges = {
+        'daily': (today - timedelta(hours=24)).strftime('%Y/%m/%d'),
+        'weekly': (today - timedelta(days=7)).strftime('%Y/%m/%d'),
+        'monthly': (today - timedelta(days=31)).strftime('%Y/%m/%d'),
+        'annually': (today - timedelta(days=365)).strftime('%Y/%m/%d')
+    }
+    start_date = timeframe_ranges[timeframe]
+    date_range = f"{start_date}:{today.strftime('%Y/%m/%d')}"
+    
+    search_handlers = {
+        'pubmed': PubMedSearchHandler(),
+        'googlescholar': GoogleScholarSearchHandler()
+    }
+    
+    try:
+        keywords_with_synonyms, _, start_year_int = extract_keywords_and_date(query)
+        results = []
+        for source_id in sources:
+            if source_id not in search_handlers:
+                logger.warning(f"Unknown source in notification: {source_id}")
+                continue
+            handler = search_handlers[source_id]
+            primary_results, _ = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
+            if primary_results:
+                ranked_results = rank_results(query, primary_results, {'display_result_count': 10})
+                results.extend([dict(r, source_id=source_id) for r in ranked_results[:10]])
+        
+        if results:
+            save_search_results(user_id, query, results)
+        
+        logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
+        if not results:
+            content = "No new results found for this rule."
+            if not sg:
+                raise Exception("SendGrid API key not configured.")
+            message = Mail(
+                from_email=Email("noreply@pubmedresearch.com"),
+                to_emails=To(user_email),
+                subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+                plain_text_content=content
+            )
+            response = sg.send(message)
+            response_headers = {k: v for k, v in response.headers.items()}
+            logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+            
+            if test_mode:
+                return {
+                    "results": [],
+                    "email_content": content,
+                    "status": "success",
+                    "email_sent": True,
+                    "message_id": response_headers.get('X-Message-Id', 'Not provided')
+                }
+            return
+        
+        context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in results])
+        output = query_grok_api(prompt_text or "Summarize the provided research articles in a concise manner.", context)
+        
+        if email_format == "list":
+            content = "\n".join([f"- [{r['title']}]({r.get('url', 'N/A')}) ({r.get('publication_date', 'N/A')})\n  {r.get('abstract', '')[:100] or 'No abstract'}..." for r in results])
+        elif email_format == "detailed":
+            content = "\n".join([f"Title: [{r['title']}]({r.get('url', 'N/A')})\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nAbstract: {r.get('abstract', '') or 'No abstract'}\n" for r in results])
+        else:
+            content = output
+        
+        if not sg:
+            raise Exception("SendGrid API key not configured.")
+        message = Mail(
+            from_email=Email("noreply@pubmedresearch.com"),
+            to_emails=To(user_email),
+            subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+            plain_text_content=content
+        )
+        response = sg.send(message)
+        response_headers = {k: v for k, v in response.headers.items()}
+        logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+        
+        if test_mode:
+            return {
+                "results": results,
+                "email_content": content,
+                "status": "success",
+                "email_sent": True,
+                "message_id": response_headers.get('X-Message-Id', 'Not provided')
+            }
+        
+    except Exception as e:
+        logger.error(f"Error running notification rule {rule_id}: {str(e)}")
+        if test_mode:
+            try:
+                if not sg:
+                    raise Exception("SendGrid API key not configured.")
+                message = Mail(
+                    from_email=Email("noreply@pubmedresearch.com"),
+                    to_emails=To(user_email),
+                    subject=f"PubMedResearcher Test Notification Failed: {rule_name}",
+                    plain_text_content=f"Error testing notification rule: {str(e)}"
+                )
+                response = sg.send(message)
+                response_headers = {k: v for k, v in response.headers.items()}
+                logger.info(f"Error email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+                email_sent = True
+            except Exception as email_e:
+                logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
+                error_detail = ""
+                if hasattr(email_e, 'body') and email_e.body:
+                    try:
+                        error_body = json.loads(email_e.body.decode('utf-8'))
+                        error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
+                    except json.JSONDecodeError:
+                        error_detail = f": {email_e.body.decode('utf-8')}"
+                email_sent = False
+            error_message = (
+                f"Email sending failed due to unverified sender identity. Please verify noreply@pubmedresearch.com in SendGrid{error_detail}."
+                if "403" in str(e) or "Forbidden" in str(e)
+                else "Email sending failed due to invalid API key configuration. Please contact support."
+                if "Invalid header value" in str(e) or "API key not configured" in str(e)
+                else f"Email sending failed: {str(e)}{error_detail}"
+            )
+            return {
+                "results": [],
+                "email_content": error_message,
+                "status": "error",
+                "email_sent": email_sent,
+                "message_id": response_headers.get('X-Message-Id', 'Not provided') if email_sent else None
+            }
+        raise
+
+def schedule_notification_rules():
+    scheduler.remove_all_jobs()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT n.id, n.user_id, n.rule_name, n.keywords, n.timeframe, n.prompt_text, n.email_format, u.email, n.sources "
+            "FROM notifications n JOIN users u ON n.user_id = u.id"
+        )
+        rules = cur.fetchall()
+        for rule in rules:
+            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources = rule
+            sources = json.loads(sources) if sources else ['pubmed']
+            cron_trigger = {
+                'daily': CronTrigger(hour=8, minute=0),
+                'weekly': CronTrigger(day_of_week='mon', hour=8, minute=0),
+                'monthly': CronTrigger(day=1, hour=8, minute=0),
+                'annually': CronTrigger(month=1, day=1, hour=8, minute=0)
+            }[timeframe]
+            scheduler.add_job(
+                run_notification_rule,
+                trigger=cron_trigger,
+                args=[rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources],
+                id=f"notification_{rule_id}",
+                replace_existing=True
+            )
+        logger.info(f"Scheduled {len(rules)} notification rules")
+    except Exception as e:
+        logger.error(f"Error scheduling notification rules: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/chat', methods=['GET', 'POST'])
+@login_required
+def chat():
+    if not current_user.is_authenticated:
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    
+    session_id = session.get('chat_session_id', str(hashlib.md5(str(time.time()).encode()).hexdigest()))
+    session['chat_session_id'] = session_id
+    
+    retention_hours = get_user_settings(current_user.id)
+    chat_history = get_chat_history(current_user.id, session_id, retention_hours)
+    
+    if request.method == 'POST':
+        user_message = request.form.get('message', '')
+        new_retention = request.form.get('retention_hours')
+        
+        if new_retention:
+            try:
+                retention_hours = int(new_retention)
+                if retention_hours < 1 or retention_hours > 720:
+                    flash("Retention hours must be between 1 and 720.", "error")
+                else:
+                    update_user_settings(current_user.id, retention_hours)
+                    flash("Chat memory retention updated.", "success")
+            except ValueError:
+                flash("Invalid retention hours.", "error")
+        
+        if user_message:
+            save_chat_message(current_user.id, session_id, user_message, True)
+            
+            search_results = get_search_results(current_user.id, session.get('latest_query', ''))
+            query = session.get('latest_query', '')
+            context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
+            
+            system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting.")
+            
+            history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
+            full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
+            
+            try:
+                response = query_grok_api(system_prompt, full_context)
+                save_chat_message(current_user.id, session_id, response, False)
+                chat_history.append({'message': user_message, 'is_user': True, 'timestamp': time.time()})
+                chat_history.append({'message': response, 'is_user': False, 'timestamp': time.time()})
+            except Exception as e:
+                flash(f"Error generating chat response: {str(e)}", "error")
+        
+        response = make_response(render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    
+    response = make_response(render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/chat_message', methods=['POST'])
+@login_required
+def chat_message():
+    if not current_user.is_authenticated:
+        return jsonify({'status': 'error', 'message': 'User not authenticated'}), 401
+    
+    session_id = session.get('chat_session_id', str(hashlib.md5(str(time.time()).encode()).hexdigest()))
+    session['chat_session_id'] = session_id
+    
+    user_message = request.form.get('message', '')
+    if not user_message:
+        return jsonify({'status': 'error', 'message': 'Message cannot be empty'}), 400
+    
+    try:
+        save_chat_message(current_user.id, session_id, user_message, True)
+        
+        retention_hours = get_user_settings(current_user.id)
+        chat_history = get_chat_history(current_user.id, session_id, retention_hours)
+        
+        query = session.get('latest_query', '')
+        search_results = get_search_results(current_user.id, query)
+        context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
+        
+        system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting.")
+        
+        history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
+        full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
+        
+        response = query_grok_api(system_prompt, full_context)
+        if "summary" in user_message.lower() and "top" in user_message.lower():
+            formatted_response = ""
+            for source_id in ['pubmed', 'googlescholar']:
+                source_results = [r for r in search_results if r['source_id'] == source_id][:3]
+                if source_results:
+                    context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}" for r in source_results])
+                    summary_prompt = f"Summarize the abstracts of the following {source_id} articles in simple terms. Provide one paragraph per article, up to 3 paragraphs, separated by a blank line."
+                    summary = query_grok_api(summary_prompt, context)
+                    formatted_response += f"{source_id.capitalize()} Summaries:\n{summary}\n\n"
+            response = formatted_response.strip() or response
+        
+        save_chat_message(current_user.id, session_id, response, False)
+        
+        return jsonify({'status': 'success', 'message': response})
+    except Exception as e:
+        logger.error(f"Error in chat_message: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/previous_searches', methods=['GET'])
+@login_required
+def previous_searches():
+    search_history = get_search_history(current_user.id)
+    response = make_response(render_template('previous_searches.html', searches=search_history, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/prompt', methods=['GET', 'POST'])
+@login_required
+def prompt():
+    if request.method == 'POST':
+        prompt_name = request.form.get('prompt_name')
+        prompt_text = request.form.get('prompt_text')
+        if not prompt_name or not prompt_text:
+            flash('Prompt name and text cannot be empty.', 'error')
+        else:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute('INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)', 
+                            (current_user.id, prompt_name, prompt_text))
+                conn.commit()
+                flash('Prompt saved successfully.', 'success')
+            except Exception as e:
+                logger.error(f"Failed to save prompt: {str(e)}")
+                conn.rollback()
+                flash(f'Failed to save prompt: {str(e)}', 'error')
+            finally:
+                cur.close()
+                conn.close()
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
+                    (current_user.id,))
+        prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"Error loading prompts: {str(e)}")
+        prompts = []
+    finally:
+        cur.close()
+        conn.close()
+    response = make_response(render_template('prompt.html', prompts=prompts, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/prompt/edit/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_prompt(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id, prompt_name, prompt_text FROM prompts WHERE id = %s AND user_id = %s', 
+                    (id, current_user.id))
+        prompt = cur.fetchone()
+        
+        if not prompt:
+            flash('Prompt not found or you do not have permission to edit it.', 'error')
+            response = make_response(redirect(url_for('prompt')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
+        
+        if request.method == 'POST':
+            prompt_name = request.form.get('prompt_name')
+            prompt_text = request.form.get('prompt_text')
+            if not prompt_name or not prompt_text:
+                flash('Prompt name and text cannot be empty.', 'error')
+            else:
+                try:
+                    cur.execute('UPDATE prompts SET prompt_name = %s, prompt_text = %s WHERE id = %s AND user_id = %s', 
+                                (prompt_name, prompt_text, id, current_user.id))
+                    conn.commit()
+                    flash('Prompt updated successfully.', 'success')
+                    response = make_response(redirect(url_for('prompt')))
+                    response.headers['X-Content-Type-Options'] = 'nosniff'
+                    return response
+                except Exception as e:
+                    logger.error(f"Failed to update prompt: {str(e)}")
+                    conn.rollback()
+                    flash(f'Failed to update prompt: {str(e)}', 'error')
+        
+        response = make_response(render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    except Exception as e:
+        logger.error(f"Error in edit_prompt: {str(e)}")
+        flash('An error occurred. Please try again.', 'error')
+        response = make_response(redirect(url_for('prompt')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/prompt/delete/<int:id>', methods=['POST'])
+@login_required
+def delete_prompt(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
+        prompt = cur.fetchone()
+        
+        if not prompt:
+            flash('Prompt not found or you do not have permission to delete it.', 'error')
+            response = make_response(redirect(url_for('prompt')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
+        
+        cur.execute('DELETE FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
+        conn.commit()
+        flash('Prompt deleted successfully.', 'success')
+    except Exception as e:
+        logger.error(f"Error deleting prompt: {str(e)}")
+        conn.rollback()
+        flash(f'Failed to delete prompt: {str(e)}', 'error')
+    finally:
+        cur.close()
+        conn.close()
+    
+    response = make_response(redirect(url_for('prompt')))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/notifications', methods=['GET', 'POST'])
+@login_required
+def notifications():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    pre_query = request.args.get('keywords', '')
+    pre_prompt = request.args.get('prompt_text', '')
+    
+    if request.method == 'POST':
+        rule_name = request.form.get('rule_name')
+        keywords = request.form.get('keywords')
+        timeframe = request.form.get('timeframe')
+        prompt_text = request.form.get('prompt_text')
+        email_format = request.form.get('email_format')
+        sources = request.form.getlist('sources')
+        
+        if not all([rule_name, keywords, timeframe, sources, email_format]):
+            flash('All required fields must be filled.', 'error')
+        elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
+            flash('Invalid timeframe selected.', 'error')
+        elif email_format not in ['summary', 'list', 'detailed']:
+            flash('Invalid email format selected.', 'error')
+        else:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources))
+                )
+                conn.commit()
+                flash('Notification rule created successfully.', 'success')
+                schedule_notification_rules()
+            except Exception as e:
+                logger.error(f"Error creating notification: {str(e)}")
+                conn.rollback()
+                flash(f'Failed to create notification rule: {str(e)}', 'error')
+    
+    try:
+        cur.execute(
+            "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, created_at, sources "
+            "FROM notifications WHERE user_id = %s ORDER BY created_at DESC",
+            (current_user.id,)
+        )
+        notifications = [
+            {
+                'id': n[0],
+                'rule_name': n[1],
+                'keywords': n[2],
+                'timeframe': n[3],
+                'prompt_text': n[4],
+                'email_format': n[5],
+                'created_at': n[6],
+                'sources': json.loads(n[7]) if n[7] else ['pubmed']
+            } for n in cur.fetchall()
+        ]
+    except Exception as e:
+        logger.error(f"Error loading notifications: {str(e)}")
+        notifications = []
+    finally:
+        cur.close()
+        conn.close()
+    response = make_response(render_template('notifications.html', notifications=notifications, username=current_user.email, pre_query=pre_query, pre_prompt=pre_prompt))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/notifications/edit/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, sources "
+            "FROM notifications WHERE id = %s AND user_id = %s",
+            (id, current_user.id)
+        )
+        notification = cur.fetchone()
+        
+        if not notification:
+            flash('Notification rule not found or you do not have permission to edit it.', 'error')
+            response = make_response(redirect(url_for('notifications')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
+        
+        if request.method == 'POST':
+            rule_name = request.form.get('rule_name')
+            keywords = request.form.get('keywords')
+            timeframe = request.form.get('timeframe')
+            prompt_text = request.form.get('prompt_text')
+            email_format = request.form.get('email_format')
+            sources = request.form.getlist('sources')
+            
+            if not all([rule_name, keywords, timeframe, sources, email_format]):
+                flash('All required fields must be filled.', 'error')
+            elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
+                flash('Invalid timeframe selected.', 'error')
+            elif email_format not in ['summary', 'list', 'detailed']:
+                flash('Invalid email format selected.', 'error')
+            else:
+                try:
+                    cur.execute(
+                        """
+                        UPDATE notifications SET rule_name = %s, keywords = %s, timeframe = %s, prompt_text = %s, email_format = %s, sources = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources), id, current_user.id)
+                    )
+                    conn.commit()
+                    flash('Notification rule updated successfully.', 'success')
+                    schedule_notification_rules()
+                    response = make_response(redirect(url_for('notifications')))
+                    response.headers['X-Content-Type-Options'] = 'nosniff'
+                    return response
+                except Exception as e:
+                    logger.error(f"Error updating notification: {str(e)}")
+                    conn.rollback()
+                    flash(f'Failed to update notification rule: {str(e)}', 'error')
+        
+        notification_data = {
+            'id': notification[0],
+            'rule_name': notification[1],
+            'keywords': notification[2],
+            'timeframe': notification[3],
+            'prompt_text': notification[4],
+            'email_format': notification[5],
+            'sources': json.loads(notification[6]) if notification[6] else ['pubmed']
+        }
+        response = make_response(render_template('notification_edit.html', notification=notification_data, username=current_user.email))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    except Exception as e:
+        logger.error(f"Error in edit_notification: {str(e)}")
+        flash('An error occurred. Please try again.', 'error')
+        response = make_response(redirect(url_for('notifications')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/notifications/delete/<int:id>', methods=['POST'])
+@login_required
+def delete_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT id FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
+        notification = cur.fetchone()
+        
+        if not notification:
+            flash('Notification rule not found or you do not have permission to delete it.', 'error')
+            response = make_response(redirect(url_for('notifications')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
+        
+        cur.execute('DELETE FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
+        conn.commit()
+        flash('Notification rule deleted successfully.', 'success')
+        schedule_notification_rules()
+    except Exception as e:
+        logger.error(f"Error deleting notification: {str(e)}")
+        conn.rollback()
+        flash(f'Failed to delete notification rule: {str(e)}', 'error')
+    finally:
+        cur.close()
+        conn.close()
+    
+    response = make_response(redirect(url_for('notifications')))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response

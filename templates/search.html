@@ -140,7 +140,7 @@
     <!-- Chat Modal -->
     <div class="chat-modal" id="chatModal">
         <div class="chat-modal-content">
-            <span class="close-chat">&times;</span>
+            <span class="close-chat">×</span>
             <h5>Chat with Results</h5>
             <div class="chat-history" id="chatHistory">
                 <!-- Chat messages will be appended here -->
@@ -157,6 +157,23 @@
 .summary-content p {
     margin-bottom: 1rem;
     line-height: 1.6;
+}
+.summary-content a {
+    color: #00689b;
+    text-decoration: none;
+}
+.summary-content a:hover {
+    text-decoration: underline;
+}
+.summary-content strong {
+    font-weight: 700;
+}
+.summary-content ul {
+    padding-left: 20px;
+    margin-bottom: 1rem;
+}
+.summary-content li {
+    margin-bottom: 0.5rem;
 }
 .chat-bubble {
     position: fixed;
@@ -249,7 +266,7 @@
     margin: 5px 0;
     font-size: 14px;
 }
-#chat-form {
+#chatForm {
     display: flex;
     padding: 10px;
     background-color: #fff;
@@ -257,7 +274,7 @@
     position: sticky;
     bottom: 0;
 }
-#chat-form textarea {
+#chatForm textarea {
     flex-grow: 1;
     height: 40px;
     padding: 5px;
@@ -266,7 +283,7 @@
     resize: none;
     margin-right: 5px;
 }
-#chat-form button {
+#chatForm button {
     padding: 5px 10px;
     background-color: #00689b;
     color: white;
@@ -274,7 +291,7 @@
     border-radius: 5px;
     cursor: pointer;
 }
-#chat-form button:hover {
+#chatForm button:hover {
     background-color: #005f8a;
 }
 </style>
@@ -376,7 +393,6 @@ function appendMessage(sender, text, isUser, isError = false) {
 }
 
 function loadChatHistory() {
-    // Placeholder for loading chat history from server if needed
     chatHistory.innerHTML = '';
 }
 </script>

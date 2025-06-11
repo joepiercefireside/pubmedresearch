@@ -1,7 +1,7 @@
 /* General Styles */
 html {
-    text-size-adjust: auto; /* Modern browsers */
-    -ms-text-size-adjust: auto; /* IE/Edge */
+    text-size-adjust: auto;
+    -ms-text-size-adjust: auto;
     font-family: Arial, sans-serif;
 }
 
@@ -261,5 +261,3 @@ h1, h2, h3, h5, h6 {
 .tab-content {
     padding: 20px;
 }
-
-/* Chat Bubble (Moved to search.html for page-specific styling) */
