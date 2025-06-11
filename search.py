@@ -5,9 +5,10 @@ import json
 import hashlib
 import re
 import time
+from datetime import datetime  # Added for datetime.now()
 from scipy.spatial.distance import cosine
 from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler
-from core import app, logger, update_search_progress, query_grok_api, generate_embedding, get_cached_embedding, cache_embedding, get_db_connection
+from core import app, logger, update_search_progress, query_grok_api, generate_embedding, get_cached_embedding, cache_embedding, get_db_connection, get_cached_grok_response, cache_grok_response
 
 def save_search_results(user_id, query, results):
     conn = get_db_connection()
@@ -266,11 +267,13 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
         return formatted_output
 
 @app.route('/search_progress', methods=['GET'])
+@login_required
 def search_progress():
     def stream_progress():
         try:
             if current_user is None or not hasattr(current_user, 'is_authenticated') or not current_user.is_authenticated:
                 logger.debug("Skipping progress updates for unauthenticated user")
+                yield 'data: {"status": "error: User not authenticated"}\n\n'
                 return
             query = request.args.get('query', '')
             last_status = None
@@ -379,7 +382,7 @@ def search():
             response.headers['X-Content-Type-Options'] = 'nosniff'
             return response
 
-        update_search_progress(current_user.id, query, "contacting APIs")
+        update_search_progress(current_user.id, query, "Searching articles")
 
         try:
             keywords_with_synonyms, date_range, start_year_int = extract_keywords_and_date(query, search_older, start_year)
@@ -411,21 +414,22 @@ def search():
                     continue
 
                 handler = search_handlers[source_id]
-                update_search_progress(current_user.id, query, f"executing {handler.name} search")
+                update_search_progress(current_user.id, query, f"Searching {handler.name}")
 
                 primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
+                update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} PMIDs")
 
                 primary_results = primary_results or [][:20]
                 fallback_results = fallback_results or [][:20]
 
                 ranked_results = []
                 if primary_results:
-                    update_search_progress(current_user.id, query, f"ranking {handler.name} results")
+                    update_search_progress(current_user.id, query, f"Ranking {handler.name} results")
                     ranked_results = rank_results(query, primary_results, prompt_params)
 
                 source_summary = ""
                 if selected_prompt_text and ranked_results:
-                    update_search_progress(current_user.id, query, f"generating {handler.name} summary")
+                    update_search_progress(current_user.id, query, f"Generating {handler.name} summary")
                     source_summary = generate_prompt_output(query, ranked_results, selected_prompt_text, prompt_params)
 
                 source_data = {
@@ -476,7 +480,7 @@ def search():
                 source['results']['all'] = source['results']['all'][start_idx:end_idx]
                 source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
 
-            result_ids = save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
+            result_ids = save_search_results(current_user.id, query, all_results)
             session['latest_search_result_ids'] = json.dumps(result_ids[:10])
             session['latest_query'] = query
 
