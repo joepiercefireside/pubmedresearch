@@ -3,7 +3,9 @@ from flask_login import LoginManager
 import os
 import logging
 import sqlite3
-import psycopg2  # Added for get_db_connection
+import psycopg2  # For get_db_connection
+import sendgrid  # Added for sg
+from sendgrid import SendGridAPIClient  # Added for sg
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from openai import OpenAI
@@ -43,6 +45,11 @@ login_manager.login_view = 'login'
 
 scheduler = BackgroundScheduler()
 scheduler.start()
+
+sendgrid_api_key = os.environ.get('SENDGRID_API_KEY', '').strip()
+if not sendgrid_api_key:
+    logger.error("SENDGRID_API_KEY not set in environment variables")
+sg = SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 logger.info("Embedding model loaded at startup.")
