@@ -6,7 +6,7 @@ import re
 import time
 import sqlite3
 from datetime import datetime
-from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler
+from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
 from core import app, logger, update_search_progress, query_grok_api, get_db_connection, get_cached_grok_response, cache_grok_response
 from search_utils import save_search_results, get_search_results, rank_results
 
@@ -165,7 +165,7 @@ def search():
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
     session.pop('latest_search_result_ids', None)
 
-    page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'googlescholar']}
+    page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'googlescholar', 'semanticscholar']}
     per_page = 20
     sort_by = request.form.get('sort_by', request.args.get('sort_by', 'relevance'))
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
@@ -199,7 +199,8 @@ def search():
 
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
-        'googlescholar': GoogleScholarSearchHandler()
+        'googlescholar': GoogleScholarSearchHandler(),
+        'semanticscholar': SemanticScholarSearchHandler()
     }
 
     if request.method == 'POST' or (request.method == 'GET' and query and sources_selected):
@@ -245,6 +246,7 @@ def search():
             total_results = {}
             pubmed_results = []
             googlescholar_results = []
+            semanticscholar_results = []
             pubmed_fallback_results = []
             all_results = []
             all_ranked_results = []
@@ -258,7 +260,10 @@ def search():
                 update_search_progress(current_user.id, query, f"Searching {handler.name}")
 
                 primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
-                update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} PMIDs")
+                if source_id == 'pubmed':
+                    update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} PMIDs")
+                else:
+                    update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} results")
 
                 primary_results = primary_results or [][:20]
                 fallback_results = fallback_results or [][:20]
@@ -302,6 +307,8 @@ def search():
                         pubmed_fallback_results = fallback_results
                 elif source_id == 'googlescholar':
                     googlescholar_results = primary_results
+                elif source_id == 'semanticscholar':
+                    semanticscholar_results = primary_results
 
                 source_total = len(primary_results) + len(fallback_results)
                 total_results[source_id] = source_total
@@ -314,6 +321,7 @@ def search():
             total_pages = {source_id: (total_results.get(source_id, 0) + per_page - 1) // per_page for source_id in total_results}
 
             for source in sources:
+                source_page = page.get(source['id'], 1)
                 source_page = page.get(source['id'], 1)
                 start_idx = (source_page - 1) * per_page
                 end_idx = start_idx + per_page
@@ -348,6 +356,7 @@ def search():
                 sort_by=sort_by,
                 pubmed_results=pubmed_results,
                 googlescholar_results=googlescholar_results,
+                semanticscholar_results=semanticscholar_results,
                 pubmed_fallback_results=pubmed_fallback_results,
                 sources_selected=sources_selected,
                 combined_summary=''
@@ -384,6 +393,8 @@ def search():
         start_year=None,
         sort_by=sort_by,
         pubmed_results=[],
+        googlescholar_results=[],
+        semanticscholar_results=[],
         pubmed_fallback_results=[],
         sources_selected=sources_selected,
         combined_summary=''

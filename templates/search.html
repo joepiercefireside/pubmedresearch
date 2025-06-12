@@ -49,6 +49,10 @@
                 <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
                 <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
             </div>
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
+                <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+            </div>
             <div class="search-container mt-2">
                 <button type="submit" class="btn btn-primary" id="searchButton">Search</button>
                 <span id="searchStatus" class="search-status"></span>
