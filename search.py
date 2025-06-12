@@ -10,6 +10,14 @@ from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, 
 from core import app, logger, update_search_progress, query_grok_api, get_db_connection, get_cached_grok_response, cache_grok_response
 from search_utils import save_search_results, get_search_results, rank_results
 from features import save_search_history
+import nltk
+from nltk.tokenize import sent_tokenize
+import mistune
+
+nltk.download('punkt')  # Download tokenizer data
+
+def markdown_to_html(text):
+    return mistune.html(text)  # Convert Markdown to HTML using mistune
 
 def parse_prompt(prompt_text):
     if not prompt_text:
@@ -92,14 +100,6 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
             else:
                 paragraphs = paragraphs[:3]
                 paragraphs.extend(['No summary available.'] * (3 - len(paragraphs)))
-        
-        def markdown_to_html(text):
-            text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
-            text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<a href="\2" target="_blank">\1</a>', text)
-            text = re.sub(r'^- (.*?)$', r'<li>\1</li>', text, flags=re.MULTILINE)
-            if '<li>' in text:
-                text = f'<ul>{text}</ul>'
-            return text
         
         formatted_output = '\n'.join(f'<p>{markdown_to_html(p)}</p>' for p in paragraphs)
         logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")

@@ -30,3 +30,4 @@ urllib3
 flask-oauthlib
 authlib
 requests-oauthlib
+mistune==3.0.2
