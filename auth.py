@@ -1,3 +1,5 @@
+```
+import os
 from flask import render_template, request, redirect, url_for, flash, send_from_directory, make_response
 from flask_login import UserMixin, login_user, logout_user, current_user, login_required
 import psycopg2
@@ -114,11 +116,17 @@ def login():
 
 @app.route('/google_login')
 def google_login():
+    if not os.environ.get('GOOGLE_CLIENT_ID') or not os.environ.get('GOOGLE_CLIENT_SECRET'):
+        flash('Google login is not configured. Please use email and password.', 'error')
+        return redirect(url_for('login'))
     redirect_uri = url_for('google_callback', _external=True)
     return google.authorize_redirect(redirect_uri)
 
 @app.route('/auth/google/callback')
 def google_callback():
+    if not os.environ.get('GOOGLE_CLIENT_ID') or not os.environ.get('GOOGLE_CLIENT_SECRET'):
+        flash('Google login is not configured. Please use email and password.', 'error')
+        return redirect(url_for('login'))
     try:
         token = google.authorize_access_token()
         user_info = google.parse_id_token(token)
@@ -172,3 +180,4 @@ def static_files(filename):
     response.headers['Cache-Control'] = 'public, max-age=31536000'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+```
