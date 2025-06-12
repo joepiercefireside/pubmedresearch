@@ -14,10 +14,10 @@
             {% endwith %}
             <div class="card mb-3">
                 <div class="card-header">Chat History</div>
-                <div class="card-body" style="max-height: 400px; overflow-y: auto;">
+                <div class="card-body summary-content" style="max-height: 400px; overflow-y: auto;">
                     {% if chat_history %}
                         {% for message in chat_history %}
-                            <p>
+                            <p class="message {{ 'user-message' if message.is_user else 'assistant-message' }}">
                                 <strong>{{ 'You' if message.is_user else 'Assistant' }} ({{ message.timestamp|datetimeformat('%Y-%m-%d %H:%M:%S') }}):</strong>
                                 {{ message.message|safe }}
                             </p>
@@ -41,4 +41,39 @@
         </div>
     </div>
 </div>
+<style>
+.summary-content p.message {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+}
+.summary-content a {
+    color: #00689b;
+    text-decoration: none;
+}
+.summary-content a:hover {
+    text-decoration: underline;
+}
+.summary-content strong {
+    font-weight: 700;
+}
+.summary-content ul {
+    padding-left: 20px;
+    margin-bottom: 1rem;
+}
+.summary-content li {
+    margin-bottom: 0.5rem;
+}
+.user-message {
+    background-color: #e1f5fe;
+    margin-left: 20px;
+    padding: 8px;
+    border-radius: 5px;
+}
+.assistant-message {
+    background-color: #f0f4c3;
+    margin-right: 20px;
+    padding: 8px;
+    border-radius: 5px;
+}
+</style>
 {% endblock %}

@@ -1,3 +1,4 @@
+import os
 from flask import render_template, request, redirect, url_for, flash, jsonify, make_response, session
 from flask_login import login_required, current_user
 import psycopg2
@@ -316,7 +317,7 @@ def chat():
             query = session.get('latest_query', '')
             context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
             
-            system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting.")
+            system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable.")
             
             history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
             full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
@@ -360,7 +361,7 @@ def chat_message():
         search_results = get_search_results(current_user.id, query)
         context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
         
-        system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting.")
+        system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable.")
         
         history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
         full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
@@ -368,11 +369,11 @@ def chat_message():
         response = query_grok_api(system_prompt, full_context)
         if "summary" in user_message.lower() and "top" in user_message.lower():
             formatted_response = ""
-            for source_id in ['pubmed', 'googlescholar']:
+            for source_id in ['pubmed', 'googlescholar', 'semanticscholar']:
                 source_results = [r for r in search_results if r['source_id'] == source_id][:3]
                 if source_results:
                     context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}" for r in source_results])
-                    summary_prompt = f"Summarize the abstracts of the following {source_id} articles in simple terms. Provide one paragraph per article, up to 3 paragraphs, separated by a blank line."
+                    summary_prompt = f"Summarize the abstracts of the following {source_id} articles in simple terms. Provide one paragraph per article, up to 3 paragraphs, separated by a blank line. Use Markdown with hyperlinks, bold text for key terms, and bullet points for lists where applicable."
                     summary = query_grok_api(summary_prompt, context)
                     formatted_response += f"{source_id.capitalize()} Summaries:\n{summary}\n\n"
             response = formatted_response.strip() or response

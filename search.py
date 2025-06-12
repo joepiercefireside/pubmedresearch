@@ -9,6 +9,7 @@ from datetime import datetime
 from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
 from core import app, logger, update_search_progress, query_grok_api, get_db_connection, get_cached_grok_response, cache_grok_response
 from search_utils import save_search_results, get_search_results, rank_results
+from features import save_search_history
 
 def parse_prompt(prompt_text):
     if not prompt_text:
@@ -322,7 +323,6 @@ def search():
 
             for source in sources:
                 source_page = page.get(source['id'], 1)
-                source_page = page.get(source['id'], 1)
                 start_idx = (source_page - 1) * per_page
                 end_idx = start_idx + per_page
                 source['results']['ranked'] = source['results']['ranked'][start_idx:end_idx]
@@ -332,6 +332,8 @@ def search():
             result_ids = save_search_results(current_user.id, query, all_results)
             session['latest_search_result_ids'] = json.dumps(result_ids[:10])
             session['latest_query'] = query
+
+            save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
 
             update_search_progress(current_user.id, query, "complete")
 
