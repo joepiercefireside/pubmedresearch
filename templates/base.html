@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}{% endblock %} - PubMedResearcher</title>
+    <title>{% block title %}{% endblock %} - AI Researcher</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=3">
@@ -13,7 +13,7 @@
         <div class="navbar-container">
             <a class="navbar-brand" href="{{ url_for('index') }}">
                 <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" class="navbar-logo">
-                <span class="navbar-title">PubMedResearcher</span>
+                <span class="navbar-title">AI Researcher</span>
             </a>
             <div class="navbar-right">
                 {% if current_user.is_authenticated %}

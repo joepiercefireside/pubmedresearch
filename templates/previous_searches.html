@@ -4,7 +4,7 @@
 <div class="container">
   <h1>Previous Searches</h1>
   <div class="mb-3">
-    <form method="POST" action="{{ url_for('delete_search_history') }}">
+    <form method="POST" action="{{ url_for('delete_search_history_endpoint') }}">
       <label for="delete_period" class="form-label">Delete searches older than:</label>
       <select class="form-control" id="delete_period" name="delete_period" style="width: 200px; display: inline-block;">
         <option value="weekly">Weekly</option>
