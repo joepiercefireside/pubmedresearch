@@ -32,6 +32,10 @@
           <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in notification.sources %}checked{% endif %} aria-label="Google Scholar source">
           <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
         </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in notification.sources %}checked{% endif %} aria-label="Semantic Scholar source">
+          <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+        </div>
       </div>
       <div class="mb-3">
         <label for="timeframe" class="form-label">Timeframe</label>

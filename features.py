@@ -272,21 +272,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 email_sent = True
             except Exception as email_e:
                 logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
-                error_detail = ""
-                if hasattr(email_e, 'body') and email_e.body:
-                    try:
-                        error_body = json.loads(email_e.body.decode('utf-8'))
-                        error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
-                    except json.JSONDecodeError:
-                        error_detail = f": {email_e.body.decode('utf-8')}"
                 email_sent = False
-            error_message = (
-                f"Email sending failed due to unverified sender identity. Please verify noreply@airesearchagent.com in SendGrid{error_detail}."
-                if "403" in str(e) or "Forbidden" in str(e)
-                else "Email sending failed due to invalid API key configuration. Please contact support."
-                if "Invalid header value" in str(e) or "API key not configured" in str(e)
-                else f"Email sending failed: {str(e)}{error_detail}"
-            )
+            error_message = f"Error testing notification: {str(e)}"
             return {
                 "results": [],
                 "summary": "",
@@ -610,27 +597,33 @@ def notifications():
         sources = request.form.getlist('sources')
         
         if not all([rule_name, keywords, timeframe, sources, email_format]):
+            logger.error(f"Missing required fields: rule_name={rule_name}, keywords={keywords}, timeframe={timeframe}, sources={sources}, email_format={email_format}")
             flash('All required fields must be filled.', 'error')
+            return redirect(url_for('notifications'))
         elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
-            flash('Invalid timeframe selected.', 'error')
+            logger.error(f"Invalid timeframe: {timeframe}")
+            flash('Invalid timeframe.', 'error')
+            return redirect(url_for('notifications'))
         elif email_format not in ['summary', 'list', 'detailed']:
-            flash('Invalid email format selected.', 'error')
-        else:
-            try:
-                cur.execute(
-                    """
-                    INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources))
-                )
-                conn.commit()
-                flash('Notification rule created successfully.', 'success')
-                schedule_notification_rules()
-            except Exception as e:
-                logger.error(f"Error creating notification: {str(e)}")
-                conn.rollback()
-                flash(f'Failed to create notification rule: {str(e)}', 'error')
+            logger.error(f"Invalid email format: {email_format}")
+            flash('Invalid email format.', 'error')
+            return redirect(url_for('notifications'))
+        
+        try:
+            cur.execute(
+                """
+                INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources))
+            )
+            conn.commit()
+            flash('Notification rule created successfully.', 'success')
+            schedule_notification_rules()
+        except Exception as e:
+            logger.error(f"Error creating notification: {str(e)}")
+            conn.rollback()
+            flash(f'Failed to create notification rule: {str(e)}', 'error')
     
     try:
         cur.execute(
@@ -674,6 +667,7 @@ def edit_notification(id):
         notification = cur.fetchone()
         
         if not notification:
+            logger.error(f"Notification rule {id} not found for user {current_user.id}")
             flash('Notification rule not found or you do not have permission to edit it.', 'error')
             response = make_response(redirect(url_for('notifications')))
             response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -688,10 +682,13 @@ def edit_notification(id):
             sources = request.form.getlist('sources')
             
             if not all([rule_name, keywords, timeframe, sources, email_format]):
+                logger.error(f"Missing required fields: rule_name={rule_name}, keywords={keywords}, timeframe={timeframe}, sources={sources}, email_format={email_format}")
                 flash('All required fields must be filled.', 'error')
             elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
+                logger.error(f"Invalid timeframe: {timeframe}")
                 flash('Invalid timeframe selected.', 'error')
             elif email_format not in ['summary', 'list', 'detailed']:
+                logger.error(f"Invalid email format: {email_format}")
                 flash('Invalid email format selected.', 'error')
             else:
                 try:
@@ -745,6 +742,7 @@ def delete_notification(id):
         notification = cur.fetchone()
         
         if not notification:
+            logger.error(f"Notification rule {id} not found for user {current_user.id}")
             flash('Notification rule not found or you do not have permission to delete it.', 'error')
             response = make_response(redirect(url_for('notifications')))
             response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -769,6 +767,7 @@ def delete_notification(id):
 @app.route('/notifications/test/<int:id>', methods=['GET'])
 @login_required
 def test_notification(id):
+    logger.info(f"Testing notification rule {id} for user {current_user.id}")
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -780,6 +779,7 @@ def test_notification(id):
         notification = cur.fetchone()
         
         if not notification:
+            logger.error(f"Notification rule {id} not found for user {current_user.id}")
             return jsonify({'status': 'error', 'message': 'Notification rule not found or you do not have permission to test it.'}), 404
         
         rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources = notification
@@ -788,6 +788,7 @@ def test_notification(id):
         result = run_notification_rule(
             rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources, test_mode=True
         )
+        logger.info(f"Test result for rule {rule_id}: status={result['status']}, email_sent={result.get('email_sent', False)}")
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error testing notification rule {id}: {str(e)}")
