@@ -156,7 +156,7 @@
   document.addEventListener('DOMContentLoaded', function() {
     {% for notification in notifications %}
       document.querySelector(`#testModal-{{ notification.id }}`).addEventListener('show.bs.modal', function() {
-        console.log(`Initiating test for notification rule ${{{ notification.id }}}`);
+        console.log(`Initiating test for notification rule {{ notification.id }}`);
         const loadingDiv = document.getElementById(`test-loading-{{ notification.id }}`);
         const resultsDiv = document.getElementById(`test-results-{{ notification.id }}`);
         const emailStatusDiv = document.getElementById(`test-email-status-{{ notification.id }}`);
