@@ -346,11 +346,9 @@ class SemanticScholarSearchHandler(SearchHandler):
         self.source_id = "semanticscholar"
         self.name = "Semantic Scholar"
     
-    @sleep_and_retry
-    @limits(calls=1, period=10)  # Relaxed rate limit for testing
     @tenacity.retry(
-        stop=tenacity.stop_after_attempt(5),  # Increased attempts
-        wait=tenacity.wait_exponential(multiplier=1, min=5, max=120),
+        stop=tenacity.stop_after_attempt(3),
+        wait=tenacity.wait_exponential(multiplier=2, min=5, max=60),
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Semantic Scholar search, attempt {retry_state.attempt_number}")
     )
@@ -362,12 +360,7 @@ class SemanticScholarSearchHandler(SearchHandler):
             if start_year:
                 ss_url += f"&year={start_year}-"
             
-            headers = {}
-            api_key = os.environ.get('SEMANTIC_SCHOLAR_API_KEY')
-            if api_key:
-                headers['x-api-key'] = api_key
-            
-            response = requests.get(ss_url, headers=headers, timeout=30)
+            response = requests.get(ss_url, timeout=30)
             response.raise_for_status()
             data = response.json()
             
