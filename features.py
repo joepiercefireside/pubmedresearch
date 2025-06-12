@@ -9,11 +9,13 @@ from datetime import datetime, timedelta
 from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
-from core import app, logger, update_search_progress, query_grok_api, scheduler, sg
+from core import app, logger, update_search_progress, query_grok_api, scheduler, sg, generate_embedding
 from search import save_search_results, get_search_results, rank_results
 from auth import validate_user_email
 from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
 import sqlite3
+import numpy as np
+from scipy.spatial.distance import cosine
 
 def save_search_history(user_id, query, prompt_text, sources, results):
     result_ids = save_search_results(user_id, query, results)
@@ -35,12 +37,13 @@ def save_search_history(user_id, query, prompt_text, sources, results):
     logger.info(f"Saved search history for user={user_id}, query={query}")
     return result_ids
 
-def get_search_history(user_id):
+def get_search_history(user_id, days=7):
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
     try:
-        c.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = ? ORDER BY timestamp DESC",
-                  (user_id,))
+        cutoff_time = time.time() - (days * 86400)
+        c.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = ? AND timestamp > ? ORDER BY timestamp DESC",
+                  (user_id, cutoff_time))
         results = [
             {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]), 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
             for row in c.fetchall()
@@ -49,6 +52,26 @@ def get_search_history(user_id):
     except sqlite3.Error as e:
         logger.error(f"Error retrieving search history: {str(e)}")
         return []
+    finally:
+        c.close()
+        conn.close()
+
+def delete_search_history(user_id, period):
+    conn = sqlite3.connect('search_progress.db')
+    c = conn.cursor()
+    try:
+        periods = {
+            'weekly': 7 * 86400,
+            'monthly': 31 * 86400,
+            'annually': 365 * 86400
+        }
+        cutoff_time = time.time() - periods.get(period, 7 * 86400)
+        c.execute("DELETE FROM search_history WHERE user_id = ? AND timestamp < ?", (user_id, cutoff_time))
+        conn.commit()
+        logger.info(f"Deleted search history for user={user_id}, period={period}")
+    except sqlite3.Error as e:
+        logger.error(f"Error deleting search history: {str(e)}")
+        conn.rollback()
     finally:
         c.close()
         conn.close()
@@ -157,18 +180,19 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             if not sg:
                 raise Exception("SendGrid API key not configured.")
             message = Mail(
-                from_email=Email("noreply@pubmedresearch.com"),
+                from_email=Email("noreply@airesearchagent.com"),
                 to_emails=To(user_email),
-                subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+                subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
                 plain_text_content=content
             )
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
-            logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+            logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
             
             if test_mode:
                 return {
                     "results": [],
+                    "summary": "No new results found.",
                     "email_content": content,
                     "status": "success",
                     "email_sent": True,
@@ -177,7 +201,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             return
         
         context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in results])
-        output = query_grok_api(prompt_text or "Summarize the provided research articles in a concise manner.", context)
+        summary_prompt = prompt_text or "Summarize the provided research articles in a concise manner, using Markdown for formatting with hyperlinks, bold text for key terms, and bullet points for lists."
+        output = query_grok_api(summary_prompt, context)
         
         if email_format == "list":
             content = "\n".join([f"- [{r['title']}]({r.get('url', 'N/A')}) ({r.get('publication_date', 'N/A')})\n  {r.get('abstract', '')[:100] or 'No abstract'}..." for r in results])
@@ -189,18 +214,19 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         if not sg:
             raise Exception("SendGrid API key not configured.")
         message = Mail(
-            from_email=Email("noreply@pubmedresearch.com"),
+            from_email=Email("noreply@airesearchagent.com"),
             to_emails=To(user_email),
-            subject=f"PubMedResearcher {'Test ' if test_mode else ''}Notification: {rule_name}",
+            subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
             plain_text_content=content
         )
         response = sg.send(message)
         response_headers = {k: v for k, v in response.headers.items()}
-        logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+        logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
         
         if test_mode:
             return {
                 "results": results,
+                "summary": output,
                 "email_content": content,
                 "status": "success",
                 "email_sent": True,
@@ -214,14 +240,14 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 if not sg:
                     raise Exception("SendGrid API key not configured.")
                 message = Mail(
-                    from_email=Email("noreply@pubmedresearch.com"),
+                    from_email=Email("noreply@airesearchagent.com"),
                     to_emails=To(user_email),
-                    subject=f"PubMedResearcher Test Notification Failed: {rule_name}",
+                    subject=f"AI Research Agent Test Notification Failed: {rule_name}",
                     plain_text_content=f"Error testing notification rule: {str(e)}"
                 )
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
-                logger.info(f"Error email sent for rule {rule_id}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+                logger.info(f"Error email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
                 email_sent = True
             except Exception as email_e:
                 logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
@@ -234,7 +260,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                         error_detail = f": {email_e.body.decode('utf-8')}"
                 email_sent = False
             error_message = (
-                f"Email sending failed due to unverified sender identity. Please verify noreply@pubmedresearch.com in SendGrid{error_detail}."
+                f"Email sending failed due to unverified sender identity. Please verify noreply@airesearchagent.com in SendGrid{error_detail}."
                 if "403" in str(e) or "Forbidden" in str(e)
                 else "Email sending failed due to invalid API key configuration. Please contact support."
                 if "Invalid header value" in str(e) or "API key not configured" in str(e)
@@ -242,6 +268,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             )
             return {
                 "results": [],
+                "summary": "",
                 "email_content": error_message,
                 "status": "error",
                 "email_sent": email_sent,
@@ -293,14 +320,14 @@ def test_email():
         if not sg:
             raise Exception("SendGrid API key not configured.")
         message = Mail(
-            from_email=Email("noreply@pubmedresearch.com"),
+            from_email=Email("noreply@airesearchagent.com"),
             to_emails=To(email),
-            subject="PubMedResearcher Test Email",
-            plain_text_content="This is a test email from PubMedResearcher to verify email sending functionality."
+            subject="AI Research Agent Test Email",
+            plain_text_content="This is a test email from AI Research Agent to verify email sending functionality."
         )
         response = sg.send(message)
         response_headers = {k: v for k, v in response.headers.items()}
-        logger.info(f"Test email sent to {email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+        logger.info(f"Test email sent to {email}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
         return jsonify({
             'status': 'success',
             'message': f"Test email sent to {email}. Check your inbox and spam/junk folder.",
@@ -316,7 +343,7 @@ def test_email():
             except json.JSONDecodeError:
                 error_detail = f": {e.body.decode('utf-8')}"
         error_message = (
-            f"Email sending failed due to unverified sender identity. Please verify noreply@pubmedresearch.com in SendGrid{error_detail}."
+            f"Email sending failed due to unverified sender identity. Please verify noreply@airesearchagent.com in SendGrid{error_detail}."
             if "403" in str(e) or "Forbidden" in str(e)
             else "Email sending failed due to invalid API key configuration. Please contact support."
             if "Invalid header value" in str(e) or "API key not configured" in str(e)
@@ -332,7 +359,7 @@ def chat():
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
     
-    session_id = session.get('chat_session_id', str(hashlib.md5(str(time.time()).encode()).hexdigest()))
+    session_id = session.get('chat_session_id', str(hashlib.sha256(str(time.time()).encode()).hexdigest()))
     session['chat_session_id'] = session_id
     
     retention_hours = get_user_settings(current_user.id)
@@ -387,7 +414,7 @@ def chat_message():
     if not current_user.is_authenticated:
         return jsonify({'status': 'error', 'message': 'User not authenticated'}), 401
     
-    session_id = session.get('chat_session_id', str(hashlib.md5(str(time.time()).encode()).hexdigest()))
+    session_id = session.get('chat_session_id', str(hashlib.sha256(str(time.time()).encode()).hexdigest()))
     session['chat_session_id'] = session_id
     
     user_message = request.form.get('message', '')
@@ -402,9 +429,29 @@ def chat_message():
         
         query = session.get('latest_query', '')
         search_results = get_search_results(current_user.id, query)
-        context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
         
-        system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable.")
+        # Generate embedding for user query
+        query_embedding = generate_embedding(user_message)
+        if query_embedding is None:
+            logger.error("Failed to generate embedding for user query")
+            return jsonify({'status': 'error', 'message': 'Failed to process query'}), 500
+        
+        # Rank results by similarity
+        ranked_results = []
+        for result in search_results:
+            text = f"{result['title']} {result.get('abstract', '')}"
+            result_embedding = generate_embedding(text)
+            if result_embedding is None:
+                continue
+            similarity = 1 - cosine(query_embedding, result_embedding)
+            ranked_results.append((result, similarity))
+        
+        ranked_results.sort(key=lambda x: x[1], reverse=True)
+        top_results = [r[0] for r in ranked_results[:5]]
+        
+        context = "\n".join([f"**Source**: {r['source_id']}\n**Title**: [{r['title']}]({r.get('url', 'N/A')})\n**Abstract**: {r.get('abstract', '')}\n**Authors**: {r.get('authors', 'N/A')}\n**Date**: {r.get('publication_date', 'N/A')}" for r in top_results])
+        
+        system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable. Focus on results most relevant to the user's query.")
         
         history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
         full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
@@ -413,12 +460,12 @@ def chat_message():
         if "summary" in user_message.lower() and "top" in user_message.lower():
             formatted_response = ""
             for source_id in ['pubmed', 'googlescholar', 'semanticscholar']:
-                source_results = [r for r in search_results if r['source_id'] == source_id][:3]
+                source_results = [r for r in top_results if r['source_id'] == source_id][:3]
                 if source_results:
-                    context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}" for r in source_results])
-                    summary_prompt = f"Summarize the abstracts of the following {source_id} articles in simple terms. Provide one paragraph per article, up to 3 paragraphs, separated by a blank line. Use Markdown with hyperlinks, bold text for key terms, and bullet points for lists where applicable."
+                    context = "\n".join([f"**Title**: [{r['title']}]({r.get('url', 'N/A')})\n**Abstract**: {r.get('abstract', '')}" for r in source_results])
+                    summary_prompt = f"Summarize the abstracts of the following {source_id} articles in simple terms. Provide one paragraph per article, up to 3 paragraphs, separated by a blank line. Use Markdown with hyperlinks, **bold** text for key terms, and bullet points for lists where applicable."
                     summary = query_grok_api(summary_prompt, context)
-                    formatted_response += f"{source_id.capitalize()} Summaries:\n{summary}\n\n"
+                    formatted_response += f"### {source_id.capitalize()} Summaries\n{summary}\n\n"
             response = formatted_response.strip() or response
         
         save_chat_message(current_user.id, session_id, response, False)
@@ -435,6 +482,23 @@ def previous_searches():
     response = make_response(render_template('previous_searches.html', searches=search_history, username=current_user.email))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+
+@app.route('/delete_search_history', methods=['POST'])
+@login_required
+def delete_search_history_endpoint():
+    period = request.form.get('delete_period', 'weekly')
+    if period not in ['weekly', 'monthly', 'annually']:
+        flash('Invalid deletion period selected.', 'error')
+        return redirect(url_for('previous_searches'))
+    
+    try:
+        delete_search_history(current_user.id, period)
+        flash(f"Search history older than {period} deleted successfully.", 'success')
+    except Exception as e:
+        logger.error(f"Error deleting search history: {str(e)}")
+        flash(f"Failed to delete search history: {str(e)}", 'error')
+    
+    return redirect(url_for('previous_searches'))
 
 @app.route('/prompt', methods=['GET', 'POST'])
 @login_required

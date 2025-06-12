@@ -23,6 +23,10 @@
           <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %} aria-label="Google Scholar source">
           <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
         </div>
+        <div class="form-check">
+          <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %} aria-label="Semantic Scholar source">
+          <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+        </div>
       </div>
       <div class="mb-3">
         <label for="timeframe" class="form-label">Timeframe</label>
@@ -115,6 +119,8 @@
                             <div id="test-email-status-{{ notification.id }}" class="alert alert-success" style="display: none;">
                               Email sent to {{ current_user.email }}. Check your inbox and spam/junk folder. Message ID: <span id="test-message-id-{{ notification.id }}"></span>
                             </div>
+                            <h6>Summary of Results</h6>
+                            <div id="test-summary-{{ notification.id }}" class="summary-content"></div>
                             <h6>Retrieved Articles</h6>
                             <div id="test-articles-{{ notification.id }}"></div>
                             <h6>Email Content Preview</h6>
@@ -168,6 +174,7 @@
         const errorDiv = document.getElementById(`test-error-{{ notification.id }}`);
         const articlesDiv = document.getElementById(`test-articles-{{ notification.id }}`);
         const emailDiv = document.getElementById(`test-email-{{ notification.id }}`);
+        const summaryDiv = document.getElementById(`test-summary-{{ notification.id }}`);
         
         loadingDiv.style.display = 'block';
         resultsDiv.style.display = 'none';
@@ -175,6 +182,7 @@
         errorDiv.style.display = 'none';
         articlesDiv.innerHTML = '';
         emailDiv.textContent = '';
+        summaryDiv.innerHTML = '';
         messageIdSpan.textContent = '';
         
         fetch(`/notifications/test/{{ notification.id }}`)
@@ -190,6 +198,7 @@
               resultsDiv.style.display = 'block';
               emailStatusDiv.style.display = data.email_sent ? 'block' : 'none';
               messageIdSpan.textContent = data.message_id || 'Not provided';
+              summaryDiv.innerHTML = data.summary || 'No summary available';
               if (data.results && data.results.length > 0) {
                 let html = '<ul>';
                 data.results.forEach(result => {

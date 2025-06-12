@@ -27,3 +27,6 @@ psutil==6.1.1
 playwright==1.49.0
 beautifulsoup4==4.12.3
 urllib3
+flask-oauthlib
+authlib
+requests-oauthlib

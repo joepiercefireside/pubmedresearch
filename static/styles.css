@@ -76,6 +76,7 @@ nav ul li a {
 }
 
 nav ul li a:hover {
+    color: #F05722;
     text-decoration: underline;
 }
 
@@ -214,8 +215,8 @@ h1, h2, h3, h5, h6 {
 }
 
 .nav-tabs .nav-link:hover {
-    color: #005f8a;
-    border-bottom: 1px solid #005f8a;
+    color: #F05722;
+    border-bottom: 1px solid #F05722;
 }
 
 /* Result Styles */

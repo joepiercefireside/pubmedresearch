@@ -88,7 +88,7 @@ def parse_efetch_xml(xml_content):
             pmid = article.find(".//PMID").text if article.find(".//PMID") is not None else "N/A"
             title = article.find(".//ArticleTitle").text if article.find(".//ArticleTitle") is not None else "No title"
             abstract_elem = article.find(".//AbstractText")
-            abstract = abstract_elem.text or "" if abstract_elem is not None else ""
+            abstract = abstract_elem.text or '' if abstract_elem is not None else ""
             authors = [author.find("LastName").text for author in article.findall(".//Author") 
                        if author.find("LastName") is not None]
             journal = article.find(".//Journal/Title")
@@ -164,7 +164,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         tokens = word_tokenize(query)
         tagged = pos_tag(tokens)
         stop_words = set(stopwords.words('english')).union({
-            'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show', 
+            'what', 'can', 'tell', 'me', 'is', 'new', 'in', 'the', 'of', 'for', 'any', 'articles', 'that', 'show',
             'between', 'only', 'related', 'to', 'available', 'discuss', 'provide', 'and'
         })
         
@@ -330,7 +330,7 @@ class GoogleScholarSearchHandler(SearchHandler):
                         'authors': ', '.join([author.get('name', 'N/A') for author in item.get('publication_info', {}).get('authors', [])]) or 'N/A',
                         'journal': item.get('publication_info', {}).get('summary', 'Google Scholar').split(' - ')[0],
                         'publication_date': pub_date,
-                        'url': item.get('link', 'N/A'),
+                        'url': item.get('link', ''),
                         'source_id': 'googlescholar'
                     })
             
@@ -347,10 +347,10 @@ class SemanticScholarSearchHandler(SearchHandler):
         self.name = "Semantic Scholar"
     
     @sleep_and_retry
-    @limits(calls=5, period=60)  # Semantic Scholar rate limit: 5 calls per minute
+    @limits(calls=1, period=10)  # Relaxed rate limit for testing
     @tenacity.retry(
-        stop=tenacity.stop_after_attempt(3),
-        wait=tenacity.wait_exponential(multiplier=2, min=5, max=60),
+        stop=tenacity.stop_after_attempt(5),  # Increased attempts
+        wait=tenacity.wait_exponential(multiplier=1, min=5, max=120),
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Semantic Scholar search, attempt {retry_state.attempt_number}")
     )
@@ -362,7 +362,12 @@ class SemanticScholarSearchHandler(SearchHandler):
             if start_year:
                 ss_url += f"&year={start_year}-"
             
-            response = requests.get(ss_url, timeout=30)
+            headers = {}
+            api_key = os.environ.get('SEMANTIC_SCHOLAR_API_KEY')
+            if api_key:
+                headers['x-api-key'] = api_key
+            
+            response = requests.get(ss_url, headers=headers, timeout=30)
             response.raise_for_status()
             data = response.json()
             
@@ -378,7 +383,7 @@ class SemanticScholarSearchHandler(SearchHandler):
                         'authors': ', '.join(authors) if authors else 'N/A',
                         'journal': item.get('journal', {}).get('name', 'Semantic Scholar') or 'Semantic Scholar',
                         'publication_date': str(item.get('year', 'N/A')),
-                        'url': item.get('url', 'N/A'),
+                        'url': item.get('url', ''),
                         'source_id': 'semanticscholar'
                     })
             

@@ -4,6 +4,7 @@ import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
 from email_validator import validate_email, EmailNotValidError
 from core import app, login_manager, logger, get_db_connection
+from authlib.integrations.flask_client import OAuth
 
 class User(UserMixin):
     def __init__(self, id, email, admin=False, status='active'):
@@ -36,6 +37,15 @@ def validate_user_email(email):
     except EmailNotValidError as e:
         logger.error(f"Invalid email address: {email}, error: {str(e)}")
         return False
+
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id=os.environ.get('GOOGLE_CLIENT_ID'),
+    client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid email profile'}
+)
 
 @app.route('/')
 def index():
@@ -85,7 +95,7 @@ def login():
             user = cur.fetchone()
             if user and check_password_hash(user[2], password):
                 if user[3] == 'inactive':
-                    flash('Your account is inactive. Please contact support at pubmedresearch@pubmedresearch.com.', 'error')
+                    flash('Your account is inactive. Please contact support at support@airesearchagent.com.', 'error')
                 else:
                     login_user(User(user[0], user[1], user[4], user[3]))
                     response = make_response(redirect(url_for('search')))
@@ -101,6 +111,52 @@ def login():
     response = make_response(render_template('login.html', username=None))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+
+@app.route('/google_login')
+def google_login():
+    redirect_uri = url_for('google_callback', _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+@app.route('/auth/google/callback')
+def google_callback():
+    try:
+        token = google.authorize_access_token()
+        user_info = google.parse_id_token(token)
+        email = user_info['email']
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT id, email, admin, status FROM users WHERE email = %s", (email,))
+            user = cur.fetchone()
+            if not user:
+                cur.execute("INSERT INTO users (email, password_hash) VALUES (%s, %s)", (email, ''))
+                conn.commit()
+                cur.execute("SELECT id, email, admin, status FROM users WHERE email = %s", (email,))
+                user = cur.fetchone()
+            if user[3] == 'inactive':
+                flash('Your account is inactive. Please contact support at support@airesearchagent.com.', 'error')
+                response = make_response(redirect(url_for('login')))
+            else:
+                login_user(User(user[0], user[1], user[2], user[3]))
+                response = make_response(redirect(url_for('search')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
+        except Exception as e:
+            logger.error(f"Error during Google login: {str(e)}")
+            conn.rollback()
+            flash('Google login failed. Please try again.', 'error')
+            response = make_response(redirect(url_for('login')))
+            response.headers['X-Content-Type-Options'] = 'nosniff'
+            return response
+        finally:
+            cur.close()
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error in Google callback: {str(e)}")
+        flash('Google login failed. Please try again.', 'error')
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
 
 @app.route('/logout')
 @login_required
