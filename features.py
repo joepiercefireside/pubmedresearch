@@ -140,25 +140,28 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, sources: {sources}, test_mode={test_mode}, recipient: {user_email}")
     if not validate_user_email(user_email):
         raise ValueError(f"Invalid recipient email address: {user_email}")
-    
+
     query = keywords
     today = datetime.now()
-    timeframe_ranges = {
-        'daily': (today - timedelta(hours=24)).strftime('%Y/%m/%d'),
-        'weekly': (today - timedelta(days=7)).strftime('%Y/%m/%d'),
-        'monthly': (today - timedelta(days=31)).strftime('%Y/%m/%d'),
-        'annually': (today - timedelta(days=365)).strftime('%Y/%m/%d')
+    timeframe_days = {
+        'daily': 1,
+        'weekly': 7,
+        'monthly': 31,
+        'annually': 365
     }
-    start_date = timeframe_ranges[timeframe]
-    date_range = f"{start_date}:{today.strftime('%Y/%m/%d')}"
-    
+    days = timeframe_days[timeframe]
+    start_date = (today - timedelta(days=days)).strftime('%Y/%m/%d')
+    end_date = today.strftime('%Y/%m/%d')
+    date_range = f"{start_date}:{end_date}"
+
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
         'googlescholar': GoogleScholarSearchHandler(),
         'semanticscholar': SemanticScholarSearchHandler()
     }
-    
+
     try:
+        update_search_progress(user_id, query, f"Searching {', '.join(sources)} for notification rule")
         keywords_with_synonyms, _, start_year_int = extract_keywords_and_date(query)
         results = []
         for source_id in sources:
@@ -170,10 +173,10 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             if primary_results:
                 ranked_results = rank_results(query, primary_results, {'display_result_count': 10})
                 results.extend([dict(r, source_id=source_id) for r in ranked_results[:10]])
-        
+
         if results:
             save_search_results(user_id, query, results)
-        
+
         logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
         if not results:
             content = "No new results found for this rule."
@@ -188,7 +191,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
             logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
-            
+
             if test_mode:
                 return {
                     "results": [],
@@ -199,18 +202,36 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     "message_id": response_headers.get('X-Message-Id', 'Not provided')
                 }
             return
-        
-        context = "\n".join([f"Title: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in results])
-        summary_prompt = prompt_text or "Summarize the provided research articles in a concise manner, using Markdown for formatting with hyperlinks, bold text for key terms, and bullet points for lists."
+
+        context = "\n".join([
+            f"Title: {r['title']}\n"
+            f"Abstract: {r.get('abstract', '')}\n"
+            f"Authors: {r.get('authors', 'N/A')}\n"
+            f"Date: {r.get('publication_date', 'N/A')}\n"
+            f"URL: {r.get('url', 'N/A')}"
+            for r in results
+        ])
+        summary_prompt = prompt_text or "Summarize the provided research articles in a concise manner, using Markdown for formatting with hyperlinks, **bold** text for key terms, and bullet points for lists."
         output = query_grok_api(summary_prompt, context)
-        
+
         if email_format == "list":
-            content = "\n".join([f"- [{r['title']}]({r.get('url', 'N/A')}) ({r.get('publication_date', 'N/A')})\n  {r.get('abstract', '')[:100] or 'No abstract'}..." for r in results])
+            content = "\n".join([
+                f"- [{r['title']}]({r.get('url', 'N/A')}) ({r.get('publication_date', 'N/A')}):\n"
+                f"  {r.get('abstract', '')[:100] or 'No abstract'}..."
+                for r in results
+            ])
         elif email_format == "detailed":
-            content = "\n".join([f"Title: [{r['title']}]({r.get('url', 'N/A')})\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nAbstract: {r.get('abstract', '') or 'No abstract'}\n" for r in results])
+            content = "\n".join([
+                f"**Title**: [{r['title']}]({r.get('url', 'N/A')})\n"
+                f"**Authors**: {r.get('authors', 'N/A')}\n"
+                f"**Journal**: {r.get('journal', 'N/A')}\n"
+                f"**Date**: {r.get('publication_date', 'N/A')}\n"
+                f"**Abstract**: {r.get('abstract', '') or 'No abstract'}\n"
+                for r in results
+            ])
         else:
             content = output
-        
+
         if not sg:
             raise Exception("SendGrid API key not configured.")
         message = Mail(
@@ -222,7 +243,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         response = sg.send(message)
         response_headers = {k: v for k, v in response.headers.items()}
         logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
-        
+
         if test_mode:
             return {
                 "results": results,
@@ -232,7 +253,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 "email_sent": True,
                 "message_id": response_headers.get('X-Message-Id', 'Not provided')
             }
-        
+
     except Exception as e:
         logger.error(f"Error running notification rule {rule_id}: {str(e)}")
         if test_mode:
@@ -308,48 +329,6 @@ def schedule_notification_rules():
     finally:
         cur.close()
         conn.close()
-
-@app.route('/test_email', methods=['POST'])
-@login_required
-def test_email():
-    email = request.form.get('email', current_user.email)
-    if not validate_user_email(email):
-        return jsonify({'status': 'error', 'message': 'Invalid email address'}), 400
-    
-    try:
-        if not sg:
-            raise Exception("SendGrid API key not configured.")
-        message = Mail(
-            from_email=Email("noreply@airesearchagent.com"),
-            to_emails=To(email),
-            subject="AI Research Agent Test Email",
-            plain_text_content="This is a test email from AI Research Agent to verify email sending functionality."
-        )
-        response = sg.send(message)
-        response_headers = {k: v for k, v in response.headers.items()}
-        logger.info(f"Test email sent to {email}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
-        return jsonify({
-            'status': 'success',
-            'message': f"Test email sent to {email}. Check your inbox and spam/junk folder.",
-            'message_id': response_headers.get('X-Message-Id', 'Not provided')
-        })
-    except Exception as e:
-        logger.error(f"Error sending test email: {str(e)}")
-        error_detail = ""
-        if hasattr(e, 'body') and e.body:
-            try:
-                error_body = json.loads(e.body.decode('utf-8'))
-                error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
-            except json.JSONDecodeError:
-                error_detail = f": {e.body.decode('utf-8')}"
-        error_message = (
-            f"Email sending failed due to unverified sender identity. Please verify noreply@airesearchagent.com in SendGrid{error_detail}."
-            if "403" in str(e) or "Forbidden" in str(e)
-            else "Email sending failed due to invalid API key configuration. Please contact support."
-            if "Invalid header value" in str(e) or "API key not configured" in str(e)
-            else f"Email sending failed: {str(e)}{error_detail}"
-        )
-        return jsonify({'status': 'error', 'message': error_message}), 500
 
 @app.route('/chat', methods=['GET', 'POST'])
 @login_required
@@ -430,13 +409,11 @@ def chat_message():
         query = session.get('latest_query', '')
         search_results = get_search_results(current_user.id, query)
         
-        # Generate embedding for user query
         query_embedding = generate_embedding(user_message)
         if query_embedding is None:
             logger.error("Failed to generate embedding for user query")
             return jsonify({'status': 'error', 'message': 'Failed to process query'}), 500
         
-        # Rank results by similarity
         ranked_results = []
         for result in search_results:
             text = f"{result['title']} {result.get('abstract', '')}"
@@ -624,9 +601,6 @@ def notifications():
     conn = get_db_connection()
     cur = conn.cursor()
     
-    pre_query = request.args.get('keywords', '')
-    pre_prompt = request.args.get('prompt_text', '')
-    
     if request.method == 'POST':
         rule_name = request.form.get('rule_name')
         keywords = request.form.get('keywords')
@@ -682,7 +656,7 @@ def notifications():
     finally:
         cur.close()
         conn.close()
-    response = make_response(render_template('notifications.html', notifications=notifications, username=current_user.email, pre_query=pre_query, pre_prompt=pre_prompt))
+    response = make_response(render_template('notifications.html', notifications=notifications, username=current_user.email))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
 

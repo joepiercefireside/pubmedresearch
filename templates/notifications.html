@@ -11,7 +11,7 @@
       </div>
       <div class="mb-3">
         <label for="keywords" class="form-label">Keywords</label>
-        <input type="text" class="form-control" id="keywords" name="keywords" value="{{ pre_query|default('') }}" placeholder="e.g., heart disease, cardiovascular, hypertension" required aria-label="Keywords">
+        <input type="text" class="form-control" id="keywords" name="keywords" placeholder="e.g., heart disease, cardiovascular, hypertension" required aria-label="Keywords">
       </div>
       <div class="mb-3">
         <label class="form-label">Search Sources</label>
@@ -39,7 +39,7 @@
       </div>
       <div class="mb-3">
         <label for="prompt_text" class="form-label">Prompt Text (Optional)</label>
-        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="e.g., Provide a summary of results" aria-label="Prompt text">{{ pre_prompt|default('') }}</textarea>
+        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="5" placeholder="e.g., Provide a summary of results" aria-label="Prompt text"></textarea>
       </div>
       <div class="mb-3">
         <label for="email_format" class="form-label">Email Format</label>
@@ -60,17 +60,6 @@
         {% endfor %}
       {% endif %}
     {% endwith %}
-  </div>
-  <div class="card mt-3">
-    <h2>Test Email Sending</h2>
-    <form id="test-email-form" method="POST" action="{{ url_for('test_email') }}">
-      <div class="mb-3">
-        <label for="test-email" class="form-label">Recipient Email (leave blank to use your email)</label>
-        <input type="email" class="form-control" id="test-email" name="email" placeholder="e.g., your_email@example.com" aria-label="Test email">
-      </div>
-      <button type="submit" class="btn btn-secondary" aria-label="Send test email">Send Test Email</button>
-    </form>
-    <div id="test-email-result" class="mt-3" style="display: none;"></div>
   </div>
   {% if notifications %}
     <div class="card mt-3">
@@ -183,15 +172,15 @@
         articlesDiv.innerHTML = '';
         emailDiv.textContent = '';
         summaryDiv.innerHTML = '';
-        messageIdSpan.textContent = '';
         
-        fetch(`/notifications/test/{{ notification.id }}`)
-          .then(response => {
-            if (!response.ok) {
-              throw new Error(`Failed to test notification: ${response.statusText}`);
-            }
-            return response.json();
-          })
+        fetch(`/notifications/test/{{ notification.id }}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          }
+        })
+          .then(response => response.json())
           .then(data => {
             loadingDiv.style.display = 'none';
             if (data.status === 'success') {
@@ -225,43 +214,6 @@
           });
       });
     {% endfor %}
-
-    const testEmailForm = document.getElementById('test-email-form');
-    const testEmailResult = document.getElementById('test-email-result');
-    
-    testEmailForm.addEventListener('submit', function(event) {
-      event.preventDefault();
-      testEmailResult.style.display = 'none';
-      testEmailResult.innerHTML = '';
-
-      const formData = new FormData(testEmailForm);
-      
-      fetch(testEmailForm.action, {
-        method: 'POST',
-        body: formData
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Failed to send test email: ${response.statusText}`);
-        }
-        return response.json();
-      })
-      .then(data => {
-        testEmailResult.style.display = 'block';
-        if (data.status === 'success') {
-          testEmailResult.className = 'alert alert-success';
-          testEmailResult.textContent = `${data.message} Message ID: ${data.message_id || 'Not provided'}`;
-        } else {
-          testEmailResult.className = 'alert alert-danger';
-          testEmailResult.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
-        }
-      })
-      .catch(error => {
-        testEmailResult.style.display = 'block';
-        testEmailResult.className = 'alert alert-danger';
-        testEmailResult.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
-      });
-    });
   });
 </script>
 {% endblock %}
