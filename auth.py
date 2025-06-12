@@ -1,4 +1,3 @@
-```
 import os
 from flask import render_template, request, redirect, url_for, flash, send_from_directory, make_response
 from flask_login import UserMixin, login_user, logout_user, current_user, login_required
@@ -180,4 +179,3 @@ def static_files(filename):
     response.headers['Cache-Control'] = 'public, max-age=31536000'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
-```
