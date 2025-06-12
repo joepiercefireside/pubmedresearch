@@ -12,7 +12,7 @@ from sendgrid.helpers.mail import Mail, Email, To, Content
 from core import app, logger, update_search_progress, query_grok_api, scheduler, sg
 from search import save_search_results, get_search_results, rank_results
 from auth import validate_user_email
-from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler
+from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
 import sqlite3
 
 def save_search_history(user_id, query, prompt_text, sources, results):
@@ -131,7 +131,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
-        'googlescholar': GoogleScholarSearchHandler()
+        'googlescholar': GoogleScholarSearchHandler(),
+        'semanticscholar': SemanticScholarSearchHandler()
     }
     
     try:
@@ -280,6 +281,48 @@ def schedule_notification_rules():
     finally:
         cur.close()
         conn.close()
+
+@app.route('/test_email', methods=['POST'])
+@login_required
+def test_email():
+    email = request.form.get('email', current_user.email)
+    if not validate_user_email(email):
+        return jsonify({'status': 'error', 'message': 'Invalid email address'}), 400
+    
+    try:
+        if not sg:
+            raise Exception("SendGrid API key not configured.")
+        message = Mail(
+            from_email=Email("noreply@pubmedresearch.com"),
+            to_emails=To(email),
+            subject="PubMedResearcher Test Email",
+            plain_text_content="This is a test email from PubMedResearcher to verify email sending functionality."
+        )
+        response = sg.send(message)
+        response_headers = {k: v for k, v in response.headers.items()}
+        logger.info(f"Test email sent to {email}, status: {response.status_code}, message_id: {response_headers.get('X-Message-Id', 'Not provided')}")
+        return jsonify({
+            'status': 'success',
+            'message': f"Test email sent to {email}. Check your inbox and spam/junk folder.",
+            'message_id': response_headers.get('X-Message-Id', 'Not provided')
+        })
+    except Exception as e:
+        logger.error(f"Error sending test email: {str(e)}")
+        error_detail = ""
+        if hasattr(e, 'body') and e.body:
+            try:
+                error_body = json.loads(e.body.decode('utf-8'))
+                error_detail = f": {error_body.get('errors', [{}])[0].get('message', 'No details provided')}"
+            except json.JSONDecodeError:
+                error_detail = f": {e.body.decode('utf-8')}"
+        error_message = (
+            f"Email sending failed due to unverified sender identity. Please verify noreply@pubmedresearch.com in SendGrid{error_detail}."
+            if "403" in str(e) or "Forbidden" in str(e)
+            else "Email sending failed due to invalid API key configuration. Please contact support."
+            if "Invalid header value" in str(e) or "API key not configured" in str(e)
+            else f"Email sending failed: {str(e)}{error_detail}"
+        )
+        return jsonify({'status': 'error', 'message': error_message}), 500
 
 @app.route('/chat', methods=['GET', 'POST'])
 @login_required
@@ -684,3 +727,33 @@ def delete_notification(id):
     response = make_response(redirect(url_for('notifications')))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+
+@app.route('/notifications/test/<int:id>', methods=['GET'])
+@login_required
+def test_notification(id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources "
+            "FROM notifications WHERE id = %s AND user_id = %s",
+            (id, current_user.id)
+        )
+        notification = cur.fetchone()
+        
+        if not notification:
+            return jsonify({'status': 'error', 'message': 'Notification rule not found or you do not have permission to test it.'}), 404
+        
+        rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources = notification
+        sources = json.loads(sources) if sources else ['pubmed']
+        
+        result = run_notification_rule(
+            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources, test_mode=True
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error testing notification rule {id}: {str(e)}")
+        return jsonify({'status': 'error', 'message': f"Error testing notification: {str(e)}"}), 500
+    finally:
+        cur.close()
+        conn.close()

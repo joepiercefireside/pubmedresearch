@@ -346,6 +346,8 @@ class SemanticScholarSearchHandler(SearchHandler):
         self.source_id = "semanticscholar"
         self.name = "Semantic Scholar"
     
+    @sleep_and_retry
+    @limits(calls=5, period=60)  # Semantic Scholar rate limit: 5 calls per minute
     @tenacity.retry(
         stop=tenacity.stop_after_attempt(3),
         wait=tenacity.wait_exponential(multiplier=2, min=5, max=60),
