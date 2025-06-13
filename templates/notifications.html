@@ -90,8 +90,8 @@
                 <td>{{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td>
                   <a href="{{ url_for('edit_notification', id=notification.id) }}" class="btn btn-sm btn-warning" aria-label="Edit notification">Edit</a>
-                  <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#testModal-{{ notification.id }}" aria-label="Test notification">Test</button>
-                  <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}" aria-label="Delete notification">Delete</button>
+                  <button type="button" class="btn btn-sm btn-info test-btn" data-bs-toggle="modal" data-bs-target="#testModal-{{ notification.id }}" data-id="{{ notification.id }}" aria-label="Test notification">Test</button>
+                  <button type="button" class="btn btn-sm btn-danger delete-btn" data-bs-toggle="modal" data-bs-target="#deleteModal-{{ notification.id }}" data-id="{{ notification.id }}" aria-label="Delete notification">Delete</button>
                   <!-- Test Modal -->
                   <div class="modal fade" id="testModal-{{ notification.id }}" tabindex="-1" aria-labelledby="testModalLabel-{{ notification.id }}" aria-hidden="true">
                     <div class="modal-dialog modal-lg">
@@ -135,7 +135,7 @@
                           Are you sure you want to delete the notification rule "{{ notification.rule_name }}"?
                         </div>
                         <div class="modal-footer">
-                          <form action="{{ url_for('delete_notification', id=notification.id) }}" method="POST">
+                          <form action="{{ url_for('delete_notification', id=notification.id) }}" method="POST" id="delete-form-{{ notification.id }}">
                             <button type="submit" class="btn btn-danger" aria-label="Delete rule">Delete</button>
                             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" aria-label="Cancel">Cancel</button>
                           </form>
@@ -154,75 +154,104 @@
 </div>
 <script>
   document.addEventListener('DOMContentLoaded', function() {
+    console.log('Notifications page loaded');
+    
     {% for notification in notifications %}
-      document.querySelector(`#testModal-{{ notification.id }}`).addEventListener('show.bs.modal', function() {
-        console.log(`Initiating test for notification rule {{ notification.id }}`);
-        const loadingDiv = document.getElementById(`test-loading-{{ notification.id }}`);
-        const resultsDiv = document.getElementById(`test-results-{{ notification.id }}`);
-        const emailStatusDiv = document.getElementById(`test-email-status-{{ notification.id }}`);
-        const messageIdSpan = document.getElementById(`test-message-id-{{ notification.id }}`);
-        const errorDiv = document.getElementById(`test-error-{{ notification.id }}`);
-        const articlesDiv = document.getElementById(`test-articles-{{ notification.id }}`);
-        const emailDiv = document.getElementById(`test-email-{{ notification.id }}`);
-        const summaryDiv = document.getElementById(`test-summary-{{ notification.id }}`);
-        
-        loadingDiv.style.display = 'block';
-        resultsDiv.style.display = 'none';
-        emailStatusDiv.style.display = 'none';
-        errorDiv.style.display = 'none';
-        articlesDiv.innerHTML = '';
-        emailDiv.textContent = '';
-        summaryDiv.innerHTML = '';
-        
-        fetch(`/notifications/test/{{ notification.id }}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          }
-        })
-          .then(response => {
-            console.log(`Test response status: ${response.status}`);
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-            return response.json();
-          })
-          .then(data => {
-            console.log('Test response data:', data);
-            loadingDiv.style.display = 'none';
-            if (data.status === 'success') {
-              resultsDiv.style.display = 'block';
-              emailStatusDiv.style.display = data.email_sent ? 'block' : 'none';
-              messageIdSpan.textContent = data.message_id || 'Not provided';
-              summaryDiv.innerHTML = data.summary || 'No summary available';
-              if (data.results && data.results.length > 0) {
-                let html = '<ul>';
-                data.results.forEach(result => {
-                  html += `<li><strong>${result.title}</strong> (${result.publication_date})<br>${result.abstract ? result.abstract.substring(0, 200) + '...' : 'No abstract'}</li>`;
-                });
-                html += '</ul>';
-                articlesDiv.innerHTML = html;
-              } else {
-                articlesDiv.innerHTML = '<p>No articles found.</p>';
+      try {
+        console.log('Setting up test modal for rule {{ notification.id }}');
+        const testModal = document.querySelector(`#testModal-{{ notification.id }}`);
+        if (!testModal) {
+          console.error('Test modal not found for rule {{ notification.id }}');
+        } else {
+          testModal.addEventListener('show.bs.modal', function() {
+            console.log(`Initiating test for notification rule {{ notification.id }}`);
+            const loadingDiv = document.getElementById(`test-loading-{{ notification.id }}`);
+            const resultsDiv = document.getElementById(`test-results-{{ notification.id }}`);
+            const emailStatusDiv = document.getElementById(`test-email-status-{{ notification.id }}`);
+            const messageIdSpan = document.getElementById(`test-message-id-{{ notification.id }}`);
+            const errorDiv = document.getElementById(`test-error-{{ notification.id }}`);
+            const articlesDiv = document.getElementById(`test-articles-{{ notification.id }}`);
+            const emailDiv = document.getElementById(`test-email-{{ notification.id }}`);
+            const summaryDiv = document.getElementById(`test-summary-{{ notification.id }}`);
+            
+            loadingDiv.style.display = 'block';
+            resultsDiv.style.display = 'none';
+            emailStatusDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+            articlesDiv.innerHTML = '';
+            emailDiv.textContent = '';
+            summaryDiv.innerHTML = '';
+            
+            fetch(`/notifications/test/{{ notification.id }}`, {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
               }
-              emailDiv.textContent = data.email_content || 'No content available';
-            } else {
-              errorDiv.style.display = 'block';
-              errorDiv.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
-              if (data.email_sent) {
-                errorDiv.textContent += ' (Error email sent to your inbox)';
-              }
-            }
-          })
-          .catch(error => {
-            console.error('Test fetch error:', error);
-            loadingDiv.style.display = 'none';
-            errorDiv.style.display = 'block';
-            errorDiv.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
+            })
+              .then(response => {
+                console.log(`Test response status: ${response.status}`);
+                if (!response.ok) {
+                  throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+              })
+              .then(data => {
+                console.log('Test response data:', data);
+                loadingDiv.style.display = 'none';
+                if (data.status === 'success') {
+                  resultsDiv.style.display = 'block';
+                  emailStatusDiv.style.display = data.email_sent ? 'block' : 'none';
+                  messageIdSpan.textContent = data.message_id || 'Not provided';
+                  summaryDiv.innerHTML = data.summary || 'No summary available';
+                  if (data.results && data.results.length > 0) {
+                    let html = '<ul>';
+                    data.results.forEach(result => {
+                      html += `<li><strong>${result.title}</strong> (${result.publication_date})<br>${result.abstract ? result.abstract.substring(0, 200) + '...' : 'No abstract'}</li>`;
+                    });
+                    html += '</ul>';
+                    articlesDiv.innerHTML = html;
+                  } else {
+                    articlesDiv.innerHTML = '<p>No articles found.</p>';
+                  }
+                  emailDiv.textContent = data.email_content || 'No content available';
+                } else {
+                  errorDiv.style.display = 'block';
+                  errorDiv.textContent = data.message || 'An unexpected error occurred. Please try again or contact support.';
+                  if (data.email_sent) {
+                    errorDiv.textContent += ' (Error email sent to your inbox)';
+                  }
+                }
+              })
+              .catch(error => {
+                console.error('Test fetch error:', error);
+                loadingDiv.style.display = 'none';
+                errorDiv.style.display = 'block';
+                errorDiv.textContent = `Error: ${error.message || 'Failed to connect to server. Please try again.'}`;
+              });
           });
-      });
+        }
+      } catch (e) {
+        console.error('Error setting up test modal for rule {{ notification.id }}:', e);
+      }
     {% endfor %}
+    
+    // Fallback jQuery for modals
+    if (typeof jQuery !== 'undefined') {
+      console.log('jQuery detected, setting up fallback modal triggers');
+      $('.test-btn').on('click', function() {
+        const id = $(this).data('id');
+        console.log(`jQuery triggering test modal for rule ${id}`);
+        $(`#testModal-${id}`).modal('show');
+      });
+      $('.delete-btn').on('click', function() {
+        const id = $(this).data('id');
+        console.log(`jQuery triggering delete modal for rule ${id}`);
+        $(`#deleteModal-${id}`).modal('show');
+      });
+    } else {
+      console.warn('jQuery not loaded, relying on Bootstrap native JS');
+    }
   });
 </script>
 {% endblock %}

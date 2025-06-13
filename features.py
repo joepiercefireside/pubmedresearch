@@ -735,10 +735,11 @@ def edit_notification(id):
 @app.route('/notifications/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_notification(id):
+    logger.info(f"Attempting to delete notification rule {id} for user {current_user.id}")
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute('SELECT id FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
+        cur.execute('SELECT id, rule_name FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
         notification = cur.fetchone()
         
         if not notification:
@@ -748,12 +749,13 @@ def delete_notification(id):
             response.headers['X-Content-Type-Options'] = 'nosniff'
             return response
         
+        logger.info(f"Deleting notification rule {id}: {notification[1]}")
         cur.execute('DELETE FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
         conn.commit()
         flash('Notification rule deleted successfully.', 'success')
         schedule_notification_rules()
     except Exception as e:
-        logger.error(f"Error deleting notification: {str(e)}")
+        logger.error(f"Error deleting notification rule {id}: {str(e)}")
         conn.rollback()
         flash(f'Failed to delete notification rule: {str(e)}', 'error')
     finally:
@@ -784,6 +786,7 @@ def test_notification(id):
         
         rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources = notification
         sources = json.loads(sources) if sources else ['pubmed']
+        logger.debug(f"Test notification {rule_id}: keywords={keywords}, sources={sources}, email={current_user.email}")
         
         result = run_notification_rule(
             rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources, test_mode=True
