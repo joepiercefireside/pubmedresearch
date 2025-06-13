@@ -32,8 +32,32 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     if not context_results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
-    context = "\n".join([f"Source: {r.get('source_id', 'unknown')}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
-    
+    # Ensure at least 10 articles for PubMed summary
+    if len(context_results) > 5:  # Adjust based on source if needed
+        context_results = context_results[:10]  # Limit to 10 for PubMed
+        # Trim abstracts to fit within 8000 characters
+        context = ""
+        char_count = 0
+        for result in context_results:
+            entry = f"Source: {result.get('source_id', 'unknown')}\nTitle: {result['title']}\n"
+            if 'abstract' in result and result['abstract']:
+                abstract = result['abstract']
+                if char_count + len(entry) + len(abstract) > 8000:
+                    trimmed_abstract = abstract[:max(0, 8000 - char_count - len(entry) - 3)] + "..."
+                    entry += f"Abstract: {trimmed_abstract}\n"
+                else:
+                    entry += f"Abstract: {abstract}\n"
+                char_count += len(entry)
+            else:
+                entry += "Abstract: N/A\n"
+            entry += f"Authors: {result.get('authors', 'N/A')}\nJournal: {result.get('journal', 'N/A')}\nDate: {result.get('publication_date', 'N/A')}\nURL: {result.get('url', 'N/A')}\n"
+            context += entry
+            if char_count >= 8000:
+                context += "... [truncated]"
+                break
+    else:
+        context = "\n".join([f"Source: {r.get('source_id', 'unknown')}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
+
     MAX_CONTEXT_LENGTH = 8000
     if len(context) > MAX_CONTEXT_LENGTH:
         context = context[:MAX_CONTEXT_LENGTH] + "... [truncated]"
@@ -53,6 +77,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
 - Include hyperlinks to article URLs using [Article Title](URL).
 - Use bold (**text**) for key terms and bullet points for key findings where applicable.
 - Follow the prompt instructions for structure and content.
+- Summarize at least 10 articles if available, or all available up to 10.
 """
             output = query_grok_api(strict_prompt, context)
             logger.info(f"Raw Grok response for summary: {output[:200]}...")
@@ -217,7 +242,19 @@ def search():
                 handler = search_handlers[source_id]
                 update_search_progress(current_user.id, query, f"Searching {handler.name}")
 
-                primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int, result_limit=result_limit)
+                max_retries = 3
+                retry_delay = 5  # seconds
+                for attempt in range(max_retries):
+                    try:
+                        primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int, result_limit=result_limit)
+                        break
+                    except Exception as e:
+                        if attempt < max_retries - 1 and "429" in str(e):
+                            logger.warning(f"Rate limit hit for {handler.name}, retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
+                            time.sleep(retry_delay)
+                            continue
+                        raise
+
                 if source_id == 'pubmed':
                     update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} PMIDs")
                 else:

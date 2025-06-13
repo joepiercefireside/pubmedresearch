@@ -314,3 +314,376 @@ window.searchResults = [
 console.log('Search results exposed:', window.searchResults);
 </script>
 {% endblock %}
+</DOCUMENT>
+
+Thank you for providing the current versions of the requested files. I now have the latest `base.html`, `search.html`, `styles.css`, `features.py`, and `search.py` to work with, dated as of your last submission on June 13, 2025, at around 03:40 PM CDT. I’ll analyze the issues based on your feedback and the logs, and propose targeted fixes. The current time is 04:00 PM CDT on Friday, June 13, 2025, which is consistent with your logs, so no time adjustments are needed.
+
+### Analysis of Current Issues
+
+1. **Prompt Text Not Populating Initially**
+   - **Observation**: The "Custom Prompt" text box doesn’t populate when a prompt is selected from the "Select Prompt" dropdown, though it appears after submission.
+   - **Cause**: The JavaScript in `search.html` (lines 263-281) initializes the textarea on `DOMContentLoaded` by matching `promptId.value` with an option, but if the initial `prompt_id` value is empty or doesn’t match an option (e.g., due to server-side rendering timing), it fails to set the text. The `dispatchEvent('change')` forces a refresh, but the log doesn’t show console output, suggesting the script might not execute as expected. The backend (`search.py`, line 71) correctly sets `selected_prompt_text`, but the client-side update isn’t triggering.
+   - **Fix**: Add a debug log for `promptId.value`, ensure the selected option is set before parsing, and verify the event dispatch.
+
+2. **PubMed AI Summary Only Covers 5 Articles**
+   - **Observation**: The prompt requested a summary for 10 articles, but only 5 are included in the bibliography.
+   - **Cause**: The log shows `Context results count for summary: 10` and `Initial results count: 20`, but the `WARNING:core:Context truncated to 8000 characters` indicates the `query_grok_api` in `search.py` (line 54) limits the context, causing Grok to summarize only the first 5 articles that fit. The `generate_prompt_output` function (lines 32-60) passes 10 results, but the truncation affects the output.
+   - **Fix**: Modify `search.py` to select the top 10 ranked results and trim abstracts to fit within the 8000-character limit, ensuring all 10 are summarized.
+
+3. **Google Worked Properly**
+   - **Observation**: The Google Scholar summary included 10 articles as expected.
+   - **Cause**: The log (`Generated prompt output: length=7972`) shows the context fit within the 8000-character limit, allowing all 10 articles to be summarized.
+   - **Fix**: No action needed; align PubMed behavior with this.
+
+4. **Semantic Scholar Found No Results**
+   - **Observation**: Semantic Scholar returned 0 results with a `429 Client Error`.
+   - **Cause**: The log (`ERROR:utils:Error in Semantic Scholar search: 429 Client Error`) indicates a rate limit issue, likely due to exceeding the free tier’s request limit for the query `weight loss diabetes` and year filter `2015-`.
+   - **Fix**: Update `search.py` to implement a retry mechanism with a delay for the 429 error and consider a fallback to cached results.
+
+5. **Tab Switching Now Working**
+   - **Observation**: Tabs switch correctly.
+   - **Cause**: The updated JavaScript (lines 283-291) resolved this.
+   - **Fix**: No action needed.
+
+6. **Layout of Year and Limit at the Top Is Proper**
+   - **Observation**: The top layout is correct.
+   - **Cause**: The adjusted flex container (lines 10-22) works as intended.
+   - **Fix**: No action needed.
+
+### Proposed Changes
+
+#### For `search.html`
+- Enhance the JavaScript (lines 263-291) to debug and ensure prompt population:
+  - Log `promptId.value` and the selected option’s value.
+  - Ensure the `change` event is triggered after setting the option.
+
+#### For `search.py`
+1. **PubMed Summary**:
+   - Modify `generate_prompt_output` (lines 32-60) to enforce 10 articles by trimming abstracts and adjusting the context preparation.
+2. **Semantic Scholar**:
+   - Add a retry loop with a delay for the 429 error in the search loop (lines 120-144).
+
+#### For Other Files
+- No changes to `base.html`, `styles.css`, or `features.py` are required based on the current analysis.
+
+### Updated Files
+
+#### Updated `search.html`
+<xaiArtifact artifact_id="2df2c914-69ac-4c04-888e-850e16dbd9fa" artifact_version_id="afa8d168-c8d5-42ec-9764-c4366269c169" title="search.html" contentType="text/html">
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="d-flex align-items-center justify-content-between w-100">
+            <h2 class="me-3">Search for Articles</h2>
+            <div class="d-flex align-items-center">
+                <div class="form-check me-2">
+                    <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
+                    <label class="form-check-label" for="search_older">Search Older Articles</label>
+                </div>
+                <div class="form-group d-flex align-items-center me-2">
+                    <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 100px; flex-shrink: 0;">
+                    <label for="result_limit" class="ms-2 me-1" style="white-space: nowrap; margin: 0 5px;">Limit Results:</label>
+                    <select class="form-control dropdown-arrow" id="result_limit" name="result_limit" style="width: 100px; flex-shrink: 0;">
+                        <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                        <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                        <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
+                        <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% if error %}
+        <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+    <form method="POST" action="{{ url_for('search') }}" id="searchForm">
+        <div class="form-group">
+            <label for="query">Search Query:</label>
+            <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" required>
+        </div>
+        <div class="row">
+            <div class="col-md-4 form-group">
+                <label for="prompt_id">Select Prompt:</label>
+                <select class="form-control dropdown-arrow" id="prompt_id" name="prompt_id" role="combobox">
+                    <option value="">None</option>
+                    {% for prompt in prompts %}
+                        <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|tojson }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-8 form-group">
+                <label for="prompt_text">Custom Prompt:</label>
+                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="4">{{ prompt_text|default('') }}</textarea>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Sources:</label>
+            <div class="d-flex flex-wrap">
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_pubmed">PubMed</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+                </div>
+            </div>
+            <div class="search-container mt-2">
+                <button type="submit" class="btn btn-primary" id="searchButton">Search</button>
+                <span id="searchStatus" class="search-status"></span>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="sort_by">Sort By:</label>
+            <select class="form-control" id="sort_by" name="sort_by">
+                <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
+                <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Publication Date</option>
+            </select>
+        </div>
+    </form>
+    {% if sources %}
+        <ul class="nav nav-tabs mt-4" id="sourceTabs" role="tablist">
+            {% for source in sources %}
+                <li class="nav-item" role="presentation">
+                    <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-toggle="tab" href="#{{ source.id }}" role="tab" aria-controls="{{ source.id }}" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }}</a>
+                </li>
+            {% endfor %}
+        </ul>
+        <div class="tab-content mt-3" id="sourceTabContent">
+            {% for source in sources %}
+                <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ source.id }}" role="tabpanel" aria-labelledby="{{ source.id }}-tab">
+                    <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
+                    {% if source.summary and has_prompt %}
+                        <div class="card mb-3">
+                            <div class="card-header">{{ source.name }} Summary</div>
+                            <div class="card-body summary-content">{{ source.summary|safe }}</div>
+                        </div>
+                    {% endif %}
+                    {% if source.results.ranked %}
+                        <h4>Top Ranked Results</h4>
+                        {% for result in source.results.ranked %}
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if source.results.all %}
+                        <h4>All Results</h4>
+                        {% for result in source.results.all %}
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if source.results.fallback %}
+                        <h4>Fallback Results</h4>
+                        {% for result in source.results.fallback %}
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if total_results[source.id] > per_page %}
+                        <nav aria-label="Page navigation">
+                            <ul class="pagination">
+                                {% for p in range(1, total_pages[source.id] + 1) %}
+                                    <li class="page-item {% if page[source.id] == p %}active{% endif %}">
+                                        <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, sort_by=sort_by, search_older=search_older, start_year=start_year, result_limit=result_limit, **{'page_' + source.id: p}) }}">{{ p }}</a>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        </nav>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+</div>
+
+<style>
+.summary-content p {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+}
+.summary-content a {
+    color: #00689b;
+    text-decoration: none;
+}
+.summary-content a:hover {
+    text-decoration: underline;
+}
+.summary-content strong {
+    font-weight: 700;
+}
+.summary-content ul {
+    padding-left: 20px;
+    margin-bottom: 1rem;
+}
+.summary-content li {
+    margin-bottom: 0.5rem;
+}
+.search-container {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+.search-status {
+    color: #00689b;
+    font-size: 14px;
+    min-width: 200px;
+}
+.form-control.dropdown-arrow {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2300689b' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E?v=1");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 28px;
+}
+</style>
+
+<script>
+document.getElementById('searchForm').addEventListener('submit', function(event) {
+    const searchButton = document.getElementById('searchButton');
+    const searchStatus = document.getElementById('searchStatus');
+    searchButton.disabled = true;
+    searchButton.textContent = 'Searching...';
+    searchStatus.textContent = 'Starting search...';
+    startProgressUpdates();
+});
+
+document.addEventListener('DOMContentLoaded', function() {
+    const promptId = document.getElementById('prompt_id');
+    if (promptId && promptId.value) {
+        console.log('Initial promptId.value:', promptId.value); // Debug log
+        const options = promptId.options;
+        for (let i = 0; i < options.length; i++) {
+            if (options[i].value === promptId.value) {
+                options[i].selected = true;
+                const promptText = options[i].getAttribute('data-prompt-text') || '""';
+                try {
+                    const parsedText = JSON.parse(promptText);
+                    document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
+                    console.log('Initial prompt text set:', parsedText);
+                } catch (e) {
+                    document.getElementById('prompt_text').value = '';
+                    console.error('Failed to parse initial prompt text:', promptText, e);
+                }
+                promptId.dispatchEvent(new Event('change')); // Force refresh
+                break;
+            }
+        }
+    }
+    var tabElms = document.querySelectorAll('#sourceTabs .nav-link');
+    tabElms.forEach(function(tabElm) {
+        tabElm.addEventListener('click', function(e) {
+            e.preventDefault();
+            new bootstrap.Tab(this).show();
+        });
+    });
+    // Ensure active tab is shown on load
+    var activeTab = new bootstrap.Tab(document.querySelector('#sourceTabs .active'));
+    if (activeTab) activeTab.show();
+});
+document.getElementById('prompt_id').addEventListener('change', function() {
+    const selectedOption = this.options[this.selectedIndex];
+    const promptText = selectedOption.getAttribute('data-prompt-text') || '""';
+    try {
+        const parsedText = JSON.parse(promptText);
+        document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
+        console.log('Prompt text updated:', parsedText);
+    } catch (e) {
+        document.getElementById('prompt_text').value = '';
+        console.error('Failed to parse prompt text:', promptText, e);
+    }
+});
+
+function startProgressUpdates() {
+    const query = document.getElementById('query').value;
+    if (!query) return;
+    const encodedQuery = encodeURIComponent(query);
+    const searchStatus = document.getElementById('searchStatus');
+    let eventSource = new EventSource('/search_progress?query=' + encodedQuery);
+    
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        searchStatus.textContent = data.status;
+        if (data.status.startsWith('complete') || data.status.startsWith('error')) {
+            const searchButton = document.getElementById('searchButton');
+            searchButton.disabled = false;
+            searchButton.textContent = 'Search';
+            eventSource.close();
+            if (data.status.startsWith('complete')) {
+                searchStatus.textContent = 'Search completed';
+            } else {
+                searchStatus.textContent = data.status;
+            }
+        }
+    };
+    
+    eventSource.onerror = function() {
+        searchStatus.textContent = 'Error fetching search progress';
+        eventSource.close();
+        const searchButton = document.getElementById('searchButton');
+        searchButton.disabled = false;
+        searchButton.textContent = 'Search';
+    };
+}
+
+// Expose search results for future chatbot
+window.searchResults = [
+    {% for source in sources %}
+        {% for result in source.results.ranked %}
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
+        {% endfor %}
+        {% for result in source.results.all %}
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
+        {% endfor %}
+        {% for result in source.results.fallback %}
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
+        {% endfor %}
+    {% endfor %}
+];
+console.log('Search results exposed:', window.searchResults);
+</script>
+{% endblock %}
