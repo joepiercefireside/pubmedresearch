@@ -22,15 +22,17 @@ def markdown_to_html(text):
 def parse_prompt(prompt_text):
     if not prompt_text:
         return {
-            'summary_result_count': 3,
+            'summary_result_count': 20,
             'display_result_count': 20,
             'limit_presentation': False
         }
     
     prompt_text_lower = prompt_text.lower()
-    summary_result_count = 3
+    summary_result_count = 20
     if match := re.search(r'(?:top|return|summarize|include|limit\s+to|show\s+only)\s+(\d+)\s+(?:articles|results)', prompt_text_lower):
-        summary_result_count = min(int(match.group(1)), 10)
+        summary_result_count = min(int(match.group(1)), 20)
+    elif 'essay' in prompt_text_lower or 'all results' in prompt_text_lower:
+        summary_result_count = 20
     elif 'top' in prompt_text_lower:
         summary_result_count = 3
     
@@ -51,8 +53,8 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     
     logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
     
-    summary_result_count = prompt_params.get('summary_result_count', 3) if prompt_params else 3
-    context_results = results[:min(summary_result_count, 5)]
+    summary_result_count = prompt_params.get('summary_result_count', 20) if prompt_params else 20
+    context_results = results[:min(summary_result_count, 20)]
     logger.info(f"Context results count for summary: {len(context_results)}")
     
     if not context_results:
@@ -75,40 +77,22 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
 {prompt_text}
 
 **Instructions**:
-- Provide the response in Markdown format with exactly three paragraphs, one for each article summary.
-- Separate paragraphs with a single blank line.
+- Provide the response in Markdown format.
 - Include hyperlinks to article URLs using [Article Title](URL).
 - Use bold (**text**) for key terms and bullet points for key findings where applicable.
-- Complete the response fully, ensuring all requested information is included.
-- Do not include additional text beyond the three summaries unless explicitly requested.
+- Follow the prompt instructions for structure and content.
 """
             output = query_grok_api(strict_prompt, context)
             logger.info(f"Raw Grok response for summary: {output[:200]}...")
             cache_grok_response(cache_key, output)
         
-        paragraphs = [p.strip() for p in re.split(r'\n\s*\n|\d+\.\s+', output) if p.strip()]
-        if len(paragraphs) != 3:
-            logger.warning(f"Grok returned {len(paragraphs)} paragraphs instead of 3")
-            sentences = sent_tokenize(output)
-            if len(sentences) >= 3:
-                avg_len = len(sentences) // 3
-                paragraphs = [
-                    ' '.join(sentences[:avg_len]),
-                    ' '.join(sentences[avg_len:2*avg_len]),
-                    ' '.join(sentences[2*avg_len:])
-                ]
-            else:
-                paragraphs = paragraphs[:3]
-                paragraphs.extend(['No summary available.'] * (3 - len(paragraphs)))
-        
-        formatted_output = '\n'.join(f'<p>{markdown_to_html(p)}</p>' for p in paragraphs)
+        formatted_output = markdown_to_html(output)
         logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")
         return formatted_output
     except Exception as e:
         logger.error(f"Error generating AI summary: {str(e)}")
-        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top results include: " + "; ".join([f"[{r['title']}]({r['url']}) ({r['publication_date']})" for r in context_results])
-        paragraphs = output.split('; ')
-        formatted_output = '\n'.join(f'<p>{markdown_to_html(p)}</p>' for p in paragraphs[:3])
+        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top results include: " + "; ".join([f"[{r['title']}]({r['url']}) ({r['publication_date']})" for r in context_results[:3]])
+        formatted_output = markdown_to_html(output)
         return formatted_output
 
 @app.route('/search_progress', methods=['GET'])
@@ -172,6 +156,7 @@ def search():
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
     prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
     query = request.form.get('query', request.args.get('query', ''))
+    result_limit = int(request.form.get('result_limit', request.args.get('result_limit', 50)))  # Default to 50
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
     if start_year == "None" or not start_year:
@@ -196,7 +181,7 @@ def search():
 
     session['latest_prompt_text'] = selected_prompt_text
 
-    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50] if prompt_text else 'None'}..., query={query[:50] if query else 'None'}..., search_older={search_older}, start_year={start_year}, sources={sources_selected}, page={page}, sort_by={sort_by}")
+    logger.info(f"Search request: prompt_id={prompt_id}, prompt_text={prompt_text[:50] if prompt_text else 'None'}..., query={query[:50] if query else 'None'}..., search_older={search_older}, start_year={start_year}, sources={sources_selected}, page={page}, sort_by={sort_by}, result_limit={result_limit}")
 
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
@@ -210,8 +195,8 @@ def search():
             response = make_response(render_template('search.html', error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                   summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+                                   summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
             response.headers['X-Content-Type-Options'] = 'nosniff'
             return response
 
@@ -220,8 +205,8 @@ def search():
             response = make_response(render_template('search.html', error="At least one search source must be selected", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                   summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+                                   summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
             response.headers['X-Content-Type-Options'] = 'nosniff'
             return response
 
@@ -234,14 +219,14 @@ def search():
                 response = make_response(render_template('search.html', error="No valid keywords found", prompts=prompts, prompt_id=prompt_id, 
                                        prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                        username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                       summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                       pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+                                       summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                       pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
                 response.headers['X-Content-Type-Options'] = 'nosniff'
                 return response
 
             prompt_params = parse_prompt(selected_prompt_text) or {}
             prompt_params['sort_by'] = sort_by
-            summary_result_count = prompt_params.get('summary_result_count', 3)
+            summary_result_count = prompt_params.get('summary_result_count', 20)
 
             sources = []
             total_results = {}
@@ -260,14 +245,14 @@ def search():
                 handler = search_handlers[source_id]
                 update_search_progress(current_user.id, query, f"Searching {handler.name}")
 
-                primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
+                primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int, result_limit=result_limit)
                 if source_id == 'pubmed':
                     update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} PMIDs")
                 else:
                     update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} results")
 
-                primary_results = primary_results or [][:20]
-                fallback_results = fallback_results or [][:20]
+                primary_results = primary_results or [][:result_limit]
+                fallback_results = fallback_results or [][:result_limit]
 
                 ranked_results = []
                 if primary_results:
@@ -361,7 +346,8 @@ def search():
                 semanticscholar_results=semanticscholar_results,
                 pubmed_fallback_results=pubmed_fallback_results,
                 sources_selected=sources_selected,
-                combined_summary=''
+                combined_summary='',
+                result_limit=result_limit
             ))
             response.headers['X-Content-Type-Options'] = 'nosniff'
             return response
@@ -371,8 +357,8 @@ def search():
             response = make_response(render_template('search.html', error=f"Search failed: {str(e)}", prompts=prompts, prompt_id=prompt_id, 
                                    prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page, 
                                    username=current_user.email, has_prompt=bool(selected_prompt_text), prompt_params={}, 
-                                   summary_result_count=3, search_older=search_older, start_year=start_year, sort_by=sort_by, 
-                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary=''))
+                                   summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by, 
+                                   pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
             response.headers['X-Content-Type-Options'] = 'nosniff'
             return response
 
@@ -390,7 +376,7 @@ def search():
         username=current_user.email, 
         has_prompt=bool(selected_prompt_text), 
         prompt_params={}, 
-        summary_result_count=3, 
+        summary_result_count=20, 
         search_older=False, 
         start_year=None,
         sort_by=sort_by,
@@ -399,7 +385,8 @@ def search():
         semanticscholar_results=[],
         pubmed_fallback_results=[],
         sources_selected=sources_selected,
-        combined_summary=''
+        combined_summary='',
+        result_limit=50
     ))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response

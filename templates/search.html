@@ -34,7 +34,16 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-md-8 form-group">
+            <div class="col-md-4 form-group">
+                <label for="result_limit">Limit Results:</label>
+                <select class="form-control" id="result_limit" name="result_limit">
+                    <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                    <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                    <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
+                    <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                </select>
+            </div>
+            <div class="col-md-4 form-group">
                 <label for="prompt_text">Custom Prompt:</label>
                 <textarea class="form-control" id="prompt_text" name="prompt_text" rows="4">{{ prompt_text|default('') }}</textarea>
             </div>
@@ -125,7 +134,7 @@
                             <ul class="pagination">
                                 {% for p in range(1, total_pages[source.id] + 1) %}
                                     <li class="page-item {% if page[source.id] == p %}active{% endif %}">
-                                        <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, sort_by=sort_by, search_older=search_older, start_year=start_year, **{'page_' + source.id: p}) }}">{{ p }}</a>
+                                        <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, sort_by=sort_by, search_older=search_older, start_year=start_year, result_limit=result_limit, **{'page_' + source.id: p}) }}">{{ p }}</a>
                                     </li>
                                 {% endfor %}
                             </ul>

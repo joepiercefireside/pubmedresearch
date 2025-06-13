@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 import urllib.parse
 import random
 from search_utils import rank_results
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ BIOMEDICAL_VOCAB = {
     "cardiovascular": ["heart-related", "circulatory"],
     "blood pressure": ["hypertension", "BP"],
     "hypertension": ["high blood pressure", "elevated BP"],
-    "cidp": ["chronic inflammatory demyelinating polyneuropathy"]
+    "cidp": ["chronic inflammatory demyelinating polyradiculoneuropathy"]
 }
 
 @sleep_and_retry
@@ -243,7 +244,7 @@ class SearchHandler:
         self.source_id = "generic"
         self.name = "Generic Search"
     
-    def search(self, query, keywords_with_synonyms, date_range, start_year):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
         return [], []
 
 class PubMedSearchHandler(SearchHandler):
@@ -252,12 +253,12 @@ class PubMedSearchHandler(SearchHandler):
         self.source_id = "pubmed"
         self.name = "PubMed"
     
-    def search(self, query, keywords_with_synonyms, date_range, start_year):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
         try:
             pubmed_query = build_pubmed_query(keywords_with_synonyms, date_range)
             logger.info(f"Executing PubMed search: {pubmed_query}")
             api_key = os.environ.get('PUBMED_API_KEY')
-            pmids = esearch(pubmed_query, retmax=100, date_range=date_range, start_year=start_year, api_key=api_key)
+            pmids = esearch(pubmed_query, retmax=min(result_limit, 100), date_range=date_range, start_year=start_year, api_key=api_key)
             logger.info(f"PubMed ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
@@ -265,7 +266,7 @@ class PubMedSearchHandler(SearchHandler):
                 fallback_date_range = f"{today.year-10}/01/01:{today.strftime('%Y/%m/%d')}"
                 fallback_query = build_pubmed_query(keywords_with_synonyms, fallback_date_range)
                 logger.info(f"Executing PubMed fallback search: {fallback_query}")
-                pmids = esearch(fallback_query, retmax=100, date_range=fallback_date_range, api_key=api_key)
+                pmids = esearch(fallback_query, retmax=min(result_limit, 100), date_range=fallback_date_range, api_key=api_key)
                 logger.info(f"PubMed fallback ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
@@ -284,7 +285,7 @@ class PubMedSearchHandler(SearchHandler):
             ]
             
             logger.info(f"PubMed results: {len(primary_results)} primary, {len(fallback_results)} fallback")
-            return primary_results, fallback_results
+            return primary_results[:result_limit], fallback_results[:result_limit]
         except Exception as e:
             logger.error(f"Error in PubMed search: {str(e)}")
             return [], []
@@ -301,7 +302,7 @@ class GoogleScholarSearchHandler(SearchHandler):
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Google Scholar search, attempt {retry_state.attempt_number}")
     )
-    def search(self, query, keywords_with_synonyms, date_range, start_year):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
         try:
             keywords = "+".join([kw.replace(" ", "+") for kw, _ in keywords_with_synonyms])
             serpapi_key = os.environ.get('SERPAPI_KEY')
@@ -310,32 +311,38 @@ class GoogleScholarSearchHandler(SearchHandler):
                 raise ValueError("SERPAPI_KEY not set")
             
             logger.info(f"Using SerpApi for Google Scholar search: {keywords}")
-            serpapi_url = f"https://serpapi.com/search?engine=google_scholar&q={keywords}&num=20&api_key={serpapi_key}"
-            if start_year:
-                serpapi_url += f"&as_ylo={start_year}"
-            
-            response = requests.get(serpapi_url, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
             results = []
-            if 'organic_results' in data:
-                for item in data['organic_results'][:20]:
-                    pub_date = item.get('publication_info', {}).get('summary', '').split(', ')[-1] if ', ' in item.get('publication_info', {}).get('summary', '') else 'N/A'
-                    if pub_date != 'N/A' and start_year and pub_date.isdigit() and int(pub_date) < start_year:
-                        continue
-                    results.append({
-                        'title': item.get('title', 'No title'),
-                        'abstract': item.get('snippet', ''),
-                        'authors': ', '.join([author.get('name', 'N/A') for author in item.get('publication_info', {}).get('authors', [])]) or 'N/A',
-                        'journal': item.get('publication_info', {}).get('summary', 'Google Scholar').split(' - ')[0],
-                        'publication_date': pub_date,
-                        'url': item.get('link', ''),
-                        'source_id': 'googlescholar'
-                    })
+            results_per_page = 20
+            pages_needed = (result_limit + results_per_page - 1) // results_per_page
+            for page in range(min(pages_needed, 5)):  # Cap at 100 results (5 pages)
+                start = page * results_per_page
+                serpapi_url = f"https://serpapi.com/search?engine=google_scholar&q={keywords}&num={results_per_page}&start={start}&api_key={serpapi_key}"
+                if start_year:
+                    serpapi_url += f"&as_ylo={start_year}"
+                
+                response = requests.get(serpapi_url, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                if 'organic_results' in data:
+                    for item in data['organic_results']:
+                        pub_date = item.get('publication_info', {}).get('summary', '').split(', ')[-1] if ', ' in item.get('publication_info', {}).get('summary', '') else 'N/A'
+                        if pub_date != 'N/A' and start_year and pub_date.isdigit() and int(pub_date) < start_year:
+                            continue
+                        results.append({
+                            'title': item.get('title', 'No title'),
+                            'abstract': item.get('snippet', ''),
+                            'authors': ', '.join([author.get('name', 'N/A') for author in item.get('publication_info', {}).get('authors', [])]) or 'N/A',
+                            'journal': item.get('publication_info', {}).get('summary', 'Google Scholar').split(' - ')[0],
+                            'publication_date': pub_date,
+                            'url': item.get('link', ''),
+                            'source_id': 'googlescholar'
+                        })
+                
+                time.sleep(1)  # Avoid rate limits
             
             logger.info(f"SerpApi Google Scholar returned {len(results)} results for query: {keywords}")
-            return results, []
+            return results[:result_limit], []
         except Exception as e:
             logger.error(f"Error in Google Scholar search: {str(e)}")
             return [], []
@@ -348,25 +355,31 @@ class SemanticScholarSearchHandler(SearchHandler):
     
     @tenacity.retry(
         stop=tenacity.stop_after_attempt(3),
-        wait=tenacity.wait_exponential(multiplier=2, min=5, max=60),
+        wait=tenacity.wait_exponential(multiplier=2, min=10, max=120),
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Semantic Scholar search, attempt {retry_state.attempt_number}")
     )
-    def search(self, query, keywords_with_synonyms, date_range, start_year):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
         try:
             keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
             logger.info(f"Using Semantic Scholar API for search: {keywords}")
-            ss_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(keywords)}&limit=20&fields=title,abstract,authors,journal,year,url"
+            ss_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(keywords)}&limit={min(result_limit, 100)}&fields=title,abstract,authors,journal,year,url"
             if start_year:
                 ss_url += f"&year={start_year}-"
             
-            response = requests.get(ss_url, timeout=30)
+            time.sleep(2)  # Add delay to avoid rate limit
+            headers = {'User-Agent': random.choice(USER_AGENTS)}
+            api_key = os.environ.get('SEMANTIC_SCHOLAR_API_KEY')
+            if api_key:
+                headers['x-api-key'] = api_key
+            
+            response = requests.get(ss_url, headers=headers, timeout=30)
             response.raise_for_status()
             data = response.json()
             
             results = []
             if 'data' in data:
-                for item in data['data'][:20]:
+                for item in data['data']:
                     if start_year and item.get('year') and item['year'] < start_year:
                         continue
                     authors = [author.get('name', 'N/A') for author in item.get('authors', [])]
@@ -381,7 +394,7 @@ class SemanticScholarSearchHandler(SearchHandler):
                     })
             
             logger.info(f"Semantic Scholar returned {len(results)} results for query: {keywords}")
-            return results, []
+            return results[:result_limit], []
         except Exception as e:
             logger.error(f"Error in Semantic Scholar search: {str(e)}")
             return [], []
