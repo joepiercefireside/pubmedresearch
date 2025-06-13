@@ -262,3 +262,11 @@ h1, h2, h3, h5, h6 {
 .tab-content {
     padding: 20px;
 }
+
+/* Help Chatbot Styling */
+#gptt-iframe {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 1000;
+}

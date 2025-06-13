@@ -227,5 +227,57 @@ function startProgressUpdates() {
         searchButton.textContent = 'Search';
     };
 }
+
+// Expose search results for tawk.to chatbot
+window.searchResults = [
+    {% for source in sources %}
+        {% for result in source.results.ranked %}
+            {
+                source: "{{ source.id }}",
+                title: "{{ result.title|escape('js') }}",
+                abstract: "{{ result.abstract|truncate(500)|escape('js') }}",
+                authors: "{{ result.authors|escape('js') }}",
+                journal: "{{ result.journal|escape('js') }}",
+                publication_date: "{{ result.publication_date|escape('js') }}",
+                url: "{{ result.url|escape('js') }}"
+            },
+        {% endfor %}
+        {% for result in source.results.all %}
+            {
+                source: "{{ source.id }}",
+                title: "{{ result.title|escape('js') }}",
+                abstract: "{{ result.abstract|truncate(500)|escape('js') }}",
+                authors: "{{ result.authors|escape('js') }}",
+                journal: "{{ result.journal|escape('js') }}",
+                publication_date: "{{ result.publication_date|escape('js') }}",
+                url: "{{ result.url|escape('js') }}"
+            },
+        {% endfor %}
+        {% for result in source.results.fallback %}
+            {
+                source: "{{ source.id }}",
+                title: "{{ result.title|escape('js') }}",
+                abstract: "{{ result.abstract|truncate(500)|escape('js') }}",
+                authors: "{{ result.authors|escape('js') }}",
+                journal: "{{ result.journal|escape('js') }}",
+                publication_date: "{{ result.publication_date|escape('js') }}",
+                url: "{{ result.url|escape('js') }}"
+            },
+        {% endfor %}
+    {% endfor %}
+];
+</script>
+
+<!-- Tawk.to Chatbot Script -->
+<script type="text/javascript">
+    var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
+    (function(){
+        var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
+        s1.async=true;
+        s1.src='https://embed.tawk.to/684ac4c04b5a53190afc4c7a/1i9g7q3o7';
+        s1.charset='UTF-8';
+        s1.setAttribute('crossorigin','*');
+        s0.parentNode.insertBefore(s1,s0);
+    })();
 </script>
 {% endblock %}
