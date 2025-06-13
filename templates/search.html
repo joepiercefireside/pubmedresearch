@@ -6,15 +6,15 @@
         <div class="col-md-6">
             <h2>Search for Articles</h2>
         </div>
-        <div class="col-md-6 d-flex flex-column align-items-end">
-            <div class="form-check mb-2">
+        <div class="col-md-6 d-flex flex-row align-items-center justify-content-end">
+            <div class="form-check me-3">
                 <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
                 <label class="form-check-label" for="search_older">Search Older Articles</label>
             </div>
-            <div class="form-group mb-2">
+            <div class="form-group me-3">
                 <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 120px;">
             </div>
-            <div class="form-group mb-0">
+            <div class="form-group">
                 <label for="result_limit">Limit Results:</label>
                 <select class="form-control" id="result_limit" name="result_limit" style="width: 120px;">
                     <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
@@ -50,17 +50,19 @@
         </div>
         <div class="form-group">
             <label>Sources:</label>
-            <div class="form-check form-check-inline">
-                <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
-                <label class="form-check-label" for="source_pubmed">PubMed</label>
-            </div>
-            <div class="form-check form-check-inline">
-                <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
-                <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
-            </div>
-            <div class="form-check form-check-inline">
-                <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
-                <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+            <div class="d-flex flex-wrap">
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_pubmed">PubMed</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+                </div>
             </div>
             <div class="search-container mt-2">
                 <button type="submit" class="btn btn-primary" id="searchButton">Search</button>
@@ -193,7 +195,7 @@ document.getElementById('searchForm').addEventListener('submit', function(event)
 document.getElementById('prompt_id').addEventListener('change', function() {
     const selectedOption = this.options[this.selectedIndex];
     const promptText = selectedOption.getAttribute('data-prompt-text') || '';
-    document.getElementById('prompt_text').value = JSON.parse(promptText);
+    document.getElementById('prompt_text').value = promptText;
 });
 
 function startProgressUpdates() {
@@ -228,7 +230,7 @@ function startProgressUpdates() {
     };
 }
 
-// Expose search results for tawk.to chatbot
+// Expose search results for future chatbot
 window.searchResults = [
     {% for source in sources %}
         {% for result in source.results.ranked %}
@@ -267,21 +269,5 @@ window.searchResults = [
     {% endfor %}
 ];
 console.log('Search results exposed:', window.searchResults);
-</script>
-
-<!-- Tawk.to Chatbot Script -->
-<script type="text/javascript">
-    console.log('Loading tawk.to script...');
-    var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
-    (function(){
-        var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
-        s1.async=true;
-        s1.src='https://embed.tawk.to/684ac4c04b5a53190afc4c7a/1i9g7q3o7';
-        s1.charset='UTF-8';
-        s1.setAttribute('crossorigin','*');
-        s1.onload = function() { console.log('tawk.to script loaded'); };
-        s1.onerror = function() { console.error('Failed to load tawk.to script'); };
-        s0.parentNode.insertBefore(s1,s0);
-    })();
 </script>
 {% endblock %}
