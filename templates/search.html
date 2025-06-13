@@ -1,26 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="container mt-4">
-    <div class="row align-items-center mb-3">
-        <div class="col-md-6">
-            <h2>Search for Articles</h2>
-        </div>
-        <div class="col-md-6 d-flex flex-column align-items-end">
-            <div class="form-check me-3">
-                <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
-                <label class="form-check-label" for="search_older">Search Older Articles</label>
-            </div>
-            <div class="form-group me-3">
-                <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 120px;">
-            </div>
-            <div class="form-group">
-                <label for="result_limit">Limit Results:</label>
-                <select class="form-control" id="result_limit" name="result_limit" style="width: 120px;">
-                    <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
-                    <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                    <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
-                    <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
-                </select>
+    <div class="row">
+        <div class="d-flex align-items-center justify-content-between w-100">
+            <h2 class="me-3">Search for Articles</h2>
+            <div class="d-flex align-items-center">
+                <div class="form-check me-2">
+                    <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
+                    <label class="form-check-label" for="search_older">Search Older Articles</label>
+                </div>
+                <div class="form-group me-2">
+                    <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 100px;">
+                </div>
+                <div class="form-group me-2">
+                    <label for="result_limit" class="visually-hidden">Limit Results:</label>
+                    <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
+                        <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                        <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                        <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
+                        <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                    </select>
+                </div>
             </div>
         </div>
     </div>
