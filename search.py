@@ -131,8 +131,6 @@ def search():
     result_limit = request.form.get('result_limit', request.args.get('result_limit', '50'))
     try:
         result_limit = int(result_limit)
-        if result_limit not in [10, 20, 50, 100]:
-            result_limit = 50
     except ValueError:
         result_limit = 50
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'

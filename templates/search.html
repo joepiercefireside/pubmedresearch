@@ -40,7 +40,7 @@
                 <select class="form-control dropdown-arrow" id="prompt_id" name="prompt_id" role="combobox" aria-expanded="false">
                     <option value="">None</option>
                     {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|tojson }}" {% if prompt_id|string == prompt.id|string %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        <option value="{{ prompt.id }}" {% if prompt_id|string == prompt.id|string %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -191,40 +191,33 @@
 </style>
 
 <script>
-document.getElementById('searchForm').addEventListener('submit', function(event) {
-    const searchButton = document.getElementById('searchButton');
-    const searchStatus = document.getElementById('searchStatus');
-    searchButton.disabled = true;
-    searchButton.textContent = 'Searching...';
-    searchStatus.textContent = 'Starting search...';
-    startProgressUpdates();
-});
-
 document.addEventListener('DOMContentLoaded', function() {
-    const promptId = document.getElementById('prompt_id');
-    console.log('Prompt select element:', promptId); // Debug
-    console.log('Initial promptId.value:', promptId ? promptId.value : 'null'); // Debug
-    if (promptId && promptId.value) {
-        const options = promptId.options;
-        for (let i = 0; i < options.length; i++) {
-            console.log(`Option ${i}: value=${options[i].value}, text=${options[i].text}`); // Debug
-            if (options[i].value === promptId.value) {
-                options[i].selected = true;
-                const promptText = options[i].getAttribute('data-prompt-text') || '""';
-                console.log('Found matching option, data-prompt-text:', promptText); // Debug
-                try {
-                    const parsedText = JSON.parse(promptText);
-                    document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
-                    console.log('Initial prompt text set:', parsedText);
-                } catch (e) {
-                    document.getElementById('prompt_text').value = '';
-                    console.error('Failed to parse initial prompt text:', promptText, e);
-                }
-                promptId.dispatchEvent(new Event('change')); // Force refresh
-                break;
+    // Define prompts from server-side data
+    const prompts = {{ prompts|tojson }};
+    
+    // Handle prompt selection
+    const promptSelect = document.getElementById('prompt_id');
+    const promptTextArea = document.getElementById('prompt_text');
+    if (promptSelect && promptTextArea) {
+        console.log('Prompt select element:', promptSelect); // Debug
+        console.log('Initial promptId.value:', promptSelect.value); // Debug
+        // Set initial prompt text if a prompt is selected
+        if (promptSelect.value) {
+            const selectedPrompt = prompts.find(p => p.id === promptSelect.value);
+            if (selectedPrompt) {
+                promptTextArea.value = selectedPrompt.prompt_text;
+                console.log('Initial prompt text set:', selectedPrompt.prompt_text);
             }
         }
+        // Handle prompt changes
+        promptSelect.addEventListener('change', function() {
+            console.log('Prompt dropdown changed, selected value:', this.value); // Debug
+            const selectedPrompt = prompts.find(p => p.id === this.value);
+            promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
+            console.log('Prompt text updated:', selectedPrompt ? selectedPrompt.prompt_text : '');
+        });
     }
+    
     // Toggle start_year dropdown based on search_older checkbox
     const searchOlder = document.getElementById('search_older');
     const startYear = document.getElementById('start_year');
@@ -233,6 +226,21 @@ document.addEventListener('DOMContentLoaded', function() {
             startYear.disabled = !this.checked;
         });
     }
+    
+    // Handle form submission
+    const searchForm = document.getElementById('searchForm');
+    if (searchForm) {
+        searchForm.addEventListener('submit', function(event) {
+            const searchButton = document.getElementById('searchButton');
+            const searchStatus = document.getElementById('searchStatus');
+            searchButton.disabled = true;
+            searchButton.textContent = 'Searching...';
+            searchStatus.textContent = 'Starting search...';
+            startProgressUpdates();
+        });
+    }
+    
+    // Initialize tabs
     var tabElms = document.querySelectorAll('#sourceTabs .nav-link');
     tabElms.forEach(function(tabElm) {
         tabElm.addEventListener('click', function(e) {
@@ -243,20 +251,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Ensure active tab is shown on load
     var activeTab = new bootstrap.Tab(document.querySelector('#sourceTabs .active'));
     if (activeTab) activeTab.show();
-});
-document.getElementById('prompt_id').addEventListener('change', function() {
-    console.log('Prompt dropdown changed, selected value:', this.value); // Debug
-    const selectedOption = this.options[this.selectedIndex];
-    const promptText = selectedOption.getAttribute('data-prompt-text') || '""';
-    console.log('Selected data-prompt-text:', promptText); // Debug
-    try {
-        const parsedText = JSON.parse(promptText);
-        document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
-        console.log('Prompt text updated:', parsedText);
-    } catch (e) {
-        document.getElementById('prompt_text').value = '';
-        console.error('Failed to parse prompt text:', promptText, e);
-    }
 });
 
 function startProgressUpdates() {
