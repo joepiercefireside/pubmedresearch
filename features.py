@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
 from core import app, logger, update_search_progress, query_grok_api, scheduler, sg, generate_embedding
-from search import save_search_results, get_search_results, rank_results
+from search import save_search_results, get_search_results, rank_results, parse_prompt
 from auth import validate_user_email
 from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
 import sqlite3
@@ -154,6 +154,10 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     end_date = today.strftime('%Y/%m/%d')
     date_range = f"{start_date}:{end_date}"
 
+    prompt_params = parse_prompt(prompt_text) or {}
+    result_limit = 50  # Match search page default
+    summary_result_count = prompt_params.get('summary_result_count', 20)
+
     search_handlers = {
         'pubmed': PubMedSearchHandler(),
         'googlescholar': GoogleScholarSearchHandler(),
@@ -169,10 +173,10 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 logger.warning(f"Unknown source in notification: {source_id}")
                 continue
             handler = search_handlers[source_id]
-            primary_results, _ = handler.search(query, keywords_with_synonyms, date_range, start_year_int)
+            primary_results, _ = handler.search(query, keywords_with_synonyms, date_range, start_year_int, result_limit=result_limit)
             if primary_results:
-                ranked_results = rank_results(query, primary_results, {'display_result_count': 10})
-                results.extend([dict(r, source_id=source_id) for r in ranked_results[:10]])
+                ranked_results = rank_results(query, primary_results, prompt_params)
+                results.extend([dict(r, source_id=source_id) for r in ranked_results[:summary_result_count]])
 
         if results:
             save_search_results(user_id, query, results)
@@ -181,16 +185,23 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         if not results:
             content = "No new results found for this rule."
             if not sg:
+                logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
                 raise Exception("SendGrid API key not configured.")
-            message = Mail(
-                from_email=Email("noreply@airesearchagent.com"),
-                to_emails=To(user_email),
-                subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
-                plain_text_content=content
-            )
-            response = sg.send(message)
-            response_headers = {k: v for k, v in response.headers.items()}
-            logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
+            try:
+                message = Mail(
+                    from_email=Email("noreply@firesidetechnologies.com"),
+                    to_emails=To(user_email),
+                    subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
+                    plain_text_content=content
+                )
+                response = sg.send(message)
+                response_headers = {k: v for k, v in response.headers.items()}
+                logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
+            except Exception as e:
+                logger.error(f"Failed to send notification email for rule {rule_id}: {str(e)}")
+                if "403" in str(e):
+                    raise Exception("SendGrid API authentication failed: Invalid API key or unverified sender email (noreply@firesidetechnologies.com)")
+                raise
 
             if test_mode:
                 return {
@@ -209,7 +220,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             f"Authors: {r.get('authors', 'N/A')}\n"
             f"Date: {r.get('publication_date', 'N/A')}\n"
             f"URL: {r.get('url', 'N/A')}"
-            for r in results
+            for r in results[:summary_result_count]
         ])
         summary_prompt = prompt_text or "Summarize the provided research articles in a concise manner, using Markdown for formatting with hyperlinks, **bold** text for key terms, and bullet points for lists."
         output = query_grok_api(summary_prompt, context)
@@ -218,7 +229,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             content = "\n".join([
                 f"- [{r['title']}]({r.get('url', 'N/A')}) ({r.get('publication_date', 'N/A')}):\n"
                 f"  {r.get('abstract', '')[:100] or 'No abstract'}..."
-                for r in results
+                for r in results[:summary_result_count]
             ])
         elif email_format == "detailed":
             content = "\n".join([
@@ -227,22 +238,29 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 f"**Journal**: {r.get('journal', 'N/A')}\n"
                 f"**Date**: {r.get('publication_date', 'N/A')}\n"
                 f"**Abstract**: {r.get('abstract', '') or 'No abstract'}\n"
-                for r in results
+                for r in results[:summary_result_count]
             ])
         else:
             content = output
 
         if not sg:
+            logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
             raise Exception("SendGrid API key not configured.")
-        message = Mail(
-            from_email=Email("noreply@airesearchagent.com"),
-            to_emails=To(user_email),
-            subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
-            plain_text_content=content
-        )
-        response = sg.send(message)
-        response_headers = {k: v for k, v in response.headers.items()}
-        logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
+        try:
+            message = Mail(
+                from_email=Email("noreply@firesidetechnologies.com"),
+                to_emails=To(user_email),
+                subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
+                plain_text_content=content
+            )
+            response = sg.send(message)
+            response_headers = {k: v for k, v in response.headers.items()}
+            logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
+        except Exception as e:
+            logger.error(f"Failed to send notification email for rule {rule_id}: {str(e)}")
+            if "403" in str(e):
+                raise Exception("SendGrid API authentication failed: Invalid API key or unverified sender email (noreply@firesidetechnologies.com)")
+            raise
 
         if test_mode:
             return {
@@ -259,9 +277,10 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         if test_mode:
             try:
                 if not sg:
+                    logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
                     raise Exception("SendGrid API key not configured.")
                 message = Mail(
-                    from_email=Email("noreply@airesearchagent.com"),
+                    from_email=Email("noreply@firesidetechnologies.com"),
                     to_emails=To(user_email),
                     subject=f"AI Research Agent Test Notification Failed: {rule_name}",
                     plain_text_content=f"Error testing notification rule: {str(e)}"
@@ -273,7 +292,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             except Exception as email_e:
                 logger.error(f"Failed to send error email for rule {rule_id}: {str(email_e)}")
                 email_sent = False
-            error_message = f"Error testing notification: {str(e)}"
+            error_message = str(e) if "SendGrid" in str(e) else f"Error testing notification: {str(e)}"
             return {
                 "results": [],
                 "summary": "",

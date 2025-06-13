@@ -34,7 +34,9 @@ BIOMEDICAL_VOCAB = {
     "cardiovascular": ["heart-related", "circulatory"],
     "blood pressure": ["hypertension", "BP"],
     "hypertension": ["high blood pressure", "elevated BP"],
-    "cidp": ["chronic inflammatory demyelinating polyradiculoneuropathy"]
+    "cidp": ["chronic inflammatory demyelinating polyradiculoneuropathy"],
+    "adverse event": ["side effect", "adverse reaction", "untoward effect"],
+    "adverse effect": ["side effect", "adverse reaction", "negative effect"]
 }
 
 @sleep_and_retry
@@ -121,11 +123,16 @@ def get_mesh_synonyms(keyword, api_key=None):
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
-        root = ET.fromstring(response.content)
+        logger.debug(f"MeSH API response for {keyword}: {response.content[:200]}...")
+        try:
+            root = ET.fromstring(response.content)
+        except ET.ParseError as e:
+            logger.error(f"Invalid XML in MeSH response for {keyword}: {str(e)}")
+            return BIOMEDICAL_VOCAB.get(keyword.lower(), get_datamuse_synonyms(keyword))
         id_list = root.findall(".//Id")
         if not id_list:
             logger.info(f"No MeSH descriptors found for {keyword}")
-            return []
+            return get_datamuse_synonyms(keyword)
         
         descriptor_id = id_list[0].text
         efetch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=mesh&id={descriptor_id}&retmode=xml"
@@ -133,7 +140,11 @@ def get_mesh_synonyms(keyword, api_key=None):
             efetch_url += f"&api_key={api_key}"
         efetch_response = requests.get(efetch_url, timeout=5)
         efetch_response.raise_for_status()
-        efetch_root = ET.fromstring(efetch_response.content)
+        try:
+            efetch_root = ET.fromstring(efetch_response.content)
+        except ET.ParseError as e:
+            logger.error(f"Invalid XML in MeSH efetch response for {keyword}: {str(e)}")
+            return BIOMEDICAL_VOCAB.get(keyword.lower(), get_datamuse_synonyms(keyword))
         
         synonyms = []
         for term in efetch_root.findall(".//TermList/Term"):
@@ -146,7 +157,7 @@ def get_mesh_synonyms(keyword, api_key=None):
         return list(set(synonyms))[:3]
     except Exception as e:
         logger.error(f"MeSH API error for {keyword}: {str(e)}")
-        return BIOMEDICAL_VOCAB.get(keyword.lower(), [])
+        return BIOMEDICAL_VOCAB.get(keyword.lower(), get_datamuse_synonyms(keyword))
 
 def get_datamuse_synonyms(keyword):
     url = f"https://api.datamuse.com/words?rel_syn={urllib.parse.quote(keyword)}&max=5"
@@ -226,12 +237,18 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
 def build_pubmed_query(keywords_with_synonyms, date_range):
     try:
         query_parts = []
+        or_group = []
         for keyword, synonyms in keywords_with_synonyms:
             terms = [f'"{keyword}"[All Fields]'] + [f'"{syn}"[All Fields]' for syn in synonyms]
             term_query = " OR ".join(terms)
-            query_parts.append(f"({term_query})")
+            or_group.append(term_query)
         
-        query = " AND ".join(query_parts) if query_parts else ""
+        # Combine terms with AND, but group OR terms together
+        if or_group:
+            query = f"({' OR '.join(or_group)})"
+        else:
+            query = ""
+        
         query = f"({query}) AND {date_range}[dp]" if query else f"{date_range}[dp]"
         logger.info(f"Built PubMed query: {query}")
         return query
