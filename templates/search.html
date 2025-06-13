@@ -6,13 +6,22 @@
         <div class="col-md-6">
             <h2>Search for Articles</h2>
         </div>
-        <div class="col-md-6 d-flex justify-content-end align-items-center">
-            <div class="form-check mr-3">
+        <div class="col-md-6 d-flex flex-column align-items-end">
+            <div class="form-check mb-2">
                 <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
                 <label class="form-check-label" for="search_older">Search Older Articles</label>
             </div>
-            <div class="form-group mb-0">
+            <div class="form-group mb-2">
                 <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 120px;">
+            </div>
+            <div class="form-group mb-0">
+                <label for="result_limit">Limit Results:</label>
+                <select class="form-control" id="result_limit" name="result_limit" style="width: 120px;">
+                    <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                    <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                    <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
+                    <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                </select>
             </div>
         </div>
     </div>
@@ -30,35 +39,26 @@
                 <select class="form-control" id="prompt_id" name="prompt_id">
                     <option value="">None</option>
                     {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|escape }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|tojson }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div class="col-md-4 form-group">
-                <label for="result_limit">Limit Results:</label>
-                <select class="form-control" id="result_limit" name="result_limit">
-                    <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
-                    <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                    <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
-                    <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
-                </select>
-            </div>
-            <div class="col-md-4 form-group">
+            <div class="col-md-8 form-group">
                 <label for="prompt_text">Custom Prompt:</label>
                 <textarea class="form-control" id="prompt_text" name="prompt_text" rows="4">{{ prompt_text|default('') }}</textarea>
             </div>
         </div>
         <div class="form-group">
             <label>Sources:</label>
-            <div class="form-check">
+            <div class="form-check form-check-inline">
                 <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
                 <label class="form-check-label" for="source_pubmed">PubMed</label>
             </div>
-            <div class="form-check">
+            <div class="form-check form-check-inline">
                 <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
                 <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
             </div>
-            <div class="form-check">
+            <div class="form-check form-check-inline">
                 <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
                 <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
             </div>
@@ -193,7 +193,7 @@ document.getElementById('searchForm').addEventListener('submit', function(event)
 document.getElementById('prompt_id').addEventListener('change', function() {
     const selectedOption = this.options[this.selectedIndex];
     const promptText = selectedOption.getAttribute('data-prompt-text') || '';
-    document.getElementById('prompt_text').value = promptText;
+    document.getElementById('prompt_text').value = JSON.parse(promptText);
 });
 
 function startProgressUpdates() {
@@ -232,44 +232,46 @@ function startProgressUpdates() {
 window.searchResults = [
     {% for source in sources %}
         {% for result in source.results.ranked %}
-            {
-                source: "{{ source.id }}",
-                title: "{{ result.title|escape('js') }}",
-                abstract: "{{ result.abstract|truncate(500)|escape('js') }}",
-                authors: "{{ result.authors|escape('js') }}",
-                journal: "{{ result.journal|escape('js') }}",
-                publication_date: "{{ result.publication_date|escape('js') }}",
-                url: "{{ result.url|escape('js') }}"
-            },
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
         {% endfor %}
         {% for result in source.results.all %}
-            {
-                source: "{{ source.id }}",
-                title: "{{ result.title|escape('js') }}",
-                abstract: "{{ result.abstract|truncate(500)|escape('js') }}",
-                authors: "{{ result.authors|escape('js') }}",
-                journal: "{{ result.journal|escape('js') }}",
-                publication_date: "{{ result.publication_date|escape('js') }}",
-                url: "{{ result.url|escape('js') }}"
-            },
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
         {% endfor %}
         {% for result in source.results.fallback %}
-            {
-                source: "{{ source.id }}",
-                title: "{{ result.title|escape('js') }}",
-                abstract: "{{ result.abstract|truncate(500)|escape('js') }}",
-                authors: "{{ result.authors|escape('js') }}",
-                journal: "{{ result.journal|escape('js') }}",
-                publication_date: "{{ result.publication_date|escape('js') }}",
-                url: "{{ result.url|escape('js') }}"
-            },
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
         {% endfor %}
     {% endfor %}
 ];
+console.log('Search results exposed:', window.searchResults);
 </script>
 
 <!-- Tawk.to Chatbot Script -->
 <script type="text/javascript">
+    console.log('Loading tawk.to script...');
     var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
     (function(){
         var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
@@ -277,6 +279,8 @@ window.searchResults = [
         s1.src='https://embed.tawk.to/684ac4c04b5a53190afc4c7a/1i9g7q3o7';
         s1.charset='UTF-8';
         s1.setAttribute('crossorigin','*');
+        s1.onload = function() { console.log('tawk.to script loaded'); };
+        s1.onerror = function() { console.error('Failed to load tawk.to script'); };
         s0.parentNode.insertBefore(s1,s0);
     })();
 </script>
