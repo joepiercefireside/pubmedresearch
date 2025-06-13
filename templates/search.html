@@ -9,12 +9,10 @@
                     <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
                     <label class="form-check-label" for="search_older">Search Older Articles</label>
                 </div>
-                <div class="form-group me-2">
-                    <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 100px;">
-                </div>
-                <div class="form-group me-2">
-                    <label for="result_limit" class="me-1">Limit Results:</label>
-                    <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
+                <div class="form-group d-flex align-items-center me-2">
+                    <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 100px; flex-shrink: 0;">
+                    <label for="result_limit" class="ms-2 me-1" style="white-space: nowrap; margin: 0 5px;">Limit Results:</label>
+                    <select class="form-control dropdown-arrow" id="result_limit" name="result_limit" style="width: 100px; flex-shrink: 0;">
                         <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
                         <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
                         <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
@@ -35,7 +33,7 @@
         <div class="row">
             <div class="col-md-4 form-group">
                 <label for="prompt_id">Select Prompt:</label>
-                <select class="form-control" id="prompt_id" name="prompt_id">
+                <select class="form-control dropdown-arrow" id="prompt_id" name="prompt_id" role="combobox">
                     <option value="">None</option>
                     {% for prompt in prompts %}
                         <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|tojson }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
@@ -179,9 +177,9 @@
     font-size: 14px;
     min-width: 200px;
 }
-.form-control[role="combobox"] {
+.form-control.dropdown-arrow {
     appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2300689b' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2300689b' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E?v=1");
     background-repeat: no-repeat;
     background-position: right 8px center;
     padding-right: 28px;
@@ -201,26 +199,45 @@ document.getElementById('searchForm').addEventListener('submit', function(event)
 document.addEventListener('DOMContentLoaded', function() {
     const promptId = document.getElementById('prompt_id');
     if (promptId && promptId.value) {
-        const selectedOption = promptId.options[promptId.selectedIndex];
-        const promptText = selectedOption.getAttribute('data-prompt-text') || '';
-        try {
-            const parsedText = JSON.parse(promptText);
-            document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
-        } catch (e) {
-            document.getElementById('prompt_text').value = '';
-            console.error('Failed to parse initial prompt text:', e);
+        const options = promptId.options;
+        for (let i = 0; i < options.length; i++) {
+            if (options[i].value === promptId.value) {
+                options[i].selected = true;
+                const promptText = options[i].getAttribute('data-prompt-text') || '""';
+                try {
+                    const parsedText = JSON.parse(promptText);
+                    document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
+                    console.log('Initial prompt text set:', parsedText);
+                } catch (e) {
+                    document.getElementById('prompt_text').value = '';
+                    console.error('Failed to parse initial prompt text:', promptText, e);
+                }
+                break;
+            }
         }
+        promptId.dispatchEvent(new Event('change')); // Force refresh
     }
+    var tabElms = document.querySelectorAll('#sourceTabs .nav-link');
+    tabElms.forEach(function(tabElm) {
+        tabElm.addEventListener('click', function(e) {
+            e.preventDefault();
+            new bootstrap.Tab(this).show();
+        });
+    });
+    // Ensure active tab is shown on load
+    var activeTab = new bootstrap.Tab(document.querySelector('#sourceTabs .active'));
+    if (activeTab) activeTab.show();
 });
 document.getElementById('prompt_id').addEventListener('change', function() {
     const selectedOption = this.options[this.selectedIndex];
-    const promptText = selectedOption.getAttribute('data-prompt-text') || '';
+    const promptText = selectedOption.getAttribute('data-prompt-text') || '""';
     try {
         const parsedText = JSON.parse(promptText);
         document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
+        console.log('Prompt text updated:', parsedText);
     } catch (e) {
         document.getElementById('prompt_text').value = '';
-        console.error('Failed to parse prompt text:', e);
+        console.error('Failed to parse prompt text:', promptText, e);
     }
 });
 
