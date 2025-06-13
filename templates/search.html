@@ -6,7 +6,7 @@
         <div class="col-md-6">
             <h2>Search for Articles</h2>
         </div>
-        <div class="col-md-6 d-flex flex-row align-items-center justify-content-end">
+        <div class="col-md-6 d-flex flex-column align-items-end">
             <div class="form-check me-3">
                 <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
                 <label class="form-check-label" for="search_older">Search Older Articles</label>
@@ -195,7 +195,363 @@ document.getElementById('searchForm').addEventListener('submit', function(event)
 document.getElementById('prompt_id').addEventListener('change', function() {
     const selectedOption = this.options[this.selectedIndex];
     const promptText = selectedOption.getAttribute('data-prompt-text') || '';
-    document.getElementById('prompt_text').value = promptText;
+    document.getElementById('prompt_text').value = JSON.parse(promptText);
+});
+
+function startProgressUpdates() {
+    const query = document.getElementById('query').value;
+    if (!query) return;
+    const encodedQuery = encodeURIComponent(query);
+    const searchStatus = document.getElementById('searchStatus');
+    let eventSource = new EventSource('/search_progress?query=' + encodedQuery);
+    
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        searchStatus.textContent = data.status;
+        if (data.status.startsWith('complete') || data.status.startsWith('error')) {
+            const searchButton = document.getElementById('searchButton');
+            searchButton.disabled = false;
+            searchButton.textContent = 'Search';
+            eventSource.close();
+            if (data.status.startsWith('complete')) {
+                searchStatus.textContent = 'Search completed';
+            } else {
+                searchStatus.textContent = data.status;
+            }
+        }
+    };
+    
+    eventSource.onerror = function() {
+        searchStatus.textContent = 'Error fetching search progress';
+        eventSource.close();
+        const searchButton = document.getElementById('searchButton');
+        button.disabled = false;
+        searchButton.textContent = 'Search';
+    };
+}
+
+// Expose search results for future chatbot
+window.searchResults = [
+    {% for source in sources %}
+        {% for result in source.results.ranked %}
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
+        {% endfor %}
+        {% for result in source.results.all %}
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
+        {% endfor %}
+        {% for result in source.results.fallback %}
+            {{ {
+                'source': source.id,
+                'title': result.title,
+                'abstract': result.abstract|truncate(500),
+                'authors': result.authors,
+                'journal': result.journal,
+                'publication_date': result.publication_date,
+                'url': result.url
+            }|tojson }},
+        {% endfor %}
+    {% endfor %}
+];
+console.log('Search results exposed:', window.searchResults);
+</script>
+{% endblock %}
+</DOCUMENT>
+
+Thank you for the updated files. I deployed the search.html you provided and the issues remain. The prompt text box is not populating when a prompt is selected from the dropdown. The source checkboxes are still showing as bars above the labels instead of checkboxes beside them. The "Search Older Articles" checkbox and label are still beside the year selector input box instead of above it. Please provide the updated search.html and styles.css files with only the changes needed to fix these issues. No other files should be changed at this time.
+
+---
+
+### Analysis of Current State and Issues
+
+Thank you for deploying the provided `search.html` and confirming the persistent issues. Let’s analyze the current state based on the deployed files and your feedback:
+
+1. **Prompt Dropdown Not Populating Textarea**
+   - **Issue**: Selecting a prompt from the "Select Prompt" dropdown (line 41) doesn’t update the "Custom Prompt" textarea (line 47).
+   - **Cause**: The JavaScript (lines 263-267) uses `document.getElementById('prompt_text').value = JSON.parse(promptText)`, but `data-prompt-text="{{ prompt.prompt_text|tojson }}"` (line 41) encodes the prompt text as a JSON string. `JSON.parse` expects a valid JSON string, and if `promptText` is empty or malformed (e.g., `""` or unescaped quotes), it fails silently or throws an error, preventing the update. The `tojson` filter is correct for safety, but the parsing logic needs adjustment.
+   - **Fix**: Modify the JavaScript to handle the JSON-encoded string properly by ensuring `promptText` is parsed only if it’s a valid JSON string, defaulting to an empty string if parsing fails.
+
+2. **Source Checkboxes as Bars Above Labels**
+   - **Issue**: The source checkboxes ("PubMed," "Google Scholar," "Semantic Scholar," lines 59-71) appear as bars above their labels instead of checkboxes beside them.
+   - **Cause**: 
+     - The `d-flex flex-wrap` wrapper (line 58) and `form-check-inline` class (lines 59-71) are in place, but the current `styles.css` lacks the necessary `.form-check-inline` styles to align checkboxes beside labels. The absence of `appearance: auto` or a reset for `form-check-input` allows the browser to render them as text fields or long bars, likely due to a default stylesheet override.
+     - The image confirms this stretching behavior, indicating a CSS styling issue.
+   - **Fix**: Add `.form-check-inline` with `display: flex; align-items: center; max-width: 200px;` and `.form-check-input { appearance: auto; margin-right: 8px; }` to enforce checkbox rendering and alignment.
+
+3. **"Search Older Articles" Beside Year Selector**
+   - **Issue**: The "Search Older Articles" checkbox and label (line 17) are beside the year input (line 23) and "Limit Results" (line 29) instead of above them.
+   - **Cause**: The `d-flex flex-row align-items-center` class (line 14) enforces horizontal alignment. The desired layout is vertical stacking with "Search Older Articles" above the year input, followed by "Limit Results."
+   - **Fix**: Change `d-flex flex-row align-items-center` to `d-flex flex-column align-items-end`, and reorder elements to place "Search Older Articles" first, followed by the year input, then "Limit Results."
+
+### Minimal Changes Needed
+
+#### For `search.html`
+1. **Prompt Dropdown**:
+   - Update the JavaScript (lines 263-267) to handle `tojson` output safely:
+     ```javascript
+     document.getElementById('prompt_id').addEventListener('change', function() {
+         const selectedOption = this.options[this.selectedIndex];
+         const promptText = selectedOption.getAttribute('data-prompt-text') || '""';
+         try {
+             document.getElementById('prompt_text').value = JSON.parse(promptText);
+         } catch (e) {
+             document.getElementById('prompt_text').value = '';
+             console.error('Failed to parse prompt text:', e);
+         }
+     });
+     ```
+   - This uses `try-catch` to handle potential JSON parsing errors, defaulting to an empty string if parsing fails.
+
+2. **Source Checkboxes and Layout**:
+   - No HTML change needed; the `d-flex flex-wrap` wrapper and `form-check-inline` are correct. The fix will come from `styles.css`.
+
+3. **"Search Older Articles" Layout**:
+   - Change `d-flex flex-row align-items-center` to `d-flex flex-column align-items-end` (line 14).
+   - Reorder elements: Move "Search Older Articles" (line 17) above the year input (line 23), then place "Limit Results" (line 29) below.
+
+#### For `styles.css`
+1. **Source Checkboxes**:
+   - Add:
+     ```css
+     .form-check-inline {
+         display: flex;
+         align-items: center;
+         max-width: 200px;
+         margin-right: 15px;
+     }
+     .form-check-input {
+         appearance: auto;
+         margin-right: 8px;
+     }
+     ```
+   - `appearance: auto` ensures checkboxes render correctly, overriding any browser default.
+   - `max-width: 200px` constrains the width to prevent stretching.
+   - `margin-right: 15px` adds spacing between checkbox groups.
+
+2. **No Other Changes**: Retain existing styles, avoiding unnecessary modifications.
+
+### Updated Files
+
+#### Updated `search.html`
+<xaiArtifact artifact_id="2df2c914-69ac-4c04-888e-850e16dbd9fa" artifact_version_id="b83c8e3e-0ccb-4e30-bbdb-3fee8d34e6af" title="search.html" contentType="text/html">
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<div class="container mt-4">
+    <div class="row align-items-center mb-3">
+        <div class="col-md-6">
+            <h2>Search for Articles</h2>
+        </div>
+        <div class="col-md-6 d-flex flex-column align-items-end">
+            <div class="form-check me-3">
+                <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
+                <label class="form-check-label" for="search_older">Search Older Articles</label>
+            </div>
+            <div class="form-group me-3">
+                <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 120px;">
+            </div>
+            <div class="form-group">
+                <label for="result_limit">Limit Results:</label>
+                <select class="form-control" id="result_limit" name="result_limit" style="width: 120px;">
+                    <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                    <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                    <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
+                    <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                </select>
+            </div>
+        </div>
+    </div>
+    {% if error %}
+        <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+    <form method="POST" action="{{ url_for('search') }}" id="searchForm">
+        <div class="form-group">
+            <label for="query">Search Query:</label>
+            <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" required>
+        </div>
+        <div class="row">
+            <div class="col-md-4 form-group">
+                <label for="prompt_id">Select Prompt:</label>
+                <select class="form-control" id="prompt_id" name="prompt_id">
+                    <option value="">None</option>
+                    {% for prompt in prompts %}
+                        <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|tojson }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-8 form-group">
+                <label for="prompt_text">Custom Prompt:</label>
+                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="4">{{ prompt_text|default('') }}</textarea>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Sources:</label>
+            <div class="d-flex flex-wrap">
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_pubmed">PubMed</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+                </div>
+            </div>
+            <div class="search-container mt-2">
+                <button type="submit" class="btn btn-primary" id="searchButton">Search</button>
+                <span id="searchStatus" class="search-status"></span>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="sort_by">Sort By:</label>
+            <select class="form-control" id="sort_by" name="sort_by">
+                <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
+                <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Publication Date</option>
+            </select>
+        </div>
+    </form>
+    {% if sources %}
+        <ul class="nav nav-tabs mt-4" id="sourceTabs" role="tablist">
+            {% for source in sources %}
+                <li class="nav-item" role="presentation">
+                    <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-toggle="tab" href="#{{ source.id }}" role="tab" aria-controls="{{ source.id }}" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }}</a>
+                </li>
+            {% endfor %}
+        </ul>
+        <div class="tab-content mt-3" id="sourceTabContent">
+            {% for source in sources %}
+                <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ source.id }}" role="tabpanel" aria-labelledby="{{ source.id }}-tab">
+                    <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
+                    {% if source.summary and has_prompt %}
+                        <div class="card mb-3">
+                            <div class="card-header">{{ source.name }} Summary</div>
+                            <div class="card-body summary-content">{{ source.summary|safe }}</div>
+                        </div>
+                    {% endif %}
+                    {% if source.results.ranked %}
+                        <h4>Top Ranked Results</h4>
+                        {% for result in source.results.ranked %}
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if source.results.all %}
+                        <h4>All Results</h4>
+                        {% for result in source.results.all %}
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if source.results.fallback %}
+                        <h4>Fallback Results</h4>
+                        {% for result in source.results.fallback %}
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
+                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if total_results[source.id] > per_page %}
+                        <nav aria-label="Page navigation">
+                            <ul class="pagination">
+                                {% for p in range(1, total_pages[source.id] + 1) %}
+                                    <li class="page-item {% if page[source.id] == p %}active{% endif %}">
+                                        <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, sort_by=sort_by, search_older=search_older, start_year=start_year, result_limit=result_limit, **{'page_' + source.id: p}) }}">{{ p }}</a>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        </nav>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+</div>
+
+<style>
+.summary-content p {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+}
+.summary-content a {
+    color: #00689b;
+    text-decoration: none;
+}
+.summary-content a:hover {
+    text-decoration: underline;
+}
+.summary-content strong {
+    font-weight: 700;
+}
+.summary-content ul {
+    padding-left: 20px;
+    margin-bottom: 1rem;
+}
+.summary-content li {
+    margin-bottom: 0.5rem;
+}
+.search-container {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+.search-status {
+    color: #00689b;
+    font-size: 14px;
+    min-width: 200px;
+}
+</style>
+
+<script>
+document.getElementById('searchForm').addEventListener('submit', function(event) {
+    const searchButton = document.getElementById('searchButton');
+    const searchStatus = document.getElementById('searchStatus');
+    searchButton.disabled = true;
+    searchButton.textContent = 'Searching...';
+    searchStatus.textContent = 'Starting search...';
+    startProgressUpdates();
+});
+
+document.getElementById('prompt_id').addEventListener('change', function() {
+    const selectedOption = this.options[this.selectedIndex];
+    const promptText = selectedOption.getAttribute('data-prompt-text') || '';
+    try {
+        document.getElementById('prompt_text').value = JSON.parse(promptText);
+    } catch (e) {
+        document.getElementById('prompt_text').value = '';
+        console.error('Failed to parse prompt text:', e);
+    }
 });
 
 function startProgressUpdates() {

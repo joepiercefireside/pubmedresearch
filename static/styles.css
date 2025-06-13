@@ -262,3 +262,23 @@ h1, h2, h3, h5, h6 {
 .tab-content {
     padding: 20px;
 }
+
+/* Source Checkboxes */
+.form-check-inline {
+    display: flex;
+    align-items: center;
+    max-width: 200px;
+    margin-right: 15px;
+}
+.form-check-input {
+    appearance: auto;
+    margin-right: 8px;
+}
+
+/* Help Chatbot Styling */
+#gptt-iframe {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 1000;
+}
