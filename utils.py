@@ -211,9 +211,9 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
             keywords_with_synonyms.append((kw, list(set(synonyms))[:3]))
         
         today = datetime.now()
-        default_start_year = today.year - 10
         date_range = None
         
+        # Check for explicit date range or year in query
         if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
             start_year = int(since_match.group(1))
             date_range = f"{start_year}/01/01:{today.strftime('%Y/%m/%d')}"
@@ -225,11 +225,12 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         elif 'past week' in query_lower:
             date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
         else:
-            start_year_int = int(start_year) if search_older and start_year else default_start_year
+            # Use user-selected start_year if search_older is checked
+            start_year_int = int(start_year) if search_older and start_year else today.year - 10
             date_range = f"{start_year_int}/01/01:{today.strftime('%Y/%m/%d')}"
         
         logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
-        return keywords_with_synonyms, date_range, start_year_int if search_older and start_year else default_start_year
+        return keywords_with_synonyms, date_range, start_year_int
     except Exception as e:
         logger.error(f"Error extracting keywords and date: {str(e)}")
         return [], None, None

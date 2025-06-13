@@ -10,12 +10,16 @@
                     <label class="form-check-label" for="search_older">Search Older Articles</label>
                 </div>
                 <div class="form-group d-flex align-items-center me-2">
-                    <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year|default('') }}" placeholder="e.g., 2010" style="width: 100px; flex-shrink: 0;">
+                    <select class="form-control dropdown-arrow" id="start_year" name="start_year" style="width: 100px; flex-shrink: 0;" {% if not search_older %}disabled{% endif %}>
+                        {% for year in range(1990, 2026)|reverse %}
+                            <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
+                        {% endfor %}
+                    </select>
                     <label for="result_limit" class="ms-2 me-1" style="white-space: nowrap; margin: 0 5px;">Limit Results:</label>
                     <select class="form-control dropdown-arrow" id="result_limit" name="result_limit" style="width: 100px; flex-shrink: 0;">
                         <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
                         <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                        <option value="50" {% if result_limit == 50 or not result_limit %}selected{% endif %}>50</option>
+                        <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
                         <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
                     </select>
                 </div>
@@ -33,10 +37,10 @@
         <div class="row">
             <div class="col-md-4 form-group">
                 <label for="prompt_id">Select Prompt:</label>
-                <select class="form-control dropdown-arrow" id="prompt_id" name="prompt_id" role="combobox">
+                <select class="form-control dropdown-arrow" id="prompt_id" name="prompt_id" role="combobox" aria-expanded="false">
                     <option value="">None</option>
                     {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|tojson }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        <option value="{{ prompt.id }}" data-prompt-text="{{ prompt.prompt_text|tojson }}" {% if prompt_id|string == prompt.id|string %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -198,13 +202,16 @@ document.getElementById('searchForm').addEventListener('submit', function(event)
 
 document.addEventListener('DOMContentLoaded', function() {
     const promptId = document.getElementById('prompt_id');
+    console.log('Prompt select element:', promptId); // Debug
+    console.log('Initial promptId.value:', promptId ? promptId.value : 'null'); // Debug
     if (promptId && promptId.value) {
-        console.log('Initial promptId.value:', promptId.value); // Debug log
         const options = promptId.options;
         for (let i = 0; i < options.length; i++) {
+            console.log(`Option ${i}: value=${options[i].value}, text=${options[i].text}`); // Debug
             if (options[i].value === promptId.value) {
                 options[i].selected = true;
                 const promptText = options[i].getAttribute('data-prompt-text') || '""';
+                console.log('Found matching option, data-prompt-text:', promptText); // Debug
                 try {
                     const parsedText = JSON.parse(promptText);
                     document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';
@@ -218,6 +225,14 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     }
+    // Toggle start_year dropdown based on search_older checkbox
+    const searchOlder = document.getElementById('search_older');
+    const startYear = document.getElementById('start_year');
+    if (searchOlder && startYear) {
+        searchOlder.addEventListener('change', function() {
+            startYear.disabled = !this.checked;
+        });
+    }
     var tabElms = document.querySelectorAll('#sourceTabs .nav-link');
     tabElms.forEach(function(tabElm) {
         tabElm.addEventListener('click', function(e) {
@@ -230,8 +245,10 @@ document.addEventListener('DOMContentLoaded', function() {
     if (activeTab) activeTab.show();
 });
 document.getElementById('prompt_id').addEventListener('change', function() {
+    console.log('Prompt dropdown changed, selected value:', this.value); // Debug
     const selectedOption = this.options[this.selectedIndex];
     const promptText = selectedOption.getAttribute('data-prompt-text') || '""';
+    console.log('Selected data-prompt-text:', promptText); // Debug
     try {
         const parsedText = JSON.parse(promptText);
         document.getElementById('prompt_text').value = typeof parsedText === 'string' ? parsedText : '';

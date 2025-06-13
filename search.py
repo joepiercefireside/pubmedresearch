@@ -32,32 +32,8 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     if not context_results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
     
-    # Ensure at least 10 articles for PubMed summary
-    if len(context_results) > 5:  # Adjust based on source if needed
-        context_results = context_results[:10]  # Limit to 10 for PubMed
-        # Trim abstracts to fit within 8000 characters
-        context = ""
-        char_count = 0
-        for result in context_results:
-            entry = f"Source: {result.get('source_id', 'unknown')}\nTitle: {result['title']}\n"
-            if 'abstract' in result and result['abstract']:
-                abstract = result['abstract']
-                if char_count + len(entry) + len(abstract) > 8000:
-                    trimmed_abstract = abstract[:max(0, 8000 - char_count - len(entry) - 3)] + "..."
-                    entry += f"Abstract: {trimmed_abstract}\n"
-                else:
-                    entry += f"Abstract: {abstract}\n"
-                char_count += len(entry)
-            else:
-                entry += "Abstract: N/A\n"
-            entry += f"Authors: {result.get('authors', 'N/A')}\nJournal: {result.get('journal', 'N/A')}\nDate: {result.get('publication_date', 'N/A')}\nURL: {result.get('url', 'N/A')}\n"
-            context += entry
-            if char_count >= 8000:
-                context += "... [truncated]"
-                break
-    else:
-        context = "\n".join([f"Source: {r.get('source_id', 'unknown')}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
-
+    context = "\n".join([f"Source: {r.get('source_id', 'unknown')}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
+    
     MAX_CONTEXT_LENGTH = 8000
     if len(context) > MAX_CONTEXT_LENGTH:
         context = context[:MAX_CONTEXT_LENGTH] + "... [truncated]"
@@ -77,7 +53,6 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
 - Include hyperlinks to article URLs using [Article Title](URL).
 - Use bold (**text**) for key terms and bullet points for key findings where applicable.
 - Follow the prompt instructions for structure and content.
-- Summarize at least 10 articles if available, or all available up to 10.
 """
             output = query_grok_api(strict_prompt, context)
             logger.info(f"Raw Grok response for summary: {output[:200]}...")
@@ -153,14 +128,22 @@ def search():
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
     prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
     query = request.form.get('query', request.args.get('query', ''))
-    result_limit = int(request.form.get('result_limit', request.args.get('result_limit', 50)))  # Default to 50
+    result_limit = request.form.get('result_limit', request.args.get('result_limit', '50'))
+    try:
+        result_limit = int(result_limit)
+        if result_limit not in [10, 20, 50, 100]:
+            result_limit = 50
+    except ValueError:
+        result_limit = 50
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
-    if start_year == "None" or not start_year:
+    if start_year == "None" or not start_year or not search_older:
         start_year = None
     else:
         try:
             start_year = int(start_year)
+            if start_year < 1990 or start_year > datetime.now().year:
+                start_year = None
         except ValueError:
             start_year = None
     sources_selected = request.form.getlist('sources') or request.args.getlist('sources') or []
@@ -395,7 +378,7 @@ def search():
         pubmed_fallback_results=[],
         sources_selected=sources_selected,
         combined_summary='',
-        result_limit=50
+        result_limit=result_limit
     ))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
