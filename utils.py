@@ -276,7 +276,7 @@ class PubMedSearchHandler(SearchHandler):
             pubmed_query = build_pubmed_query(keywords_with_synonyms, date_range)
             logger.info(f"Executing PubMed search: {pubmed_query}")
             api_key = os.environ.get('PUBMED_API_KEY')
-            pmids = esearch(pubmed_query, retmax=min(result_limit, 100), date_range=date_range, start_year=start_year, api_key=api_key)
+            pmids = esearch(pubmed_query, retmax=result_limit, date_range=date_range, start_year=start_year, api_key=api_key)
             logger.info(f"PubMed ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
@@ -284,7 +284,7 @@ class PubMedSearchHandler(SearchHandler):
                 fallback_date_range = f"{today.year-10}/01/01:{today.strftime('%Y/%m/%d')}"
                 fallback_query = build_pubmed_query(keywords_with_synonyms, fallback_date_range)
                 logger.info(f"Executing PubMed fallback search: {fallback_query}")
-                pmids = esearch(fallback_query, retmax=min(result_limit, 100), date_range=fallback_date_range, api_key=api_key)
+                pmids = esearch(fallback_query, retmax=result_limit, date_range=fallback_date_range, api_key=api_key)
                 logger.info(f"PubMed fallback ESearch result: {len(pmids)} PMIDs")
             
             if not pmids:
@@ -381,7 +381,7 @@ class SemanticScholarSearchHandler(SearchHandler):
         try:
             keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
             logger.info(f"Using Semantic Scholar API for search: {keywords}")
-            ss_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(keywords)}&limit={min(result_limit, 100)}&fields=title,abstract,authors,journal,year,url"
+            ss_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(keywords)}&limit={result_limit}&fields=title,abstract,authors,journal,year,url"
             if start_year:
                 ss_url += f"&year={start_year}-"
             
