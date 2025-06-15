@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 from apscheduler.triggers.cron import CronTrigger
 import sendgrid
-from sendgrid.helpers.mail import Mail, Email, To, Content
+from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
 from core import app, logger, update_search_progress, query_grok_api, scheduler, sg, generate_embedding
 from search import save_search_results, get_search_results, rank_results
 from prompt_utils import parse_prompt
@@ -185,6 +185,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
         if not results:
             content = "No new results found for this rule."
+            html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+            plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count)
             if not sg:
                 logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
                 raise Exception("SendGrid API key not configured.")
@@ -193,7 +195,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     from_email=Email("noreply@firesidetechnologies.com"),
                     to_emails=To(user_email),
                     subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
-                    plain_text_content=content
+                    plain_text_content=plain_content,
+                    html_content=HtmlContent(html_content)
                 )
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
@@ -208,7 +211,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 return {
                     "results": [],
                     "summary": "No new results found.",
-                    "email_content": content,
+                    "email_content": plain_content,
+                    "html_content": html_content,
                     "status": "success",
                     "email_sent": True,
                     "message_id": response_headers.get('X-Message-Id', 'Not provided')
@@ -244,6 +248,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         else:
             content = output
 
+        html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=results, summary=output, sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+        plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=results, summary=output, sources=sources, email_format=email_format, summary_result_count=summary_result_count)
         if not sg:
             logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
             raise Exception("SendGrid API key not configured.")
@@ -252,7 +258,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 from_email=Email("noreply@firesidetechnologies.com"),
                 to_emails=To(user_email),
                 subject=f"AI Research Agent {'Test ' if test_mode else ''}Notification: {rule_name}",
-                plain_text_content=content
+                plain_text_content=plain_content,
+                html_content=HtmlContent(html_content)
             )
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
@@ -267,7 +274,8 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             return {
                 "results": results,
                 "summary": output,
-                "email_content": content,
+                "email_content": plain_content,
+                "html_content": html_content,
                 "status": "success",
                 "email_sent": True,
                 "message_id": response_headers.get('X-Message-Id', 'Not provided')
@@ -280,11 +288,14 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 if not sg:
                     logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
                     raise Exception("SendGrid API key not configured.")
+                html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count, error=str(e))
+                plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count, error=str(e))
                 message = Mail(
                     from_email=Email("noreply@firesidetechnologies.com"),
                     to_emails=To(user_email),
                     subject=f"AI Research Agent Test Notification Failed: {rule_name}",
-                    plain_text_content=f"Error testing notification rule: {str(e)}"
+                    plain_text_content=plain_content,
+                    html_content=HtmlContent(html_content)
                 )
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
@@ -298,6 +309,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 "results": [],
                 "summary": "",
                 "email_content": error_message,
+                "html_content": html_content if email_sent else "",
                 "status": "error",
                 "email_sent": email_sent,
                 "message_id": response_headers.get('X-Message-Id', 'Not provided') if email_sent else None

@@ -1,0 +1,119 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Researcher Notification</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f8f9fa;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-collapse: collapse;">
+        <!-- Header -->
+        <tr>
+            <td style="padding: 20px; text-align: center; background-color: #00689b;">
+                <img src="https://pubmedresearchdev.onrender.com/static/images/logo.png" alt="AI Researcher Logo" width="150" style="display: block; margin: 0 auto;">
+            </td>
+        </tr>
+        <!-- Body -->
+        <tr>
+            <td style="padding: 20px;">
+                <h1 style="font-size: 24px; color: #00689b; margin-bottom: 10px;">{{ rule_name }} Notification</h1>
+                <p style="font-size: 16px; color: #333333; line-height: 1.5; margin-bottom: 20px;">
+                    Hello {{ user_email }},<br>
+                    Your search for "<strong>{{ query }}</strong>" has an update:
+                </p>
+                {% if results %}
+                    <p style="font-size: 16px; color: #333333; line-height: 1.5; margin-bottom: 20px;">
+                        <strong>Status:</strong> Found {{ results|length }} results<br>
+                        <strong>Sources:</strong> {{ sources|join(', ')|capitalize }}<br>
+                        <strong>Format:</strong> {{ email_format|capitalize }}
+                    </p>
+                    {% if email_format == 'list' %}
+                        <h2 style="font-size: 20px; color: #00689b; margin-bottom: 10px;">Article Titles</h2>
+                        <ul style="font-size: 14px; color: #333333; line-height: 1.5; margin-bottom: 20px; padding-left: 20px;">
+                            {% for result in results[:summary_result_count] %}
+                                <li>
+                                    <a href="{{ result.url }}" style="color: #00689b; text-decoration: none;">{{ result.title }}</a>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% elif email_format == 'summary' %}
+                        <h2 style="font-size: 20px; color: #00689b; margin-bottom: 10px;">Article Summaries</h2>
+                        {% for result in results[:summary_result_count] %}
+                            <div style="margin-bottom: 15px;">
+                                <a href="{{ result.url }}" style="font-size: 14px; color: #00689b; text-decoration: none; font-weight: bold;">{{ result.title }}</a>
+                                <p style="font-size: 14px; color: #333333; line-height: 1.5; margin: 5px 0;">{{ summary|safe }}</p>
+                            </div>
+                        {% endfor %}
+                    {% elif email_format == 'detailed' %}
+                        <h2 style="font-size: 20px; color: #00689b; margin-bottom: 10px;">Detailed Results</h2>
+                        {% for result in results[:summary_result_count] %}
+                            <div style="margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid #e9ecef;">
+                                <a href="{{ result.url }}" style="font-size: 14px; color: #00689b; text-decoration: none; font-weight: bold;">{{ result.title }}</a>
+                                <p style="font-size: 14px; color: #333333; line-height: 1.5; margin: 5px 0;">
+                                    <strong>Authors:</strong> {{ result.authors|default('N/A') }}<br>
+                                    <strong>Date:</strong> {{ result.publication_date|default('N/A') }}<br>
+                                    <strong>Journal:</strong> {{ result.journal|default('N/A') }}<br>
+                                    <strong>Abstract:</strong> {{ result.abstract|default('No abstract') }}
+                                </p>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                    <a href="https://pubmedresearchdev.onrender.com/search?query={{ query|urlencode }}" style="display: inline-block; padding: 10px 20px; background-color: #00689b; color: #ffffff; text-decoration: none; font-size: 16px; border-radius: 4px;">View All Results</a>
+                {% else %}
+                    <p style="font-size: 16px; color: #333333; line-height: 1.5; margin-bottom: 20px;">
+                        <strong>Status:</strong> No new results found for this rule.
+                    </p>
+                {% endif %}
+            </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+            <td style="padding: 20px; text-align: center; background-color: #e9ecef;">
+                <p style="font-size: 12px; color: #666666; margin: 0;">
+                    AI Researcher | Fireside Technologies<br>
+                    <a href="https://pubmedresearchdev.onrender.com/unsubscribe" style="color: #00689b; text-decoration: none;">Unsubscribe</a>
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

@@ -1,0 +1,32 @@
+Subject: AI Researcher Notification: {{ rule_name }}
+Hello {{ user_email }},
+Your search for "{{ query }}" has an update:
+Status: {% if results %}Found {{ results|length }} results{% else %}No new results found{% endif %}
+Sources: {{ sources|join(', ')|capitalize }}
+Format: {{ email_format|capitalize }}
+{% if results %}
+{% if email_format == 'list' %}
+Article Titles:
+{% for result in results[:summary_result_count] %}
+- {{ result.title }}: {{ result.url }}
+{% endfor %}
+{% elif email_format == 'summary' %}
+Article Summaries:
+{% for result in results[:summary_result_count] %}
+- {{ result.title }}: {{ result.url }}
+  Summary: {{ summary|striptags }}
+{% endfor %}
+{% elif email_format == 'detailed' %}
+Detailed Results:
+{% for result in results[:summary_result_count] %}
+- {{ result.title }}: {{ result.url }}
+  Authors: {{ result.authors|default('N/A') }}
+  Date: {{ result.publication_date|default('N/A') }}
+  Journal: {{ result.journal|default('N/A') }}
+  Abstract: {{ result.abstract|default('No abstract') }}
+{% endfor %}
+{% endif %}
+View All Results: https://pubmedresearchdev.onrender.com/search?query={{ query|urlencode }}
+{% endif %}
+AI Researcher | Fireside Technologies
+Unsubscribe: https://pubmedresearchdev.onrender.com/unsubscribe
