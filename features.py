@@ -185,8 +185,13 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         logger.info(f"Notification rule {rule_id} retrieved {len(results)} results")
         if not results:
             content = "No new results found for this rule."
-            html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count)
-            plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+            try:
+                html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+                plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+                logger.debug(f"Rendered no-results email: HTML length={len(html_content)}, Plain text length={len(plain_content)}")
+            except Exception as e:
+                logger.error(f"Error rendering no-results email templates: {str(e)}")
+                raise
             if not sg:
                 logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
                 raise Exception("SendGrid API key not configured.")
@@ -198,6 +203,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     plain_text_content=plain_content,
                     html_content=HtmlContent(html_content)
                 )
+                message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
                 logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
@@ -232,8 +238,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
 
         if email_format == "list":
             content = "\n".join([
-                f"- [{r['title']}]({r.get('url', 'N/A')}) ({r.get('publication_date', 'N/A')}):\n"
-                f"  {r.get('abstract', '')[:100] or 'No abstract'}..."
+                f"- [{r['title']}]({r.get('url', 'N/A')})"
                 for r in results[:summary_result_count]
             ])
         elif email_format == "detailed":
@@ -245,11 +250,16 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 f"**Abstract**: {r.get('abstract', '') or 'No abstract'}\n"
                 for r in results[:summary_result_count]
             ])
-        else:
+        else:  # summary
             content = output
 
-        html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=results, summary=output, sources=sources, email_format=email_format, summary_result_count=summary_result_count)
-        plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=results, summary=output, sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+        try:
+            html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=results, summary=output, sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+            plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=results, summary=output, sources=sources, email_format=email_format, summary_result_count=summary_result_count)
+            logger.debug(f"Rendered results email: HTML length={len(html_content)}, Plain text length={len(plain_content)}")
+        except Exception as e:
+            logger.error(f"Error rendering results email templates: {str(e)}")
+            raise
         if not sg:
             logger.error("SendGrid client not initialized: SENDGRID_API_KEY missing or invalid")
             raise Exception("SendGrid API key not configured.")
@@ -261,6 +271,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 plain_text_content=plain_content,
                 html_content=HtmlContent(html_content)
             )
+            message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
             logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
@@ -290,6 +301,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     raise Exception("SendGrid API key not configured.")
                 html_content = render_template('email_notification.html', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count, error=str(e))
                 plain_content = render_template('email_notification.txt', query=query, rule_name=rule_name, user_email=user_email, results=[], summary="", sources=sources, email_format=email_format, summary_result_count=summary_result_count, error=str(e))
+                logger.debug(f"Rendered error email: HTML length={len(html_content)}, Plain text length={len(plain_content)}")
                 message = Mail(
                     from_email=Email("noreply@firesidetechnologies.com"),
                     to_emails=To(user_email),
@@ -297,6 +309,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     plain_text_content=plain_content,
                     html_content=HtmlContent(html_content)
                 )
+                message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
                 logger.info(f"Error email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")

@@ -262,7 +262,7 @@ class SearchHandler:
         self.source_id = "generic"
         self.name = "Generic Search"
     
-    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit):
         return [], []
 
 class PubMedSearchHandler(SearchHandler):
@@ -271,7 +271,7 @@ class PubMedSearchHandler(SearchHandler):
         self.source_id = "pubmed"
         self.name = "PubMed"
     
-    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit):
         try:
             pubmed_query = build_pubmed_query(keywords_with_synonyms, date_range)
             logger.info(f"Executing PubMed search: {pubmed_query}")
@@ -320,7 +320,7 @@ class GoogleScholarSearchHandler(SearchHandler):
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Google Scholar search, attempt {retry_state.attempt_number}")
     )
-    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit):
         try:
             keywords = "+".join([kw.replace(" ", "+") for kw, _ in keywords_with_synonyms])
             serpapi_key = os.environ.get('SERPAPI_KEY')
@@ -330,7 +330,7 @@ class GoogleScholarSearchHandler(SearchHandler):
             
             logger.info(f"Using SerpApi for Google Scholar search: {keywords}")
             results = []
-            results_per_page = 20
+            results_per_page = min(20, result_limit)
             pages_needed = (result_limit + results_per_page - 1) // results_per_page
             for page in range(min(pages_needed, 5)):  # Cap at 100 results (5 pages)
                 start = page * results_per_page
@@ -356,8 +356,12 @@ class GoogleScholarSearchHandler(SearchHandler):
                             'url': item.get('link', ''),
                             'source_id': 'googlescholar'
                         })
+                        if len(results) >= result_limit:
+                            break
                 
                 time.sleep(1)  # Avoid rate limits
+                if len(results) >= result_limit:
+                    break
             
             logger.info(f"SerpApi Google Scholar returned {len(results)} results for query: {keywords}")
             return results[:result_limit], []
@@ -377,11 +381,11 @@ class SemanticScholarSearchHandler(SearchHandler):
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Semantic Scholar search, attempt {retry_state.attempt_number}")
     )
-    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit=50):
+    def search(self, query, keywords_with_synonyms, date_range, start_year, result_limit):
         try:
             keywords = " ".join([kw for kw, _ in keywords_with_synonyms])
             logger.info(f"Using Semantic Scholar API for search: {keywords}")
-            ss_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(keywords)}&limit={result_limit}&fields=title,abstract,authors,journal,year,url"
+            ss_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(keywords)}&limit={min(result_limit, 100)}&fields=title,abstract,authors,journal,year,url"
             if start_year:
                 ss_url += f"&year={start_year}-"
             
@@ -410,6 +414,8 @@ class SemanticScholarSearchHandler(SearchHandler):
                         'url': item.get('url', ''),
                         'source_id': 'semanticscholar'
                     })
+                    if len(results) >= result_limit:
+                        break
             
             logger.info(f"Semantic Scholar returned {len(results)} results for query: {keywords}")
             return results[:result_limit], []

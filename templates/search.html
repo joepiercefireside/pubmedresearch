@@ -199,8 +199,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const promptSelect = document.getElementById('prompt_id');
     const promptTextArea = document.getElementById('prompt_text');
     if (promptSelect && promptTextArea) {
-        console.log('Prompt select element:', promptSelect); // Debug
-        console.log('Initial promptId.value:', promptSelect.value); // Debug
+        console.log('Prompt select element:', promptSelect);
+        console.log('Initial promptId.value:', promptSelect.value);
         // Set initial prompt text if a prompt is selected
         if (promptSelect.value) {
             const selectedPrompt = prompts.find(p => p.id === promptSelect.value);
@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         // Handle prompt changes
         promptSelect.addEventListener('change', function() {
-            console.log('Prompt dropdown changed, selected value:', this.value); // Debug
+            console.log('Prompt dropdown changed, selected value:', this.value);
             const selectedPrompt = prompts.find(p => p.id === this.value);
             promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
             console.log('Prompt text updated:', selectedPrompt ? selectedPrompt.prompt_text : '');
@@ -227,6 +227,20 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
+    // Ensure result_limit retains selected value
+    const resultLimitSelect = document.getElementById('result_limit');
+    if (resultLimitSelect) {
+        const savedLimit = {{ result_limit|tojson }} || sessionStorage.getItem('result_limit') || '50';
+        if (['10', '20', '50', '100'].includes(savedLimit)) {
+            resultLimitSelect.value = savedLimit;
+            console.log('Result limit restored:', savedLimit);
+        }
+        resultLimitSelect.addEventListener('change', function() {
+            sessionStorage.setItem('result_limit', this.value);
+            console.log('Result limit saved:', this.value);
+        });
+    }
+    
     // Handle form submission
     const searchForm = document.getElementById('searchForm');
     if (searchForm) {
@@ -236,6 +250,7 @@ document.addEventListener('DOMContentLoaded', function() {
             searchButton.disabled = true;
             searchButton.textContent = 'Searching...';
             searchStatus.textContent = 'Starting search...';
+            console.log('Form submitted, starting progress updates');
             startProgressUpdates();
         });
     }
@@ -255,28 +270,37 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function startProgressUpdates() {
     const query = document.getElementById('query').value;
-    if (!query) return;
+    if (!query) {
+        console.error('No query provided for progress updates');
+        return;
+    }
     const encodedQuery = encodeURIComponent(query);
     const searchStatus = document.getElementById('searchStatus');
     let eventSource = new EventSource('/search_progress?query=' + encodedQuery);
     
     eventSource.onmessage = function(event) {
-        const data = JSON.parse(event.data);
-        searchStatus.textContent = data.status;
-        if (data.status.startsWith('complete') || data.status.startsWith('error')) {
-            const searchButton = document.getElementById('searchButton');
-            searchButton.disabled = false;
-            searchButton.textContent = 'Search';
-            eventSource.close();
-            if (data.status.startsWith('complete')) {
-                searchStatus.textContent = 'Search completed';
-            } else {
-                searchStatus.textContent = data.status;
+        try {
+            const data = JSON.parse(event.data);
+            console.log('SSE message received:', data);
+            searchStatus.textContent = data.status;
+            if (data.status.startsWith('complete') || data.status.startsWith('error')) {
+                const searchButton = document.getElementById('searchButton');
+                searchButton.disabled = false;
+                searchButton.textContent = 'Search';
+                eventSource.close();
+                if (data.status.startsWith('complete')) {
+                    searchStatus.textContent = 'Search completed';
+                } else {
+                    searchStatus.textContent = data.status;
+                }
             }
+        } catch (e) {
+            console.error('Error parsing SSE message:', e);
         }
     };
     
     eventSource.onerror = function() {
+        console.error('SSE error occurred');
         searchStatus.textContent = 'Error fetching search progress';
         eventSource.close();
         const searchButton = document.getElementById('searchButton');

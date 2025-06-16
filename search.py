@@ -26,7 +26,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     logger.info(f"Initial results count: {len(results)}, is_fallback: {is_fallback}")
     
     summary_result_count = prompt_params.get('summary_result_count', 20) if prompt_params else 20
-    context_results = results[:min(summary_result_count, 20)]
+    context_results = results[:min(summary_result_count, len(results))]
     logger.info(f"Context results count for summary: {len(context_results)}")
     
     if not context_results:
@@ -83,26 +83,29 @@ def search_progress():
                         result = c.fetchone()
                         if result and result[0] != last_status:
                             escaped_status = result[0].replace("'", "\\'")
-                            yield 'data: {"status": "' + escaped_status + '"}\n\n'
+                            yield f'data: {{"status": "{escaped_status}"}}\n\n'
+                            logger.debug(f"Streamed status: {escaped_status}")
                             last_status = result[0]
                         if result and result[0].startswith(("complete", "error")):
                             break
                     except sqlite3.Error as e:
                         logger.error(f"Error in search_progress: {str(e)}")
                         escaped_error = str(e).replace("'", "\\'")
-                        yield 'data: {"status": "error: ' + escaped_error + '"}\n\n'
+                        yield f'data: {{"status": "error: {escaped_error}"}}\n\n'
                         break
                     finally:
                         c.close()
                         conn.close()
-                    time.sleep(1)
+                    time.sleep(0.2)  # Faster polling for real-time updates
             except Exception as e:
                 logger.error(f"Error in search_progress stream: {str(e)}")
-                yield 'data: {"status": "error: ' + str(e).replace("'", "\\'") + '"}\n\n'
+                yield f'data: {{"status": "error: {str(e).replace("'", "\\'")}"}}\n\n'
     
     query = request.args.get('query', '')
     response = Response(stream_progress(current_user.id, query), mimetype='text/event-stream')
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
     return response
 
 @app.route('/search', methods=['GET', 'POST'])
@@ -128,11 +131,14 @@ def search():
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
     prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
     query = request.form.get('query', request.args.get('query', ''))
-    result_limit = request.form.get('result_limit', request.args.get('result_limit', '50'))
+    result_limit = request.form.get('result_limit', request.args.get('result_limit', session.get('result_limit', '50')))
     try:
         result_limit = int(result_limit)
+        if result_limit not in [10, 20, 50, 100]:
+            result_limit = 50
     except ValueError:
         result_limit = 50
+    session['result_limit'] = str(result_limit)  # Save to session
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
     if start_year == "None" or not start_year or not search_older:
