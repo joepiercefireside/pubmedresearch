@@ -9,57 +9,56 @@ from datetime import datetime, timedelta
 from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
-from core import app, logger, update_search_progress, query_grok_api, scheduler, sg, generate_embedding
+from core import app, logger, update_search_progress, query_grok_api, scheduler, sg, generate_embedding, get_db_connection
 from search import save_search_results, get_search_results, rank_results
 from prompt_utils import parse_prompt
 from auth import validate_user_email
 from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
-import sqlite3
 import numpy as np
 from scipy.spatial.distance import cosine
 
 def save_search_history(user_id, query, prompt_text, sources, results, search_id=None):
     result_ids = save_search_results(user_id, query, results)
     
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        c.execute(
-            "INSERT INTO search_history (id, user_id, query, prompt_text, sources, result_ids, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        cur.execute(
+            "INSERT INTO search_history (id, user_id, query, prompt_text, sources, result_ids, timestamp) VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (search_id, user_id, query, prompt_text, json.dumps(sources), json.dumps(result_ids), time.time())
         )
         conn.commit()
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error saving search history: {str(e)}")
         conn.rollback()
     finally:
-        c.close()
+        cur.close()
         conn.close()
     logger.info(f"Saved search history for user={user_id}, query={query}, search_id={search_id}")
     return result_ids
 
 def get_search_history(user_id, days=7):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
         cutoff_time = time.time() - (days * 86400)
-        c.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = ? AND timestamp > ? ORDER BY timestamp DESC",
-                  (user_id, cutoff_time))
+        cur.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = %s AND timestamp > %s ORDER BY timestamp DESC",
+                    (user_id, cutoff_time))
         results = [
             {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]), 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
-            for row in c.fetchall()
+            for row in cur.fetchall()
         ]
         return results
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error retrieving search history: {str(e)}")
         return []
     finally:
-        c.close()
+        cur.close()
         conn.close()
 
 def delete_search_history(user_id, period):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
         periods = {
             'weekly': 7 * 86400,
@@ -67,79 +66,76 @@ def delete_search_history(user_id, period):
             'annually': 365 * 86400
         }
         cutoff_time = time.time() - periods.get(period, 7 * 86400)
-        c.execute("DELETE FROM search_history WHERE user_id = ? AND timestamp < ?", (user_id, cutoff_time))
+        cur.execute("DELETE FROM search_history WHERE user_id = %s AND timestamp < %s", (user_id, cutoff_time))
         conn.commit()
         logger.info(f"Deleted search history for user={user_id}, period={period}")
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error deleting search history: {str(e)}")
         conn.rollback()
     finally:
-        c.close()
+        cur.close()
         conn.close()
 
 def save_chat_message(user_id, session_id, message, is_user, search_id=None):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        c.execute("INSERT INTO chat_history (user_id, session_id, message, is_user, timestamp, search_id) VALUES (?, ?, ?, ?, ?, ?)",
-                  (user_id, session_id, message, is_user, time.time(), search_id))
+        cur.execute("INSERT INTO chat_history (user_id, session_id, message, is_user, timestamp, search_id) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (user_id, session_id, message, is_user, time.time(), search_id))
         conn.commit()
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error saving chat message: {str(e)}")
     finally:
-        c.close()
+        cur.close()
         conn.close()
 
 def get_chat_history(user_id, session_id, retention_hours, search_id=None):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
         cutoff_time = time.time() - (retention_hours * 3600)
         if search_id:
-            c.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = ? AND session_id = ? AND timestamp > ? AND search_id = ? ORDER BY timestamp ASC",
-                      (user_id, session_id, cutoff_time, search_id))
+            cur.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s AND search_id = %s ORDER BY timestamp ASC",
+                        (user_id, session_id, cutoff_time, search_id))
         else:
-            c.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = ? AND session_id = ? AND timestamp > ? ORDER BY timestamp ASC",
-                      (user_id, session_id, cutoff_time))
-        messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2]} for row in c.fetchall()]
+            cur.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s ORDER BY timestamp ASC",
+                        (user_id, session_id, cutoff_time))
+        messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2]} for row in cur.fetchall()]
         return messages
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error retrieving chat history: {str(e)}")
         return []
     finally:
-        c.close()
+        cur.close()
         conn.close()
 
 def get_user_settings(user_id):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        c.execute("SELECT chat_memory_retention_hours FROM user_settings WHERE user_id = ?", (user_id,))
-        result = c.fetchone()
+        cur.execute("SELECT chat_memory_retention_hours FROM user_settings WHERE user_id = %s", (user_id,))
+        result = cur.fetchone()
         return result[0] if result else 24
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error retrieving user settings: {str(e)}")
         return 24
     finally:
-        c.close()
+        cur.close()
         conn.close()
 
 def update_user_settings(user_id, retention_hours):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        c.execute("INSERT OR REPLACE INTO user_settings (user_id, chat_memory_retention_hours) VALUES (?, ?)",
-                  (user_id, retention_hours))
+        cur.execute("INSERT INTO user_settings (user_id, chat_memory_retention_hours) VALUES (%s, %s)
+                     ON CONFLICT (user_id) DO UPDATE SET chat_memory_retention_hours = %s",
+                    (user_id, retention_hours, retention_hours))
         conn.commit()
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error updating user settings: {str(e)}")
     finally:
-        c.close()
+        cur.close()
         conn.close()
-
-def get_db_connection():
-    conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
-    return conn
 
 def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources, test_mode=False):
     logger.info(f"Running notification rule {rule_id} ({rule_name}) for user {user_id}, keywords: {keywords}, timeframe: {timeframe}, sources: {sources}, test_mode={test_mode}, recipient: {user_email}")
@@ -337,7 +333,6 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
         raise
 
 def schedule_notification_rules():
-    scheduler.remove_all_jobs()
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -363,7 +358,7 @@ def schedule_notification_rules():
                 replace_existing=True
             )
         logger.info(f"Scheduled {len(rules)} notification rules")
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error scheduling notification rules: {str(e)}")
     finally:
         cur.close()
@@ -563,7 +558,7 @@ def prompt():
                             (current_user.id, prompt_name, prompt_text))
                 conn.commit()
                 flash('Prompt saved successfully.', 'success')
-            except Exception as e:
+            except psycopg2.Error as e:
                 logger.error(f"Failed to save prompt: {str(e)}")
                 conn.rollback()
                 flash(f'Failed to save prompt: {str(e)}', 'error')
@@ -577,7 +572,7 @@ def prompt():
         cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
                     (current_user.id,))
         prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error loading prompts: {str(e)}")
         prompts = []
     finally:
@@ -617,7 +612,7 @@ def edit_prompt(id):
                     response = make_response(redirect(url_for('prompt')))
                     response.headers['X-Content-Type-Options'] = 'nosniff'
                     return response
-                except Exception as e:
+                except psycopg2.Error as e:
                     logger.error(f"Failed to update prompt: {str(e)}")
                     conn.rollback()
                     flash(f'Failed to update prompt: {str(e)}', 'error')
@@ -625,7 +620,7 @@ def edit_prompt(id):
         response = make_response(render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error in edit_prompt: {str(e)}")
         flash('An error occurred. Please try again.', 'error')
         response = make_response(redirect(url_for('prompt')))
@@ -653,7 +648,7 @@ def delete_prompt(id):
         cur.execute('DELETE FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
         conn.commit()
         flash('Prompt deleted successfully.', 'success')
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error deleting prompt: {str(e)}")
         conn.rollback()
         flash(f'Failed to delete prompt: {str(e)}', 'error')
@@ -703,7 +698,7 @@ def notifications():
             conn.commit()
             flash('Notification rule created successfully.', 'success')
             schedule_notification_rules()
-        except Exception as e:
+        except psycopg2.Error as e:
             logger.error(f"Error creating notification: {str(e)}")
             conn.rollback()
             flash(f'Failed to create notification rule: {str(e)}', 'error')
@@ -726,7 +721,7 @@ def notifications():
                 'sources': json.loads(n[7]) if n[7] else ['pubmed']
             } for n in cur.fetchall()
         ]
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error loading notifications: {str(e)}")
         notifications = []
     finally:
@@ -788,7 +783,7 @@ def edit_notification(id):
                     response = make_response(redirect(url_for('notifications')))
                     response.headers['X-Content-Type-Options'] = 'nosniff'
                     return response
-                except Exception as e:
+                except psycopg2.Error as e:
                     logger.error(f"Error updating notification: {str(e)}")
                     conn.rollback()
                     flash(f'Failed to update notification rule: {str(e)}', 'error')
@@ -805,7 +800,7 @@ def edit_notification(id):
         response = make_response(render_template('notification_edit.html', notification=notification_data, username=current_user.email))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error in edit_notification: {str(e)}")
         flash('An error occurred. Please try again.', 'error')
         response = make_response(redirect(url_for('notifications')))
@@ -837,7 +832,7 @@ def delete_notification(id):
         conn.commit()
         flash('Notification rule deleted successfully.', 'success')
         schedule_notification_rules()
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error deleting notification rule {id}: {str(e)}")
         conn.rollback()
         flash(f'Failed to delete notification rule: {str(e)}', 'error')
@@ -876,7 +871,7 @@ def test_notification(id):
         )
         logger.info(f"Test result for rule {rule_id}: status={result['status']}, email_sent={result.get('email_sent', False)}")
         return jsonify(result)
-    except Exception as e:
+    except psycopg2.Error as e:
         logger.error(f"Error testing notification rule {id}: {str(e)}")
         return jsonify({'status': 'error', 'message': f"Error testing notification: {str(e)}"}), 500
     finally:

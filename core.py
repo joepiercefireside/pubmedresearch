@@ -2,7 +2,6 @@ from flask import Flask, make_response, render_template
 from flask_login import LoginManager
 import os
 import logging
-import sqlite3
 import psycopg2
 import sendgrid
 from sendgrid import SendGridAPIClient
@@ -74,82 +73,91 @@ def generate_embedding(text):
         return None
     return embedding
 
+def get_db_connection():
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    return conn
+
 def init_progress_db():
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
-        c.execute('''CREATE TABLE IF NOT EXISTS search_progress
-                     (user_id TEXT, query TEXT DEFAULT '', status TEXT NOT NULL, timestamp REAL NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
-                     (query TEXT PRIMARY KEY, response TEXT NOT NULL, timestamp REAL NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS search_history
-                     (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, query TEXT NOT NULL, prompt_text TEXT, sources TEXT NOT NULL, result_ids TEXT NOT NULL, timestamp REAL NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS chat_history
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, session_id TEXT NOT NULL, message TEXT NOT NULL, is_user BOOLEAN NOT NULL, timestamp REAL NOT NULL, search_id TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS user_settings
-                     (user_id TEXT PRIMARY KEY, chat_memory_retention_hours INTEGER DEFAULT 24)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS embedding_cache
-                     (pmid TEXT PRIMARY KEY, embedding BLOB, timestamp REAL)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS search_progress
+                       (user_id TEXT, query TEXT DEFAULT '', status TEXT NOT NULL, timestamp REAL NOT NULL)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS grok_cache
+                       (query TEXT PRIMARY KEY, response TEXT NOT NULL, timestamp REAL NOT NULL)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS search_history
+                       (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, query TEXT NOT NULL, prompt_text TEXT, 
+                        sources TEXT NOT NULL, result_ids TEXT NOT NULL, timestamp REAL NOT NULL)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS chat_history
+                       (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, 
+                        message TEXT NOT NULL, is_user BOOLEAN NOT NULL, timestamp REAL NOT NULL, search_id TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS user_settings
+                       (user_id TEXT PRIMARY KEY, chat_memory_retention_hours INTEGER DEFAULT 24)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS embedding_cache
+                       (pmid TEXT PRIMARY KEY, embedding BYTEA, timestamp REAL)''')
         conn.commit()
-    except sqlite3.Error as e:
-        logger.error(f"Error initializing SQLite database: {str(e)}")
+    except psycopg2.Error as e:
+        logger.error(f"Error initializing PostgreSQL database: {str(e)}")
         raise
     finally:
-        c.close()
+        cur.close()
         conn.close()
 
 init_progress_db()
 
 def update_search_progress(user_id, query, status):
     try:
-        conn = sqlite3.connect('search_progress.db')
-        c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO search_progress (user_id, query, status, timestamp) VALUES (?, ?, ?, ?)",
-                  (user_id, query or '', status, time.time()))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO search_progress (user_id, query, status, timestamp) VALUES (%s, %s, %s, %s)
+                     ON CONFLICT (user_id, query) DO UPDATE SET status = %s, timestamp = %s",
+                    (user_id, query or '', status, time.time(), status, time.time()))
         conn.commit()
-    except sqlite3.Error as e:
+    except psycopg2.Error as e:
         logger.error(f"Error updating search progress: {str(e)}")
     finally:
-        c.close()
+        cur.close()
         conn.close()
     logger.info(f"Search progress updated: user={user_id}, query={query}, status={status}")
 
 def cache_grok_response(query, response):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO grok_cache (query, response, timestamp) VALUES (?, ?, ?)",
-              (query, response, time.time()))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO grok_cache (query, response, timestamp) VALUES (%s, %s, %s)
+                 ON CONFLICT (query) DO UPDATE SET response = %s, timestamp = %s",
+                (query, response, time.time(), response, time.time()))
     conn.commit()
-    c.close()
+    cur.close()
     conn.close()
     logger.info(f"Cached Grok response for query: {query[:50]}...")
 
 def get_cached_grok_response(query):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("SELECT response, timestamp FROM grok_cache WHERE query = ? AND timestamp > ?",
-              (query, time.time() - 604800))  # Cache valid for 7 days
-    result = c.fetchone()
-    c.close()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT response, timestamp FROM grok_cache WHERE query = %s AND timestamp > %s",
+                (query, time.time() - 604800))  # Cache valid for 7 days
+    result = cur.fetchone()
+    cur.close()
     conn.close()
     return result[0] if result else None
 
 def cache_embedding(pmid, embedding):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO embedding_cache (pmid, embedding, timestamp) VALUES (?, ?, ?)",
-              (pmid, embedding.tobytes(), time.time()))
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO embedding_cache (pmid, embedding, timestamp) VALUES (%s, %s, %s)
+                 ON CONFLICT (pmid) DO UPDATE SET embedding = %s, timestamp = %s",
+                (pmid, embedding.tobytes(), time.time(), embedding.tobytes(), time.time()))
     conn.commit()
-    c.close()
+    cur.close()
     conn.close()
 
 def get_cached_embedding(pmid):
-    conn = sqlite3.connect('search_progress.db')
-    c = conn.cursor()
-    c.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = ? AND timestamp > ?",
-              (pmid, time.time() - 604800))  # Cache valid for 7 days
-    result = c.fetchone()
-    c.close()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = %s AND timestamp > %s",
+                (pmid, time.time() - 604800))  # Cache valid for 7 days
+    result = cur.fetchone()
+    cur.close()
     conn.close()
     if result:
         embedding = np.frombuffer(result[0], dtype=np.float32)
@@ -158,10 +166,6 @@ def get_cached_embedding(pmid):
             return None
         return embedding
     return None
-
-def get_db_connection():
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
-    return conn
 
 @app.route('/help')
 def help():
