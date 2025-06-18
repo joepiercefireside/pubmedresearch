@@ -82,7 +82,7 @@ def search_progress():
                                   (user_id, query))
                         result = c.fetchone()
                         if result and result[0] != last_status:
-                            escaped_status = result[0].replace("'", "\\'")
+                            escaped_status = result[0].replace('"', '\\"')
                             yield f'data: {{"status": "{escaped_status}"}}\n\n'
                             logger.debug(f"Streamed status: {escaped_status}")
                             last_status = result[0]
@@ -90,7 +90,7 @@ def search_progress():
                             break
                     except sqlite3.Error as e:
                         logger.error(f"Error in search_progress: {str(e)}")
-                        escaped_error = str(e).replace("'", "\\'")
+                        escaped_error = str(e).replace('"', '\\"')
                         yield f'data: {{"status": "error: {escaped_error}"}}\n\n'
                         break
                     finally:
@@ -99,7 +99,8 @@ def search_progress():
                     time.sleep(0.2)  # Faster polling for real-time updates
             except Exception as e:
                 logger.error(f"Error in search_progress stream: {str(e)}")
-                yield f'data: {{"status": "error: {str(e).replace("'", "\\'")}"}}\n\n'
+                escaped_error = str(e).replace('"', '\\"')
+                yield f'data: {{"status": "error: {escaped_error}"}}\n\n'
     
     query = request.args.get('query', '')
     response = Response(stream_progress(current_user.id, query), mimetype='text/event-stream')
