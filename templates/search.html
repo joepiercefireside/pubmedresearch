@@ -68,7 +68,9 @@
             </div>
             <div class="search-container mt-2">
                 <button type="submit" class="btn btn-primary" id="searchButton">Search</button>
+                <button type="button" class="btn btn-secondary" id="chatButton" style="display: none;">Chat with Results</button>
                 <span id="searchStatus" class="search-status"></span>
+                <span id="searchSpinner" class="spinner-border spinner-border-sm" role="status" style="display: none;"></span>
             </div>
         </div>
         <div class="form-group">
@@ -189,20 +191,17 @@
     background-position: right 8px center;
     padding-right: 28px;
 }
+.spinner-border {
+    margin-left: 10px;
+}
 </style>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Define prompts from server-side data
     const prompts = {{ prompts|tojson }};
-    
-    // Handle prompt selection
     const promptSelect = document.getElementById('prompt_id');
     const promptTextArea = document.getElementById('prompt_text');
     if (promptSelect && promptTextArea) {
-        console.log('Prompt select element:', promptSelect);
-        console.log('Initial promptId.value:', promptSelect.value);
-        // Set initial prompt text if a prompt is selected
         if (promptSelect.value) {
             const selectedPrompt = prompts.find(p => p.id === promptSelect.value);
             if (selectedPrompt) {
@@ -210,16 +209,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log('Initial prompt text set:', selectedPrompt.prompt_text);
             }
         }
-        // Handle prompt changes
         promptSelect.addEventListener('change', function() {
-            console.log('Prompt dropdown changed, selected value:', this.value);
             const selectedPrompt = prompts.find(p => p.id === this.value);
             promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
             console.log('Prompt text updated:', selectedPrompt ? selectedPrompt.prompt_text : '');
         });
     }
-    
-    // Toggle start_year dropdown based on search_older checkbox
+
     const searchOlder = document.getElementById('search_older');
     const startYear = document.getElementById('start_year');
     if (searchOlder && startYear) {
@@ -227,54 +223,46 @@ document.addEventListener('DOMContentLoaded', function() {
             startYear.disabled = !this.checked;
         });
     }
-    
-    // Ensure result_limit retains selected value
+
     const resultLimitSelect = document.getElementById('result_limit');
     const hiddenResultLimit = document.getElementById('hidden_result_limit');
     if (resultLimitSelect && hiddenResultLimit) {
-        // Restore saved limit from server or sessionStorage, default to 20
         const savedLimit = {{ result_limit|tojson }} || sessionStorage.getItem('result_limit') || '20';
         if (['10', '20', '50', '100'].includes(savedLimit)) {
             resultLimitSelect.value = savedLimit;
             hiddenResultLimit.value = savedLimit;
             console.log('Result limit restored:', savedLimit);
-        } else {
-            resultLimitSelect.value = '20';
-            hiddenResultLimit.value = '20';
-            console.log('Result limit reset to default: 20');
         }
-        // Handle dropdown changes
         resultLimitSelect.addEventListener('change', function() {
-            const selectedValue = this.value;
-            sessionStorage.setItem('result_limit', selectedValue);
-            hiddenResultLimit.value = selectedValue;
-            console.log('Result limit changed and saved:', selectedValue);
+            sessionStorage.setItem('result_limit', this.value);
+            hiddenResultLimit.value = this.value;
+            console.log('Result limit saved:', this.value);
         });
-        // Ensure hidden field is updated before form submission
-        const searchForm = document.getElementById('searchForm');
-        if (searchForm) {
-            searchForm.addEventListener('submit', function(event) {
-                hiddenResultLimit.value = resultLimitSelect.value;
-                console.log('Form submitting with result_limit:', hiddenResultLimit.value);
-            });
-        }
     }
-    
-    // Handle form submission
+
     const searchForm = document.getElementById('searchForm');
+    const searchButton = document.getElementById('searchButton');
+    const chatButton = document.getElementById('chatButton');
+    const searchStatus = document.getElementById('searchStatus');
+    const searchSpinner = document.getElementById('searchSpinner');
     if (searchForm) {
         searchForm.addEventListener('submit', function(event) {
-            const searchButton = document.getElementById('searchButton');
-            const searchStatus = document.getElementById('searchStatus');
             searchButton.disabled = true;
             searchButton.textContent = 'Searching...';
             searchStatus.textContent = 'Starting search...';
+            searchSpinner.style.display = 'inline-block';
+            chatButton.style.display = 'none';
             console.log('Form submitted, starting progress updates');
             startProgressUpdates();
         });
     }
-    
-    // Initialize tabs
+
+    if (chatButton) {
+        chatButton.addEventListener('click', function() {
+            window.location.href = '{{ url_for("chat") }}?search_id={{ session.get("latest_search_id", "") }}';
+        });
+    }
+
     var tabElms = document.querySelectorAll('#sourceTabs .nav-link');
     tabElms.forEach(function(tabElm) {
         tabElm.addEventListener('click', function(e) {
@@ -282,90 +270,92 @@ document.addEventListener('DOMContentLoaded', function() {
             new bootstrap.Tab(this).show();
         });
     });
-    // Ensure active tab is shown on load
     var activeTab = new bootstrap.Tab(document.querySelector('#sourceTabs .active'));
     if (activeTab) activeTab.show();
-});
 
-function startProgressUpdates() {
-    const query = document.getElementById('query').value;
-    if (!query) {
-        console.error('No query provided for progress updates');
-        return;
-    }
-    const encodedQuery = encodeURIComponent(query);
-    const searchStatus = document.getElementById('searchStatus');
-    let eventSource = new EventSource('/search_progress?query=' + encodedQuery);
-    
-    eventSource.onmessage = function(event) {
-        try {
-            const data = JSON.parse(event.data);
-            console.log('SSE message received:', data);
-            searchStatus.textContent = data.status;
-            if (data.status.startsWith('complete') || data.status.startsWith('error')) {
-                const searchButton = document.getElementById('searchButton');
-                searchButton.disabled = false;
-                searchButton.textContent = 'Search';
-                eventSource.close();
-                if (data.status.startsWith('complete')) {
-                    searchStatus.textContent = 'Search completed';
-                } else {
-                    searchStatus.textContent = data.status;
-                }
-            }
-        } catch (e) {
-            console.error('Error parsing SSE message:', e);
+    function startProgressUpdates() {
+        const query = document.getElementById('query').value;
+        if (!query) {
+            console.error('No query provided for progress updates');
+            searchStatus.textContent = 'No query provided';
+            searchButton.disabled = false;
+            searchButton.textContent = 'Search';
+            searchSpinner.style.display = 'none';
+            return;
         }
-    };
-    
-    eventSource.onerror = function() {
-        console.error('SSE error occurred');
-        searchStatus.textContent = 'Error fetching search progress';
-        eventSource.close();
-        const searchButton = document.getElementById('searchButton');
-        searchButton.disabled = false;
-        searchButton.textContent = 'Search';
-    };
-}
+        const encodedQuery = encodeURIComponent(query);
+        let eventSource = new EventSource('/search_progress?query=' + encodedQuery);
 
-// Expose search results for future chatbot
-window.searchResults = [
-    {% for source in sources %}
-        {% for result in source.results.ranked %}
-            {{ {
-                'source': source.id,
-                'title': result.title,
-                'abstract': result.abstract|truncate(500),
-                'authors': result.authors,
-                'journal': result.journal,
-                'publication_date': result.publication_date,
-                'url': result.url
-            }|tojson }},
+        eventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('SSE message received:', data);
+                searchStatus.textContent = data.status;
+                if (data.status.startsWith('complete') || data.status.startsWith('error')) {
+                    searchButton.disabled = false;
+                    searchButton.textContent = 'Search';
+                    searchSpinner.style.display = 'none';
+                    chatButton.style.display = 'inline-block';
+                    eventSource.close();
+                    if (data.status.startsWith('complete')) {
+                        searchStatus.textContent = 'Search completed';
+                    } else {
+                        searchStatus.textContent = data.status;
+                    }
+                }
+            } catch (e) {
+                console.error('Error parsing SSE message:', e);
+            }
+        };
+
+        eventSource.onerror = function() {
+            console.error('SSE error occurred');
+            searchStatus.textContent = 'Error fetching search progress';
+            searchButton.disabled = false;
+            searchButton.textContent = 'Search';
+            searchSpinner.style.display = 'none';
+            eventSource.close();
+        };
+    }
+
+    window.searchResults = [
+        {% for source in sources %}
+            {% for result in source.results.ranked %}
+                {{ {
+                    'source': source.id,
+                    'title': result.title,
+                    'abstract': result.abstract|truncate(500),
+                    'authors': result.authors,
+                    'journal': result.journal,
+                    'publication_date': result.publication_date,
+                    'url': result.url
+                }|tojson }},
+            {% endfor %}
+            {% for result in source.results.all %}
+                {{ {
+                    'source': source.id,
+                    'title': result.title,
+                    'abstract': result.abstract|truncate(500),
+                    'authors': result.authors,
+                    'journal': result.journal,
+                    'publication_date': result.publication_date,
+                    'url': result.url
+                }|tojson }},
+            {% endfor %}
+            {% for result in source.results.fallback %}
+                {{ {
+                    'source': source.id,
+                    'title': result.title,
+                    'abstract': result.abstract|truncate(500),
+                    'authors': result.authors,
+                    'journal': result.journal,
+                    'publication_date': result.publication_date,
+                    'url': result.url
+                }|tojson }},
+            {% endfor %}
         {% endfor %}
-        {% for result in source.results.all %}
-            {{ {
-                'source': source.id,
-                'title': result.title,
-                'abstract': result.abstract|truncate(500),
-                'authors': result.authors,
-                'journal': result.journal,
-                'publication_date': result.publication_date,
-                'url': result.url
-            }|tojson }},
-        {% endfor %}
-        {% for result in source.results.fallback %}
-            {{ {
-                'source': source.id,
-                'title': result.title,
-                'abstract': result.abstract|truncate(500),
-                'authors': result.authors,
-                'journal': result.journal,
-                'publication_date': result.publication_date,
-                'url': result.url
-            }|tojson }},
-        {% endfor %}
-    {% endfor %}
-];
-console.log('Search results exposed:', window.searchResults);
+    ];
+    console.log('Search results exposed:', window.searchResults);
+});
 </script>
 {% endblock %}

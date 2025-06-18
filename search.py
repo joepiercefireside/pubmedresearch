@@ -245,7 +245,7 @@ def search():
                 retry_delay = 5  # seconds
                 for attempt in range(max_retries):
                     try:
-                        primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int, result_limit=result_limit)
+                        primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int or datetime.now().year - 10, result_limit=result_limit)
                         break
                     except Exception as e:
                         if attempt < max_retries - 1 and "429" in str(e):
@@ -323,10 +323,12 @@ def search():
                 source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
 
             result_ids = save_search_results(current_user.id, query, all_results)
+            search_id = hashlib.sha256((query + str(time.time())).encode()).hexdigest()[:16]
+            session['latest_search_id'] = search_id
             session['latest_search_result_ids'] = json.dumps(result_ids[:10])
             session['latest_query'] = query
 
-            save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results)
+            save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results, search_id)
 
             update_search_progress(current_user.id, query, "complete")
 

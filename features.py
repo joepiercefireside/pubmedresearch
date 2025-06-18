@@ -18,15 +18,15 @@ import sqlite3
 import numpy as np
 from scipy.spatial.distance import cosine
 
-def save_search_history(user_id, query, prompt_text, sources, results):
+def save_search_history(user_id, query, prompt_text, sources, results, search_id=None):
     result_ids = save_search_results(user_id, query, results)
     
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
     try:
         c.execute(
-            "INSERT INTO search_history (user_id, query, prompt_text, sources, result_ids, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, query, prompt_text, json.dumps(sources), json.dumps(result_ids), time.time())
+            "INSERT INTO search_history (id, user_id, query, prompt_text, sources, result_ids, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (search_id, user_id, query, prompt_text, json.dumps(sources), json.dumps(result_ids), time.time())
         )
         conn.commit()
     except sqlite3.Error as e:
@@ -35,7 +35,7 @@ def save_search_history(user_id, query, prompt_text, sources, results):
     finally:
         c.close()
         conn.close()
-    logger.info(f"Saved search history for user={user_id}, query={query}")
+    logger.info(f"Saved search history for user={user_id}, query={query}, search_id={search_id}")
     return result_ids
 
 def get_search_history(user_id, days=7):
@@ -77,12 +77,12 @@ def delete_search_history(user_id, period):
         c.close()
         conn.close()
 
-def save_chat_message(user_id, session_id, message, is_user):
+def save_chat_message(user_id, session_id, message, is_user, search_id=None):
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO chat_history (user_id, session_id, message, is_user, timestamp) VALUES (?, ?, ?, ?, ?)",
-                  (user_id, session_id, message, is_user, time.time()))
+        c.execute("INSERT INTO chat_history (user_id, session_id, message, is_user, timestamp, search_id) VALUES (?, ?, ?, ?, ?, ?)",
+                  (user_id, session_id, message, is_user, time.time(), search_id))
         conn.commit()
     except sqlite3.Error as e:
         logger.error(f"Error saving chat message: {str(e)}")
@@ -90,13 +90,17 @@ def save_chat_message(user_id, session_id, message, is_user):
         c.close()
         conn.close()
 
-def get_chat_history(user_id, session_id, retention_hours):
+def get_chat_history(user_id, session_id, retention_hours, search_id=None):
     conn = sqlite3.connect('search_progress.db')
     c = conn.cursor()
     try:
         cutoff_time = time.time() - (retention_hours * 3600)
-        c.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = ? AND session_id = ? AND timestamp > ? ORDER BY timestamp ASC",
-                  (user_id, session_id, cutoff_time))
+        if search_id:
+            c.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = ? AND session_id = ? AND timestamp > ? AND search_id = ? ORDER BY timestamp ASC",
+                      (user_id, session_id, cutoff_time, search_id))
+        else:
+            c.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = ? AND session_id = ? AND timestamp > ? ORDER BY timestamp ASC",
+                      (user_id, session_id, cutoff_time))
         messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2]} for row in c.fetchall()]
         return messages
     except sqlite3.Error as e:
@@ -377,7 +381,10 @@ def chat():
     session['chat_session_id'] = session_id
     
     retention_hours = get_user_settings(current_user.id)
-    chat_history = get_chat_history(current_user.id, session_id, retention_hours)
+    search_id = request.args.get('search_id', session.get('selected_search_id', None))
+    session['selected_search_id'] = search_id
+    chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
+    search_history = get_search_history(current_user.id, retention_hours / 24)  # Convert hours to days
     
     if request.method == 'POST':
         user_message = request.form.get('message', '')
@@ -394,33 +401,51 @@ def chat():
             except ValueError:
                 flash("Invalid retention hours.", "error")
         
-        if user_message:
-            save_chat_message(current_user.id, session_id, user_message, True)
+        if user_message and search_id:
+            save_chat_message(current_user.id, session_id, user_message, True, search_id)
             
-            search_results = get_search_results(current_user.id, session.get('latest_query', ''))
-            query = session.get('latest_query', '')
-            context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
-            
-            system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable.")
-            
-            history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
-            full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
-            
-            try:
-                response = query_grok_api(system_prompt, full_context)
-                save_chat_message(current_user.id, session_id, response, False)
-                chat_history.append({'message': user_message, 'is_user': True, 'timestamp': time.time()})
-                chat_history.append({'message': response, 'is_user': False, 'timestamp': time.time()})
-            except Exception as e:
-                flash(f"Error generating chat response: {str(e)}", "error")
+            search = next((s for s in search_history if str(s['id']) == str(search_id)), None)
+            if search:
+                search_results = get_search_results(current_user.id, search['query'])
+                query = search['query']
+                context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
+                
+                system_prompt = search.get('prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable.")
+                
+                history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
+                full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
+                
+                try:
+                    response = query_grok_api(system_prompt, full_context)
+                    save_chat_message(current_user.id, session_id, response, False, search_id)
+                    chat_history.append({'message': user_message, 'is_user': True, 'timestamp': time.time()})
+                    chat_history.append({'message': response, 'is_user': False, 'timestamp': time.time()})
+                except Exception as e:
+                    flash(f"Error generating chat response: {str(e)}", "error")
         
-        response = make_response(render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours))
+        response = make_response(render_template('chat.html', chat_history=chat_history, search_history=search_history, username=current_user.email, retention_hours=retention_hours))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
     
-    response = make_response(render_template('chat.html', chat_history=chat_history, username=current_user.email, retention_hours=retention_hours))
+    response = make_response(render_template('chat.html', chat_history=chat_history, search_history=search_history, username=current_user.email, retention_hours=retention_hours))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+
+@app.route('/chat/select_searches', methods=['POST'])
+@login_required
+def select_searches():
+    if not current_user.is_authenticated:
+        return jsonify({'status': 'error', 'message': 'User not authenticated'}), 401
+    
+    data = request.get_json()
+    selected_searches = data.get('selected_searches', [])
+    
+    if not selected_searches or len(selected_searches) != 1:
+        return jsonify({'status': 'error', 'message': 'Exactly one search must be selected'}), 400
+    
+    session['selected_search_id'] = selected_searches[0]
+    logger.info(f"Selected search ID {selected_searches[0]} for user {current_user.id}")
+    return jsonify({'status': 'success', 'message': 'Search selected'})
 
 @app.route('/chat_message', methods=['POST'])
 @login_required
@@ -432,16 +457,26 @@ def chat_message():
     session['chat_session_id'] = session_id
     
     user_message = request.form.get('message', '')
+    search_id = session.get('selected_search_id', None)
+    
     if not user_message:
         return jsonify({'status': 'error', 'message': 'Message cannot be empty'}), 400
     
+    if not search_id:
+        return jsonify({'status': 'error', 'message': 'No search selected'}), 400
+    
     try:
-        save_chat_message(current_user.id, session_id, user_message, True)
+        save_chat_message(current_user.id, session_id, user_message, True, search_id)
         
         retention_hours = get_user_settings(current_user.id)
-        chat_history = get_chat_history(current_user.id, session_id, retention_hours)
+        chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
+        search_history = get_search_history(current_user.id, retention_hours / 24)
         
-        query = session.get('latest_query', '')
+        search = next((s for s in search_history if str(s['id']) == str(search_id)), None)
+        if not search:
+            return jsonify({'status': 'error', 'message': 'Selected search not found'}), 404
+        
+        query = search['query']
         search_results = get_search_results(current_user.id, query)
         
         query_embedding = generate_embedding(user_message)
@@ -463,7 +498,7 @@ def chat_message():
         
         context = "\n".join([f"**Source**: {r['source_id']}\n**Title**: [{r['title']}]({r.get('url', 'N/A')})\n**Abstract**: {r.get('abstract', '')}\n**Authors**: {r.get('authors', 'N/A')}\n**Date**: {r.get('publication_date', 'N/A')}" for r in top_results])
         
-        system_prompt = session.get('latest_prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable. Focus on results most relevant to the user's query.")
+        system_prompt = search.get('prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable. Focus on results most relevant to the user's query.")
         
         history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
         full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
@@ -480,7 +515,7 @@ def chat_message():
                     formatted_response += f"### {source_id.capitalize()} Summaries\n{summary}\n\n"
             response = formatted_response.strip() or response
         
-        save_chat_message(current_user.id, session_id, response, False)
+        save_chat_message(current_user.id, session_id, response, False, search_id)
         
         return jsonify({'status': 'success', 'message': response})
     except Exception as e:
@@ -508,7 +543,7 @@ def delete_search_history_endpoint():
         flash(f"Search history older than {period} deleted successfully.", 'success')
     except Exception as e:
         logger.error(f"Error deleting search history: {str(e)}")
-        flash(f"Failed to delete search history: {str(e)}", 'error')
+        flash(f"Failed to delete search history: {str(e)}', 'error')
     
     return redirect(url_for('previous_searches'))
 

@@ -1,216 +1,283 @@
 {% extends "base.html" %}
 {% block title %}Help Guide{% endblock %}
 {% block content %}
-<div class="container">
+<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
+<div class="container mt-4">
     <h1>PubMedResearch Help Guide</h1>
-    <div class="card">
-        <h2>Table of Contents</h2>
-        <ul>
-            <li><a href="#introduction-to-pubmedresearch">Introduction to PubMedResearch</a></li>
-            <li><a href="#getting-started">Getting Started</a>
-                <ul>
-                    <li><a href="#creating-an-account">Creating an Account</a></li>
-                    <li><a href="#logging-in">Logging In</a></li>
-                </ul>
-            </li>
-            <li><a href="#searching-pubmed">Searching PubMed</a>
-                <ul>
-                    <li><a href="#entering-a-search-query">Entering a Search Query</a></li>
-                    <li><a href="#using-prompts">Using Prompts</a></li>
-                    <li><a href="#searching-older-articles">Searching Older Articles</a></li>
-                    <li><a href="#viewing-search-results">Viewing Search Results</a></li>
-                </ul>
-            </li>
-            <li><a href="#managing-prompts">Managing Prompts</a>
-                <ul>
-                    <li><a href="#creating-a-prompt">Creating a Prompt</a></li>
-                    <li><a href="#editing-a-prompt">Editing a Prompt</a></li>
-                    <li><a href="#deleting-a-prompt">Deleting a Prompt</a></li>
-                </ul>
-            </li>
-            <li><a href="#setting-up-notifications">Setting Up Notifications</a>
-                <ul>
-                    <li><a href="#creating-a-notification-rule">Creating a Notification Rule</a></li>
-                    <li><a href="#editing-a-notification-rule">Editing a Notification Rule</a></li>
-                    <li><a href="#deleting-a-notification-rule">Deleting a Notification Rule</a></li>
-                    <li><a href="#testing-notifications">Testing Notifications</a></li>
-                </ul>
-            </li>
-            <li><a href="#troubleshooting-and-faqs">Troubleshooting and FAQs</a>
-                <ul>
-                    <li><a href="#common-issues">Common Issues</a></li>
-                    <li><a href="#faqs">FAQs</a></li>
-                </ul>
-            </li>
-        </ul>
-    </div>
+    
+    <h2>Table of Contents</h2>
+    <ul>
+        <li><a href="#introduction">Introduction to PubMedResearch</a></li>
+        <li><a href="#getting-started">Getting Started</a>
+            <ul>
+                <li><a href="#creating-account">Creating an Account</a></li>
+                <li><a href="#logging-in">Logging In</a></li>
+            </ul>
+        </li>
+        <li><a href="#searching-pubmed">Searching PubMed</a>
+            <ul>
+                <li><a href="#entering-query">Entering a Search Query</a></li>
+                <li><a href="#using-prompts">Using Prompts</a></li>
+                <li><a href="#searching-older">Searching Older Articles</a></li>
+                <li><a href="#viewing-results">Viewing Search Results</a></li>
+            </ul>
+        </li>
+        <li><a href="#managing-prompts">Managing Prompts</a>
+            <ul>
+                <li><a href="#creating-prompt">Creating a Prompt</a></li>
+                <li><a href="#editing-prompt">Editing a Prompt</a></li>
+                <li><a href="#deleting-prompt">Deleting a Prompt</a></li>
+            </ul>
+        </li>
+        <li><a href="#setting-notifications">Setting Up Notifications</a>
+            <ul>
+                <li><a href="#creating-notification">Creating a Notification Rule</a></li>
+                <li><a href="#editing-notification">Editing a Notification Rule</a></li>
+                <li><a href="#deleting-notification">Deleting a Notification Rule</a></li>
+                <li><a href="#testing-notification">Testing Notifications</a></li>
+            </ul>
+        </li>
+        <li><a href="#chatting-results">Chatting with Search Results</a>
+            <ul>
+                <li><a href="#accessing-chat">Accessing the Chat Page</a></li>
+                <li><a href="#selecting-searches">Selecting Previous Searches</a></li>
+                <li><a href="#chatting-ai">Chatting with AI</a></li>
+                <li><a href="#chat-retention">Setting Chat Memory Retention</a></li>
+            </ul>
+        </li>
+        <li><a href="#previous-searches">Managing Previous Searches</a>
+            <ul>
+                <li><a href="#viewing-searches">Viewing Previous Searches</a></li>
+                <li><a href="#rerunning-searches">Rerunning a Search</a></li>
+                <li><a href="#deleting-searches">Deleting Search History</a></li>
+            </ul>
+        </li>
+        <li><a href="#troubleshooting">Troubleshooting and FAQs</a>
+            <ul>
+                <li><a href="#common-issues">Common Issues</a></li>
+                <li><a href="#faqs">FAQs</a></li>
+            </ul>
+        </li>
+    </ul>
 
-    <div class="card" id="introduction-to-pubmedresearch">
-        <h2>Introduction to PubMedResearch</h2>
-        <p>PubMedResearch is a powerful web application that allows users to search PubMed’s extensive database of medical and scientific articles with enhanced features powered by AI. The application simplifies the process of finding relevant research by enabling users to:</p>
-        <ul>
-            <li>Perform advanced searches with natural language queries.</li>
-            <li>Generate AI-driven summaries of search results based on custom prompts.</li>
-            <li>Set up automated notifications for new articles matching specific criteria.</li>
-        </ul>
-        <p>Whether you’re a researcher, clinician, or student, PubMedResearch helps you stay up-to-date with the latest publications and extract meaningful insights from complex medical literature.</p>
-    </div>
+    <h2 id="introduction">Introduction to PubMedResearch</h2>
+    <p>PubMedResearch is a powerful web application that allows users to search PubMed’s extensive database of medical and scientific articles with enhanced features powered by AI. The application simplifies the process of finding relevant research by enabling users to:</p>
+    <ul>
+        <li>Perform advanced searches with natural language queries.</li>
+        <li>Generate AI-driven summaries of search results based on custom prompts.</li>
+        <li>Set up automated notifications for new articles matching specific criteria.</li>
+        <li>Chat with AI about search results to gain deeper insights.</li>
+        <li>Manage and rerun previous searches.</li>
+    </ul>
+    <p>Whether you’re a researcher, clinician, or student, PubMedResearch helps you stay up-to-date with the latest publications and extract meaningful insights from complex medical literature.</p>
 
-    <div class="card" id="getting-started">
-        <h2>Getting Started</h2>
-        <h3 id="creating-an-account">Creating an Account</h3>
-        <p>To use PubMedResearch, you need to create an account. Follow these steps:</p>
-        <ol>
-            <li>Visit the PubMedResearch homepage.</li>
-            <li>Click on the <strong>Register</strong> button.</li>
-            <li>Enter your <strong>email address</strong> and create a <strong>password</strong>.</li>
-            <li>Click <strong>Register</strong> to submit your information.</li>
-            <li>Check your email for a verification link (if required) and follow the instructions to verify your account.</li>
-        </ol>
-        <p><strong>Note</strong>: Your email address must be valid, as it will be used for account recovery and notifications.</p>
+    <h2 id="getting-started">Getting Started</h2>
+    <h3 id="creating-account">Creating an Account</h3>
+    <p>To use PubMedResearch, you need to create an account. Follow these steps:</p>
+    <ol>
+        <li>Visit the PubMedResearch homepage.</li>
+        <li>Click on the <strong>Register</strong> button.</li>
+        <li>Enter your email address and create a password.</li>
+        <li>Click <strong>Register</strong> to submit your information.</li>
+        <li>Check your email for a verification link (if required) and follow the instructions to verify your account.</li>
+    </ol>
+    <p><strong>Note:</strong> Your email address must be valid, as it will be used for account recovery and notifications.</p>
 
-        <h3 id="logging-in">Logging In</h3>
-        <p>Once your account is created and verified, you can log in:</p>
-        <ol>
-            <li>Visit the PubMedResearch homepage.</li>
-            <li>Click on the <strong>Login</strong> button.</li>
-            <li>Enter your <strong>email address</strong> and <strong>password</strong>.</li>
-            <li>Click <strong>Login</strong> to access your dashboard.</li>
-        </ol>
-        <p>If you forget your password, use the <strong>Forgot Password</strong> link to reset it via email.</p>
-    </div>
+    <h3 id="logging-in">Logging In</h3>
+    <p>Once your account is created and verified, you can log in:</p>
+    <ol>
+        <li>Visit the PubMedResearch homepage.</li>
+        <li>Click on the <strong>Login</strong> button.</li>
+        <li>Enter your email address and password.</li>
+        <li>Click <strong>Login</strong> to access your dashboard.</li>
+    </ol>
+    <p>If you forget your password, use the <strong>Forgot Password</strong> link to reset it via email.</p>
 
-    <div class="card" id="searching-pubmed">
-        <h2>Searching PubMed</h2>
-        <p>The search functionality is the core of PubMedResearch. It allows you to find articles based on your query and refine results using AI-powered prompts.</p>
+    <h2 id="searching-pubmed">Searching PubMed</h2>
+    <p>The search functionality is the core of PubMedResearch. It allows you to find articles based on your query and refine results using AI-powered prompts.</p>
 
-        <h3 id="entering-a-search-query">Entering a Search Query</h3>
-        <ol>
-            <li>On the search page, locate the <strong>Search Query</strong> field.</li>
-            <li>Enter your query using natural language (e.g., "weight loss and diabetes").</li>
-            <li><strong>Tip</strong>: Be specific to get more relevant results. You can include keywords, authors, or publication dates.</li>
-        </ol>
+    <h3 id="entering-query">Entering a Search Query</h3>
+    <ol>
+        <li>On the search page, locate the <strong>Search Query</strong> field.</li>
+        <li>Enter your query using natural language (e.g., "weight loss and diabetes").</li>
+        <li><strong>Tip:</strong> Be specific to get more relevant results. You can include keywords, authors, or publication dates.</li>
+    </ol>
 
-        <h3 id="using-prompts">Using Prompts</h3>
-        <p>Prompts are predefined or custom instructions that guide the AI in generating summaries of your search results.</p>
-        <ol>
-            <li>Below the search query, find the <strong>Select Prompt</strong> dropdown.</li>
-            <li>Choose a prompt from the list (e.g., "Summarize the top 3 articles").</li>
-            <li>The corresponding prompt text will appear in the <strong>Prompt Text</strong> box below.</li>
-            <li>You can modify the prompt text if needed or leave it as is.</li>
-        </ol>
-        <p><strong>Note</strong>: If you leave the prompt text blank, no AI summary will be generated, and you’ll only see the search results.</p>
+    <h3 id="using-prompts">Using Prompts</h3>
+    <p>Prompts are predefined or custom instructions that guide the AI in generating summaries of your search results.</p>
+    <ol>
+        <li>Below the search query, find the <strong>Select Prompt</strong> dropdown.</li>
+        <li>Choose a prompt from the list (e.g., "Summarize the top 3 articles").</li>
+        <li>The corresponding prompt text will appear in the <strong>Prompt Text</strong> box below.</li>
+        <li>You can modify the prompt text if needed or leave it as is.</li>
+    </ol>
+    <p><strong>Note:</strong> If you leave the prompt text blank, no AI summary will be generated, and you’ll only see the search results.</p>
 
-        <h3 id="searching-older-articles">Searching Older Articles</h3>
-        <p>By default, PubMedResearch searches articles from the past 5 years. To search older articles:</p>
-        <ol>
-            <li>Check the <strong>Search older articles</strong> box.</li>
-            <li>Select a <strong>Start Year</strong> from the dropdown (e.g., 2000).</li>
-            <li>The search will include articles from the selected year to the present.</li>
-        </ol>
+    <h3 id="searching-older">Searching Older Articles</h3>
+    <p>By default, PubMedResearch searches articles from the past 10 years. To search older articles:</p>
+    <ol>
+        <li>Check the <strong>Search older articles</strong> box.</li>
+        <li>Select a <strong>Start Year</strong> from the dropdown (e.g., 2000).</li>
+        <li>The search will include articles from the selected year to the present.</li>
+    </ol>
 
-        <h3 id="viewing-search-results">Viewing Search Results</h3>
-        <p>After submitting your search by clicking the <strong>Search</strong> button:</p>
-        <ul>
-            <li><strong>Top Relevant Results (AI-Ranked)</strong>: Displays the most relevant articles, ranked by the AI.</li>
-            <li><strong>All Results</strong>: Shows all articles matching your query.</li>
-            <li><strong>Fallback Results</strong>: If no results are found within the specified timeframe, older articles may be shown.</li>
-        </ul>
-        <p>Each result includes the article’s title, authors, journal, publication date, and a snippet of the abstract. Click the title to view the full article on PubMed. If a prompt was used, an <strong>AI Summary</strong> section will appear above the results, showing the AI-generated summary (this may take 30-40 seconds to load).</p>
-    </div>
+    <h3 id="viewing-results">Viewing Search Results</h3>
+    <p>After submitting your search by clicking the <strong>Search</strong> button:</p>
+    <ul>
+        <li><strong>Top Relevant Results (AI-Ranked):</strong> Displays the most relevant articles, ranked by the AI.</li>
+        <li><strong>All Results:</strong> Shows all articles matching your query.</li>
+        <li><strong>Fallback Results:</strong> If no results are found within the specified timeframe, older articles may be shown.</li>
+    </ul>
+    <p>Each result includes the article’s title, authors, journal, publication date, and a snippet of the abstract. Click the title to view the full article on PubMed. If a prompt was used, an <strong>AI Summary</strong> section will appear above the results, showing the AI-generated summary (this may take 30-40 seconds to load). After a search completes, a <strong>Chat with Results</strong> button appears, allowing you to discuss the results with AI.</p>
 
-    <div class="card" id="managing-prompts">
-        <h2>Managing Prompts</h2>
-        <p>Prompts are essential for generating AI-driven summaries. You can create, edit, and delete prompts to tailor the AI’s responses to your needs.</p>
+    <h2 id="managing-prompts">Managing Prompts</h2>
+    <p>Prompts are essential for generating AI-driven summaries. You can create, edit, and delete prompts to tailor the AI’s responses to your needs.</p>
 
-        <h3 id="creating-a-prompt">Creating a Prompt</h3>
-        <ol>
-            <li>Navigate to the <strong>Prompts</strong> section from the dashboard.</li>
-            <li>Click <strong>Create New Prompt</strong>.</li>
-            <li>Enter a <strong>Prompt Name</strong> and the <strong>Prompt Text</strong> (e.g., "Provide a detailed summary of the top 5 results").</li>
-            <li>Click <strong>Save</strong> to store the prompt.</li>
-        </ol>
+    <h3 id="creating-prompt">Creating a Prompt</h3>
+    <ol>
+        <li>Navigate to the <strong>Prompts</strong> section from the dashboard.</li>
+        <li>Click <strong>Create New Prompt</strong>.</li>
+        <li>Enter a <strong>Prompt Name</strong> and the <strong>Prompt Text</strong> (e.g., "Provide a detailed summary of the top 5 results").</li>
+        <li>Click <strong>Save</strong> to store the prompt.</li>
+    </ol>
 
-        <h3 id="editing-a-prompt">Editing a Prompt</h3>
-        <ol>
-            <li>In the <strong>Prompts</strong> section, select the prompt you want to edit.</li>
-            <li>Update the <strong>Prompt Name</strong> and/or <strong>Prompt Text</strong>.</li>
-            <li>Click <strong>Update Prompt</strong> to save your changes.</li>
-        </ol>
+    <h3 id="editing-prompt">Editing a Prompt</h3>
+    <ol>
+        <li>In the <strong>Prompts</strong> section, select the prompt you want to edit.</li>
+        <li>Update the <strong>Prompt Name</strong> and/or <strong>Prompt Text</strong>.</li>
+        <li>Click <strong>Update Prompt</strong> to save your changes.</li>
+    </ol>
 
-        <h3 id="deleting-a-prompt">Deleting a Prompt</h3>
-        <ol>
-            <li>In the <strong>Prompts</strong> section, select the prompt you want to delete.</li>
-            <li>Click <strong>Delete</strong> and confirm the action.</li>
-        </ol>
-        <p><strong>Warning</strong>: Deleting a prompt is permanent and cannot be undone.</p>
-    </div>
+    <h3 id="deleting-prompt">Deleting a Prompt</h3>
+    <ol>
+        <li>In the <strong>Prompts</strong> section, select the prompt you want to delete.</li>
+        <li>Click <strong>Delete</strong> and confirm the action.</li>
+    </ol>
+    <p><strong>Warning:</strong> Deleting a prompt is permanent and cannot be undone.</p>
 
-    <div class="card" id="setting-up-notifications">
-        <h2>Setting Up Notifications</h2>
-        <p>Notifications keep you informed about new articles matching your criteria.</p>
+    <h2 id="setting-notifications">Setting Up Notifications</h2>
+    <p>Notifications keep you informed about new articles matching your criteria.</p>
 
-        <h3 id="creating-a-notification-rule">Creating a Notification Rule</h3>
-        <ol>
-            <li>Go to the <strong>Notifications</strong> section.</li>
-            <li>Click <strong>Create New Rule</strong>.</li>
-            <li>Fill in the required fields:
-                <ul>
-                    <li><strong>Rule Name</strong>: A descriptive name for the rule.</li>
-                    <li><strong>Keywords</strong>: Terms to search for (e.g., "diabetes treatment").</li>
-                    <li><strong>Timeframe</strong>: How often to check for new articles (daily, weekly, monthly, annually).</li>
-                    <li><strong>Prompt Text</strong> (optional): A prompt for summarizing new articles.</li>
-                    <li><strong>Email Format</strong>: How to present the results (summary, list, detailed).</li>
-                </ul>
-            </li>
-            <li>Click <strong>Save</strong> to activate the rule.</li>
-        </ol>
+    <h3 id="creating-notification">Creating a Notification Rule</h3>
+    <ol>
+        <li>Go to the <strong>Notifications</strong> section.</li>
+        <li>Click <strong>Create New Rule</strong>.</li>
+        <li>Fill in the required fields:
+            <ul>
+                <li><strong>Rule Name:</strong> A descriptive name for the rule.</li>
+                <li><strong>Keywords:</strong> Terms to search for (e.g., "diabetes treatment").</li>
+                <li><strong>Timeframe:</strong> How often to check for new articles (daily, weekly, monthly, annually).</li>
+                <li><strong>Prompt Text (optional):</strong> A prompt for summarizing new articles.</li>
+                <li><strong>Email Format:</strong> How to present the results (summary, list, detailed).</li>
+            </ul>
+        </li>
+        <li>Click <strong>Save</strong> to activate the rule.</li>
+    </ol>
 
-        <h3 id="editing-a-notification-rule">Editing a Notification Rule</h3>
-        <ol>
-            <li>In the <strong>Notifications</strong> section, select the rule you want to modify.</li>
-            <li>Update the fields as needed.</li>
-            <li>Click <strong>Update Rule</strong> to save your changes.</li>
-        </ol>
+    <h3 id="editing-notification">Editing a Notification Rule</h3>
+    <ol>
+        <li>In the <strong>Notifications</strong> section, select the rule you want to modify.</li>
+        <li>Update the fields as needed.</li>
+        <li>Click <strong>Update Rule</strong> to save your changes.</li>
+    </ol>
 
-        <h3 id="deleting-a-notification-rule">Deleting a Notification Rule</h3>
-        <ol>
-            <li>In the <strong>Notifications</strong> section, select the rule you want to delete.</li>
-            <li>Click <strong>Delete</strong> and confirm the action.</li>
-        </ol>
-        <p><strong>Warning</strong>: Deleting a notification rule is permanent.</p>
+    <h3 id="deleting-notification">Deleting a Notification Rule</h3>
+    <ol>
+        <li>In the <strong>Notifications</strong> section, select the rule you want to delete.</li>
+        <li>Click <strong>Delete</strong> and confirm the action.</li>
+    </ol>
+    <p><strong>Warning:</strong> Deleting a notification rule is permanent.</p>
 
-        <h3 id="testing-notifications">Testing Notifications</h3>
-        <ol>
-            <li>In the <strong>Notifications</strong> section, select a rule and click <strong>Test</strong>.</li>
-            <li>The system will simulate the notification and send a test email to your account.</li>
-            <li>Check your inbox (and spam/junk folder) to verify the email.</li>
-        </ol>
-    </div>
+    <h3 id="testing-notification">Testing Notifications</h3>
+    <ol>
+        <li>In the <strong>Notifications</strong> section, select a rule and click <strong>Test</strong>.</li>
+        <li>The system will simulate the notification and send a test email to your account.</li>
+        <li>Check your inbox (and spam/junk folder) to verify the email.</li>
+    </ol>
 
-    <div class="card" id="troubleshooting-and-faqs">
-        <h2>Troubleshooting and FAQs</h2>
+    <h2 id="chatting-results">Chatting with Search Results</h2>
+    <p>The Chat feature allows you to interact with AI to discuss and analyze your search results.</p>
 
-        <h3 id="common-issues">Common Issues</h3>
-        <ul>
-            <li><strong>Login Problems</strong>: Ensure your email and password are correct. Use the <strong>Forgot Password</strong> link if needed.</li>
-            <li><strong>API Errors</strong>: If you see errors related to the API, check your internet connection or try again later.</li>
-            <li><strong>No Results Found</strong>: Broaden your search query or adjust the date range.</li>
-            <li><strong>AI Summary Delays</strong>: Generating summaries may take 30-40 seconds. Wait for the loading indicator to disappear.</li>
-        </ul>
+    <h3 id="accessing-chat">Accessing the Chat Page</h3>
+    <ol>
+        <li>Click the <strong>Chat</strong> link in the navigation menu.</li>
+        <li>Alternatively, after a search, click the <strong>Chat with Results</strong> button to discuss the latest search.</li>
+    </ol>
 
-        <h3 id="faqs">FAQs</h3>
-        <ul>
-            <li><strong>Q: How do I reset my password?</strong>  
-                A: Use the <strong>Forgot Password</strong> link on the login page.</li>
-            <li><strong>Q: Can I use custom prompts?</strong>  
-                A: Yes, you can create custom prompts in the <strong>Prompts</strong> section or edit the prompt text directly in the search form.</li>
-            <li><strong>Q: How often are notifications sent?</strong>  
-                A: Notifications are sent based on the timeframe you select (daily, weekly, etc.).</li>
-            <li><strong>Q: Why didn’t I receive a notification email?</strong>  
-                A: Check your spam/junk folder. If it’s still missing, test the notification or contact support.</li>
-        </ul>
-        <p>For further assistance, contact support at <a href="mailto:support@firesidetechnologies.com">support@firesidetechnologies.com</a>.</p>
-    </div>
+    <h3 id="selecting-searches">Selecting Previous Searches</h3>
+    <ol>
+        <li>On the Chat page, view the <strong>Select Previous Searches</strong> section.</li>
+        <li>Check the box next to a search query to select it for chatting.</li>
+        <li>Only one search can be selected at a time.</li>
+        <li>Searches are retained based on the <strong>Chat Memory Retention</strong> setting (see below).</li>
+    </ol>
+
+    <h3 id="chatting-ai">Chatting with AI</h3>
+    <ol>
+        <li>After selecting a search, enter your message in the <strong>Your Message</strong> field (e.g., "Summarize the top results").</li>
+        <li>Click <strong>Send</strong> to interact with the AI.</li>
+        <li>The AI responds based on the selected search’s results and any associated prompt.</li>
+        <li>Chat history for the selected search is displayed in the <strong>Chat History</strong> section.</li>
+    </ol>
+
+    <h3 id="chat-retention">Setting Chat Memory Retention</h3>
+    <ol>
+        <li>In the <strong>Chat Memory Retention (Hours)</strong> field, enter the number of hours (1–720) to retain chat history and associated searches.</li>
+        <li>Click <strong>Send</strong> to update the retention period.</li>
+        <li>Older chats and searches are automatically deleted after this period.</li>
+    </ol>
+
+    <h2 id="previous-searches">Managing Previous Searches</h2>
+    <p>The Previous Searches feature allows you to view, rerun, or delete your search history.</p>
+
+    <h3 id="viewing-searches">Viewing Previous Searches</h3>
+    <ol>
+        <li>Click the <strong>Previous Searches</strong> link in the navigation menu.</li>
+        <li>A table displays your searches, including the query, prompt, sources, and date.</li>
+    </ol>
+
+    <h3 id="rerunning-searches">Rerunning a Search</h3>
+    <ol>
+        <li>In the <strong>Previous Searches</strong> section, find the search you want to rerun.</li>
+        <li>Click the <strong>Re-run</strong> button to repeat the search with the same parameters.</li>
+    </ol>
+
+    <h3 id="deleting-searches">Deleting Search History</h3>
+    <ol>
+        <li>In the <strong>Previous Searches</strong> section, select a deletion period (weekly, monthly, annually) from the dropdown.</li>
+        <li>Click <strong>Delete</strong> to remove searches older than the selected period.</li>
+    </ol>
+    <p><strong>Warning:</strong> Deleting search history is permanent and also removes associated chat history.</p>
+
+    <h2 id="troubleshooting">Troubleshooting and FAQs</h2>
+
+    <h3 id="common-issues">Common Issues</h3>
+    <ul>
+        <li><strong>Login Problems:</strong> Ensure your email and password are correct. Use the <strong>Forgot Password</strong> link if needed.</li>
+        <li><strong>API Errors:</strong> If you see errors related to the API, check your internet connection or try again later.</li>
+        <li><strong>No Results Found:</strong> Broaden your search query or adjust the date range.</li>
+        <li><strong>AI Summary Delays:</strong> Generating summaries may take 30-40 seconds. Wait for the loading indicator to disappear.</li>
+        <li><strong>Search Status Not Updating:</strong> Refresh the page or check your internet connection.</li>
+        <li><strong>No Chat History:</strong> Ensure a search is selected and within the retention period.</li>
+        <li><strong>Semantic Scholar No Results:</strong> Try again later due to possible API rate limits, or check if the query is too specific.</li>
+    </ul>
+
+    <h3 id="faqs">FAQs</h3>
+    <ul>
+        <li><strong>Q: How do I reset my password?</strong><br>
+            A: Use the <strong>Forgot Password</strong> link on the login page.</li>
+        <li><strong>Q: Can I use custom prompts?</strong><br>
+            A: Yes, you can create custom prompts in the <strong>Prompts</strong> section or edit the prompt text directly in the search form.</li>
+        <li><strong>Q: How often are notifications sent?</strong><br>
+            A: Notifications are sent based on the timeframe you select (daily, weekly, etc.).</li>
+        <li><strong>Q: Why didn’t I receive a notification email?</strong><br>
+            A: Check your spam/junk folder. If it’s still missing, test the notification or contact support.</li>
+        <li><strong>Q: How do I chat about a specific search?</strong><br>
+            A: Select the search on the Chat page or use the <strong>Chat with Results</strong> button after searching.</li>
+        <li><strong>Q: Why are my previous searches missing?</strong><br>
+            A: They may have been deleted due to the retention period or manual deletion.</li>
+    </ul>
+
+    <p>For further assistance, contact support at <a href="mailto:support@firesidetechnologies.com">support@firesidetechnologies.com</a>.</p>
 </div>
 {% endblock %}

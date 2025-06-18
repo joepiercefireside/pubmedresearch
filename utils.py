@@ -376,8 +376,8 @@ class SemanticScholarSearchHandler(SearchHandler):
         self.name = "Semantic Scholar"
     
     @tenacity.retry(
-        stop=tenacity.stop_after_attempt(3),
-        wait=tenacity.wait_exponential(multiplier=2, min=10, max=120),
+        stop=tenacity.stop_after_attempt(5),
+        wait=tenacity.wait_exponential(multiplier=2, min=15, max=300),
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Semantic Scholar search, attempt {retry_state.attempt_number}")
     )
@@ -389,15 +389,18 @@ class SemanticScholarSearchHandler(SearchHandler):
             if start_year:
                 ss_url += f"&year={start_year}-"
             
-            time.sleep(2)  # Add delay to avoid rate limit
+            time.sleep(3)  # Increased delay to avoid rate limit
             headers = {'User-Agent': random.choice(USER_AGENTS)}
             api_key = os.environ.get('SEMANTIC_SCHOLAR_API_KEY')
             if api_key:
                 headers['x-api-key'] = api_key
+            else:
+                logger.warning("SEMANTIC_SCHOLAR_API_KEY not set, proceeding without API key")
             
             response = requests.get(ss_url, headers=headers, timeout=30)
             response.raise_for_status()
             data = response.json()
+            logger.debug(f"Semantic Scholar API response: {json.dumps(data, indent=2)[:500]}...")
             
             results = []
             if 'data' in data:

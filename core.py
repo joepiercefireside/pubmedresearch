@@ -3,11 +3,11 @@ from flask_login import LoginManager
 import os
 import logging
 import sqlite3
-import psycopg2  # For get_db_connection
-import sendgrid  # For sg
-from sendgrid import SendGridAPIClient  # For sg
+import psycopg2
+import sendgrid
+from sendgrid import SendGridAPIClient
 from datetime import datetime
-import time  # Added for time.time()
+import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from openai import OpenAI
 import tenacity
@@ -17,6 +17,7 @@ from nltk.corpus import stopwords
 from nltk import pos_tag
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -82,9 +83,9 @@ def init_progress_db():
         c.execute('''CREATE TABLE IF NOT EXISTS grok_cache
                      (query TEXT PRIMARY KEY, response TEXT NOT NULL, timestamp REAL NOT NULL)''')
         c.execute('''CREATE TABLE IF NOT EXISTS search_history
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, query TEXT NOT NULL, prompt_text TEXT, sources TEXT NOT NULL, result_ids TEXT NOT NULL, timestamp REAL NOT NULL)''')
+                     (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, query TEXT NOT NULL, prompt_text TEXT, sources TEXT NOT NULL, result_ids TEXT NOT NULL, timestamp REAL NOT NULL)''')
         c.execute('''CREATE TABLE IF NOT EXISTS chat_history
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, session_id TEXT NOT NULL, message TEXT NOT NULL, is_user BOOLEAN NOT NULL, timestamp REAL NOT NULL)''')
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, session_id TEXT NOT NULL, message TEXT NOT NULL, is_user BOOLEAN NOT NULL, timestamp REAL NOT NULL, search_id TEXT)''')
         c.execute('''CREATE TABLE IF NOT EXISTS user_settings
                      (user_id TEXT PRIMARY KEY, chat_memory_retention_hours INTEGER DEFAULT 24)''')
         c.execute('''CREATE TABLE IF NOT EXISTS embedding_cache
@@ -164,7 +165,9 @@ def get_db_connection():
 
 @app.route('/help')
 def help():
-    return render_template('help.html')
+    response = make_response(render_template('help.html'))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @tenacity.retry(
     stop=tenacity.stop_after_attempt(3),
