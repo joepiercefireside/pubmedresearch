@@ -543,7 +543,7 @@ def delete_search_history_endpoint():
         flash(f"Search history older than {period} deleted successfully.", 'success')
     except Exception as e:
         logger.error(f"Error deleting search history: {str(e)}")
-        flash(f"Failed to delete search history: {str(e)}', 'error')
+        flash(f"Failed to delete search history: {str(e)}", 'error')
     
     return redirect(url_for('previous_searches'))
 
