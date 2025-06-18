@@ -4,7 +4,7 @@
 <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
 <div class="container mt-4">
     <h2>Previous Searches</h2>
-    <form method="POST" action="{{ url_for('delete_search_history') }}" class="mb-4">
+    <form method="POST" action="{{ url_for('delete_search_history_endpoint') }}" class="mb-4">
         <div class="form-group">
             <label for="delete_period">Delete searches older than:</label>
             <select class="form-control" id="delete_period" name="delete_period">
