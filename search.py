@@ -125,6 +125,10 @@ def search():
         conn.close()
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
     session.pop('latest_search_result_ids', None)
+    
+    # Clear old session result_limit to avoid persistence issues
+    if 'result_limit' in session:
+        del session['result_limit']
 
     page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'googlescholar', 'semanticscholar']}
     per_page = 20
@@ -132,14 +136,21 @@ def search():
     prompt_id = request.form.get('prompt_id', request.args.get('prompt_id', ''))
     prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
     query = request.form.get('query', request.args.get('query', ''))
-    result_limit = request.form.get('result_limit', request.args.get('result_limit', session.get('result_limit', '50')))
+
+    # Log result_limit sources for debugging
+    form_limit = request.form.get('result_limit')
+    args_limit = request.args.get('result_limit')
+    logger.debug(f"result_limit sources: form={form_limit}, args={args_limit}")
+    result_limit = form_limit or args_limit or '20'
     try:
         result_limit = int(result_limit)
         if result_limit not in [10, 20, 50, 100]:
-            result_limit = 50
+            result_limit = 20
     except ValueError:
-        result_limit = 50
+        result_limit = 20
     session['result_limit'] = str(result_limit)  # Save to session
+    logger.debug(f"Final result_limit: {result_limit}")
+
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
     if start_year == "None" or not start_year or not search_older:

@@ -204,6 +204,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     html_content=HtmlContent(html_content)
                 )
                 message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
+                logger.debug(f"Sending no-results email with MIME type: {message.mime_type}")
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
                 logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
@@ -272,6 +273,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 html_content=HtmlContent(html_content)
             )
             message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
+            logger.debug(f"Sending results email with MIME type: {message.mime_type}")
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
             logger.info(f"Email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")
@@ -310,6 +312,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     html_content=HtmlContent(html_content)
                 )
                 message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
+                logger.debug(f"Sending error email with MIME type: {message.mime_type}")
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
                 logger.info(f"Error email sent for rule {rule_id}, status: {response.status_code}, message_id={response_headers.get('X-Message-Id', 'Not provided')}")

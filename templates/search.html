@@ -30,6 +30,7 @@
         <div class="alert alert-danger">{{ error }}</div>
     {% endif %}
     <form method="POST" action="{{ url_for('search') }}" id="searchForm">
+        <input type="hidden" id="hidden_result_limit" name="result_limit" value="{{ result_limit|default('20') }}">
         <div class="form-group">
             <label for="query">Search Query:</label>
             <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" required>
@@ -229,16 +230,34 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Ensure result_limit retains selected value
     const resultLimitSelect = document.getElementById('result_limit');
-    if (resultLimitSelect) {
-        const savedLimit = {{ result_limit|tojson }} || sessionStorage.getItem('result_limit') || '50';
+    const hiddenResultLimit = document.getElementById('hidden_result_limit');
+    if (resultLimitSelect && hiddenResultLimit) {
+        // Restore saved limit from server or sessionStorage, default to 20
+        const savedLimit = {{ result_limit|tojson }} || sessionStorage.getItem('result_limit') || '20';
         if (['10', '20', '50', '100'].includes(savedLimit)) {
             resultLimitSelect.value = savedLimit;
+            hiddenResultLimit.value = savedLimit;
             console.log('Result limit restored:', savedLimit);
+        } else {
+            resultLimitSelect.value = '20';
+            hiddenResultLimit.value = '20';
+            console.log('Result limit reset to default: 20');
         }
+        // Handle dropdown changes
         resultLimitSelect.addEventListener('change', function() {
-            sessionStorage.setItem('result_limit', this.value);
-            console.log('Result limit saved:', this.value);
+            const selectedValue = this.value;
+            sessionStorage.setItem('result_limit', selectedValue);
+            hiddenResultLimit.value = selectedValue;
+            console.log('Result limit changed and saved:', selectedValue);
         });
+        // Ensure hidden field is updated before form submission
+        const searchForm = document.getElementById('searchForm');
+        if (searchForm) {
+            searchForm.addEventListener('submit', function(event) {
+                hiddenResultLimit.value = resultLimitSelect.value;
+                console.log('Form submitting with result_limit:', hiddenResultLimit.value);
+            });
+        }
     }
     
     // Handle form submission
