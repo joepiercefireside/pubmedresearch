@@ -109,9 +109,10 @@ def update_search_progress(user_id, query, status):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("INSERT INTO search_progress (user_id, query, status, timestamp) VALUES (%s, %s, %s, %s)
-                     ON CONFLICT (user_id, query) DO UPDATE SET status = %s, timestamp = %s",
-                    (user_id, query or '', status, time.time(), status, time.time()))
+        cur.execute("""
+            INSERT INTO search_progress (user_id, query, status, timestamp) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id, query) DO UPDATE SET status = %s, timestamp = %s
+        """, (user_id, query or '', status, time.time(), status, time.time()))
         conn.commit()
     except psycopg2.Error as e:
         logger.error(f"Error updating search progress: {str(e)}")
@@ -123,9 +124,10 @@ def update_search_progress(user_id, query, status):
 def cache_grok_response(query, response):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO grok_cache (query, response, timestamp) VALUES (%s, %s, %s)
-                 ON CONFLICT (query) DO UPDATE SET response = %s, timestamp = %s",
-                (query, response, time.time(), response, time.time()))
+    cur.execute("""
+        INSERT INTO grok_cache (query, response, timestamp) VALUES (%s, %s, %s)
+        ON CONFLICT (query) DO UPDATE SET response = %s, timestamp = %s
+    """, (query, response, time.time(), response, time.time()))
     conn.commit()
     cur.close()
     conn.close()
@@ -144,9 +146,10 @@ def get_cached_grok_response(query):
 def cache_embedding(pmid, embedding):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO embedding_cache (pmid, embedding, timestamp) VALUES (%s, %s, %s)
-                 ON CONFLICT (pmid) DO UPDATE SET embedding = %s, timestamp = %s",
-                (pmid, embedding.tobytes(), time.time(), embedding.tobytes(), time.time()))
+    cur.execute("""
+        INSERT INTO embedding_cache (pmid, embedding, timestamp) VALUES (%s, %s, %s)
+        ON CONFLICT (pmid) DO UPDATE SET embedding = %s, timestamp = %s
+    """, (pmid, embedding.tobytes(), time.time(), embedding.tobytes(), time.time()))
     conn.commit()
     cur.close()
     conn.close()
