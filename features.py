@@ -127,9 +127,10 @@ def update_user_settings(user_id, retention_hours):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO user_settings (user_id, chat_memory_retention_hours) VALUES (%s, %s)
-                     ON CONFLICT (user_id) DO UPDATE SET chat_memory_retention_hours = %s",
-                    (user_id, retention_hours, retention_hours))
+        cur.execute("""
+            INSERT INTO user_settings (user_id, chat_memory_retention_hours) VALUES (%s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET chat_memory_retention_hours = %s
+        """, (user_id, retention_hours, retention_hours))
         conn.commit()
     except psycopg2.Error as e:
         logger.error(f"Error updating user settings: {str(e)}")
