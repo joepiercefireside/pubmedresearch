@@ -9,51 +9,88 @@
     #searchStatus { min-height: 1.5em; }
     #chatButton { display: none; }
 </style>
-<div class="container mt-4">
-    <h2>Search</h2>
-    <form id="searchForm" method="POST" action="{{ url_for('search') }}">
-        <div class="form-group">
-            <label for="query">Search Query</label>
-            <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
-        </div>
-        <div class="form-group">
-            <label for="prompt_id">Select Prompt</label>
-            <select class="form-control" id="prompt_id" name="prompt_id">
-                <option value="">No Prompt</option>
-                {% for prompt in prompts %}
-                    <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="form-group">
-            <label>Sources</label>
-            <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources %}checked{% endif %}>
-                <label class="form-check-label" for="pubmed">PubMed</label>
+<div class="container">
+    <div class="well">
+        <h2>Search for Articles</h2>
+        <form id="searchForm" method="POST" action="{{ url_for('search') }}">
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="form-inline mb-3">
+                        <div class="form-group mr-3">
+                            <label for="start_year" class="mr-2">Start Year</label>
+                            <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year or '' }}" placeholder="e.g., 2015" style="width: 100px;">
+                        </div>
+                        <div class="form-group mr-3">
+                            <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
+                            <label class="form-check-label" for="search_older">Search Older Articles</label>
+                        </div>
+                        <div class="form-group">
+                            <label for="result_limit" class="mr-2">Limit Results:</label>
+                            <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
+                                <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                                <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                                <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
+                                <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources %}checked{% endif %}>
-                <label class="form-check-label" for="googlescholar">Google Scholar</label>
+            <div class="form-group">
+                <label for="query">Search Query</label>
+                <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
             </div>
-            <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources %}checked{% endif %}>
-                <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="form-group">
+                        <label for="prompt_id">Select Prompt</label>
+                        <select class="form-control" id="prompt_id" name="prompt_id">
+                            <option value="">No Prompt</option>
+                            {% for prompt in prompts %}
+                                <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-8">
+                    <div class="form-group">
+                        <label for="prompt_text">Custom Prompt</label>
+                        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="3">{{ prompt_text|default('') }}</textarea>
+                    </div>
+                </div>
             </div>
+            <div class="form-group">
+                <label>Sources</label>
+                <div class="form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources %}checked{% endif %}>
+                    <label class="form-check-label" for="pubmed">PubMed</label>
+                </div>
+                <div class="form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources %}checked{% endif %}>
+                    <label class="form-check-label" for="googlescholar">Google Scholar</label>
+                </div>
+                <div class="form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources %}checked{% endif %}>
+                    <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="sort_by">Sort By</label>
+                <select class="form-control" id="sort_by" name="sort_by" style="width: 200px;">
+                    <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
+                    <option value="publication_date" {% if sort_by == 'publication_date' %}selected{% endif %}>Publication Date</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Search</button>
+        </form>
+        {% if error %}
+            <div class="alert alert-danger mt-3">{{ error }}</div>
+        {% endif %}
+        <div id="searchStatus" class="mt-3">
+            <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
         </div>
-        <div class="form-group">
-            <label for="start_year">Start Year</label>
-            <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year or '' }}" placeholder="e.g., 2015">
-            <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
-                <label class="form-check-label" for="search_older">Search Older Articles</label>
-            </div>
-        </div>
-        <button type="submit" class="btn btn-primary">Search</button>
-    </form>
-    <div id="searchStatus" class="mt-3">
-        <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
+        <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
     </div>
-    <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
     {% if results %}
         <div class="mt-4">
             <h3>Search Results</h3>
@@ -80,11 +117,11 @@
                             <tbody>
                                 {% for result in source_results %}
                                     <tr>
-                                        <td><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></td>
+                                        <td><a href="{{ result.url }}" target="_blank" class="result-title">{{ result.title }}</a></td>
                                         <td>{{ result.authors }}</td>
                                         <td>{{ result.journal }}</td>
                                         <td>{{ result.publication_date }}</td>
-                                        <td>{{ result.abstract|truncate(200) }}</td>
+                                        <td class="result-abstract">{{ result.abstract|truncate(200) }}</td>
                                     </tr>
                                 {% endfor %}
                             </tbody>
