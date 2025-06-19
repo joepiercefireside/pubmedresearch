@@ -74,30 +74,73 @@ def generate_embedding(text):
     return embedding
 
 def get_db_connection():
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
-    return conn
+    try:
+        conn = psycopg2.connect(os.environ['DATABASE_URL'])
+        return conn
+    except psycopg2.Error as e:
+        logger.error(f"Failed to connect to database: {str(e)}")
+        raise
 
 def init_progress_db():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute('''CREATE TABLE IF NOT EXISTS search_progress
-                       (user_id TEXT, query TEXT DEFAULT '', status TEXT NOT NULL, timestamp REAL NOT NULL)''')
-        cur.execute('''CREATE TABLE IF NOT EXISTS grok_cache
-                       (query TEXT PRIMARY KEY, response TEXT NOT NULL, timestamp REAL NOT NULL)''')
-        cur.execute('''CREATE TABLE IF NOT EXISTS search_history
-                       (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, query TEXT NOT NULL, prompt_text TEXT, 
-                        sources TEXT NOT NULL, result_ids TEXT NOT NULL, timestamp REAL NOT NULL)''')
-        cur.execute('''CREATE TABLE IF NOT EXISTS chat_history
-                       (id SERIAL PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, 
-                        message TEXT NOT NULL, is_user BOOLEAN NOT NULL, timestamp REAL NOT NULL, search_id TEXT)''')
-        cur.execute('''CREATE TABLE IF NOT EXISTS user_settings
-                       (user_id TEXT PRIMARY KEY, chat_memory_retention_hours INTEGER DEFAULT 24)''')
-        cur.execute('''CREATE TABLE IF NOT EXISTS embedding_cache
-                       (pmid TEXT PRIMARY KEY, embedding BYTEA, timestamp REAL)''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS search_progress (
+                user_id TEXT,
+                query TEXT DEFAULT '',
+                status TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                UNIQUE(user_id, query)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS grok_cache (
+                query TEXT PRIMARY KEY,
+                response TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS search_history (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                query TEXT NOT NULL,
+                prompt_text TEXT,
+                sources TEXT NOT NULL,
+                result_ids TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                message TEXT NOT NULL,
+                is_user BOOLEAN NOT NULL,
+                timestamp REAL NOT NULL,
+                search_id TEXT
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id TEXT PRIMARY KEY,
+                chat_memory_retention_hours INTEGER DEFAULT 24
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS embedding_cache (
+                pmid TEXT PRIMARY KEY,
+                embedding BYTEA,
+                timestamp REAL
+            )
+        ''')
         conn.commit()
+        logger.info("PostgreSQL database initialized successfully")
     except psycopg2.Error as e:
         logger.error(f"Error initializing PostgreSQL database: {str(e)}")
+        conn.rollback()
         raise
     finally:
         cur.close()
@@ -124,51 +167,69 @@ def update_search_progress(user_id, query, status):
 def cache_grok_response(query, response):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO grok_cache (query, response, timestamp) VALUES (%s, %s, %s)
-        ON CONFLICT (query) DO UPDATE SET response = %s, timestamp = %s
-    """, (query, response, time.time(), response, time.time()))
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("""
+            INSERT INTO grok_cache (query, response, timestamp) VALUES (%s, %s, %s)
+            ON CONFLICT (query) DO UPDATE SET response = %s, timestamp = %s
+        """, (query, response, time.time(), response, time.time()))
+        conn.commit()
+    except psycopg2.Error as e:
+        logger.error(f"Error caching Grok response: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
     logger.info(f"Cached Grok response for query: {query[:50]}...")
 
 def get_cached_grok_response(query):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT response, timestamp FROM grok_cache WHERE query = %s AND timestamp > %s",
-                (query, time.time() - 604800))  # Cache valid for 7 days
-    result = cur.fetchone()
-    cur.close()
-    conn.close()
-    return result[0] if result else None
+    try:
+        cur.execute("SELECT response, timestamp FROM grok_cache WHERE query = %s AND timestamp > %s",
+                    (query, time.time() - 604800))  # Cache valid for 7 days
+        result = cur.fetchone()
+        return result[0] if result else None
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving cached Grok response: {str(e)}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
 
 def cache_embedding(pmid, embedding):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO embedding_cache (pmid, embedding, timestamp) VALUES (%s, %s, %s)
-        ON CONFLICT (pmid) DO UPDATE SET embedding = %s, timestamp = %s
-    """, (pmid, embedding.tobytes(), time.time(), embedding.tobytes(), time.time()))
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("""
+            INSERT INTO embedding_cache (pmid, embedding, timestamp) VALUES (%s, %s, %s)
+            ON CONFLICT (pmid) DO UPDATE SET embedding = %s, timestamp = %s
+        """, (pmid, embedding.tobytes(), time.time(), embedding.tobytes(), time.time()))
+        conn.commit()
+    except psycopg2.Error as e:
+        logger.error(f"Error caching embedding: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
 
 def get_cached_embedding(pmid):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = %s AND timestamp > %s",
-                (pmid, time.time() - 604800))  # Cache valid for 7 days
-    result = cur.fetchone()
-    cur.close()
-    conn.close()
-    if result:
-        embedding = np.frombuffer(result[0], dtype=np.float32)
-        if embedding.shape[0] != 384:
-            logger.warning(f"Invalid embedding dimension for PMID {pmid}: expected 384, got {embedding.shape[0]}")
-            return None
-        return embedding
-    return None
+    try:
+        cur.execute("SELECT embedding, timestamp FROM embedding_cache WHERE pmid = %s AND timestamp > %s",
+                    (pmid, time.time() - 604800))  # Cache valid for 7 days
+        result = cur.fetchone()
+        if result:
+            embedding = np.frombuffer(result[0], dtype=np.float32)
+            if embedding.shape[0] != 384:
+                logger.warning(f"Invalid embedding dimension for PMID {pmid}: expected 384, got {embedding.shape[0]}")
+                return None
+            return embedding
+        return None
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving cached embedding: {str(e)}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route('/help')
 def help():
