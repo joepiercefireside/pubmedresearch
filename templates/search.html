@@ -1,361 +1,142 @@
 {% extends "base.html" %}
+{% block title %}Search{% endblock %}
 {% block content %}
+<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
+<style>
+    .spinner { display: none; }
+    .spinner.active { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    #searchStatus { min-height: 1.5em; }
+    #chatButton { display: none; }
+</style>
 <div class="container mt-4">
-    <div class="row">
-        <div class="d-flex align-items-center justify-content-between w-100">
-            <h2 class="me-3">Search for Articles</h2>
-            <div class="d-flex align-items-center">
-                <div class="form-check me-2">
-                    <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
-                    <label class="form-check-label" for="search_older">Search Older Articles</label>
-                </div>
-                <div class="form-group d-flex align-items-center me-2">
-                    <select class="form-control dropdown-arrow" id="start_year" name="start_year" style="width: 100px; flex-shrink: 0;" {% if not search_older %}disabled{% endif %}>
-                        {% for year in range(1990, 2026)|reverse %}
-                            <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
-                        {% endfor %}
-                    </select>
-                    <label for="result_limit" class="ms-2 me-1" style="white-space: nowrap; margin: 0 5px;">Limit Results:</label>
-                    <select class="form-control dropdown-arrow" id="result_limit" name="result_limit" style="width: 100px; flex-shrink: 0;">
-                        <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
-                        <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                        <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
-                        <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-    </div>
-    {% if error %}
-        <div class="alert alert-danger">{{ error }}</div>
-    {% endif %}
-    <form method="POST" action="{{ url_for('search') }}" id="searchForm">
-        <input type="hidden" id="hidden_result_limit" name="result_limit" value="{{ result_limit|default('20') }}">
+    <h2>Search</h2>
+    <form id="searchForm" method="POST" action="{{ url_for('search') }}">
         <div class="form-group">
-            <label for="query">Search Query:</label>
-            <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" required>
-        </div>
-        <div class="row">
-            <div class="col-md-4 form-group">
-                <label for="prompt_id">Select Prompt:</label>
-                <select class="form-control dropdown-arrow" id="prompt_id" name="prompt_id" role="combobox" aria-expanded="false">
-                    <option value="">None</option>
-                    {% for prompt in prompts %}
-                        <option value="{{ prompt.id }}" {% if prompt_id|string == prompt.id|string %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-8 form-group">
-                <label for="prompt_text">Custom Prompt:</label>
-                <textarea class="form-control" id="prompt_text" name="prompt_text" rows="4">{{ prompt_text|default('') }}</textarea>
-            </div>
+            <label for="query">Search Query</label>
+            <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
         </div>
         <div class="form-group">
-            <label>Sources:</label>
-            <div class="d-flex flex-wrap">
-                <div class="form-check form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="source_pubmed">PubMed</label>
-                </div>
-                <div class="form-check form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
-                </div>
-                <div class="form-check form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
-                </div>
-            </div>
-            <div class="search-container mt-2">
-                <button type="submit" class="btn btn-primary" id="searchButton">Search</button>
-                <button type="button" class="btn btn-secondary" id="chatButton" style="display: none;">Chat with Results</button>
-                <span id="searchStatus" class="search-status"></span>
-                <span id="searchSpinner" class="spinner-border spinner-border-sm" role="status" style="display: none;"></span>
-            </div>
-        </div>
-        <div class="form-group">
-            <label for="sort_by">Sort By:</label>
-            <select class="form-control" id="sort_by" name="sort_by">
-                <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
-                <option value="date" {% if sort_by == 'date' %}selected{% endif %}>Publication Date</option>
+            <label for="prompt_id">Select Prompt</label>
+            <select class="form-control" id="prompt_id" name="prompt_id">
+                <option value="">No Prompt</option>
+                {% for prompt in prompts %}
+                    <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                {% endfor %}
             </select>
         </div>
+        <div class="form-group">
+            <label>Sources</label>
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources %}checked{% endif %}>
+                <label class="form-check-label" for="pubmed">PubMed</label>
+            </div>
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources %}checked{% endif %}>
+                <label class="form-check-label" for="googlescholar">Google Scholar</label>
+            </div>
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources %}checked{% endif %}>
+                <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="start_year">Start Year</label>
+            <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year or '' }}" placeholder="e.g., 2015">
+            <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
+                <label class="form-check-label" for="search_older">Search Older Articles</label>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Search</button>
     </form>
-    {% if sources %}
-        <ul class="nav nav-tabs mt-4" id="sourceTabs" role="tablist">
-            {% for source in sources %}
-                <li class="nav-item" role="presentation">
-                    <a class="nav-link {% if loop.first %}active{% endif %}" id="{{ source.id }}-tab" data-toggle="tab" href="#{{ source.id }}" role="tab" aria-controls="{{ source.id }}" aria-selected="{% if loop.first %}true{% else %}false{% endif %}">{{ source.name }}</a>
-                </li>
-            {% endfor %}
-        </ul>
-        <div class="tab-content mt-3" id="sourceTabContent">
-            {% for source in sources %}
-                <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="{{ source.id }}" role="tabpanel" aria-labelledby="{{ source.id }}-tab">
-                    <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
-                    {% if source.summary and has_prompt %}
-                        <div class="card mb-3">
-                            <div class="card-header">{{ source.name }} Summary</div>
-                            <div class="card-body summary-content">{{ source.summary|safe }}</div>
+    <div id="searchStatus" class="mt-3">
+        <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
+    </div>
+    <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
+    {% if results %}
+        <div class="mt-4">
+            <h3>Search Results</h3>
+            {% for source_id, source_results in results.items() %}
+                {% if source_results %}
+                    <h4>{{ source_id.capitalize() }} Results</h4>
+                    {% if source_id in prompt_outputs %}
+                        <div class="alert alert-info">
+                            <h5>Prompt Output</h5>
+                            <pre>{{ prompt_outputs[source_id] }}</pre>
                         </div>
                     {% endif %}
-                    {% if source.results.ranked %}
-                        <h4>Top Ranked Results</h4>
-                        {% for result in source.results.ranked %}
-                            <div class="card mb-3">
-                                <div class="card-body">
-                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
-                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
-                                </div>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                    {% if source.results.all %}
-                        <h4>All Results</h4>
-                        {% for result in source.results.all %}
-                            <div class="card mb-3">
-                                <div class="card-body">
-                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
-                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
-                                </div>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                    {% if source.results.fallback %}
-                        <h4>Fallback Results</h4>
-                        {% for result in source.results.fallback %}
-                            <div class="card mb-3">
-                                <div class="card-body">
-                                    <h5 class="card-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h5>
-                                    <p class="card-text">{{ result.abstract|truncate(500) }}</p>
-                                    <p class="card-text"><small class="text-muted">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</small></p>
-                                </div>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                    {% if total_results[source.id] > per_page %}
-                        <nav aria-label="Page navigation">
-                            <ul class="pagination">
-                                {% for p in range(1, total_pages[source.id] + 1) %}
-                                    <li class="page-item {% if page[source.id] == p %}active{% endif %}">
-                                        <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, sort_by=sort_by, search_older=search_older, start_year=start_year, result_limit=result_limit, **{'page_' + source.id: p}) }}">{{ p }}</a>
-                                    </li>
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Title</th>
+                                    <th>Authors</th>
+                                    <th>Journal</th>
+                                    <th>Date</th>
+                                    <th>Abstract</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for result in source_results %}
+                                    <tr>
+                                        <td><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></td>
+                                        <td>{{ result.authors }}</td>
+                                        <td>{{ result.journal }}</td>
+                                        <td>{{ result.publication_date }}</td>
+                                        <td>{{ result.abstract|truncate(200) }}</td>
+                                    </tr>
                                 {% endfor %}
-                            </ul>
-                        </nav>
-                    {% endif %}
-                </div>
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
             {% endfor %}
         </div>
     {% endif %}
 </div>
-
-<style>
-.summary-content p {
-    margin-bottom: 1rem;
-    line-height: 1.6;
-}
-.summary-content a {
-    color: #00689b;
-    text-decoration: none;
-}
-.summary-content a:hover {
-    text-decoration: underline;
-}
-.summary-content strong {
-    font-weight: 700;
-}
-.summary-content ul {
-    padding-left: 20px;
-    margin-bottom: 1rem;
-}
-.summary-content li {
-    margin-bottom: 0.5rem;
-}
-.search-container {
-    display: flex;
-    align-items: center;
-    gap: 15px;
-}
-.search-status {
-    color: #00689b;
-    font-size: 14px;
-    min-width: 200px;
-}
-.form-control.dropdown-arrow {
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2300689b' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E?v=1");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    padding-right: 28px;
-}
-.spinner-border {
-    margin-left: 10px;
-}
-</style>
-
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const prompts = {{ prompts|tojson }};
-    const promptSelect = document.getElementById('prompt_id');
-    const promptTextArea = document.getElementById('prompt_text');
-    if (promptSelect && promptTextArea) {
-        if (promptSelect.value) {
-            const selectedPrompt = prompts.find(p => p.id === promptSelect.value);
-            if (selectedPrompt) {
-                promptTextArea.value = selectedPrompt.prompt_text;
-                console.log('Initial prompt text set:', selectedPrompt.prompt_text);
-            }
+    document.addEventListener('DOMContentLoaded', () => {
+        const searchForm = document.getElementById('searchForm');
+        const statusText = document.getElementById('statusText');
+        const spinner = document.querySelector('.spinner');
+        const chatButton = document.getElementById('chatButton');
+        let searchId = localStorage.getItem('latestSearchId') || null;
+
+        if (searchId) {
+            chatButton.style.display = 'block';
+            chatButton.onclick = () => window.location.href = `/chat?search_id=${searchId}`;
         }
-        promptSelect.addEventListener('change', function() {
-            const selectedPrompt = prompts.find(p => p.id === this.value);
-            promptTextArea.value = selectedPrompt ? selectedPrompt.prompt_text : '';
-            console.log('Prompt text updated:', selectedPrompt ? selectedPrompt.prompt_text : '');
-        });
-    }
 
-    const searchOlder = document.getElementById('search_older');
-    const startYear = document.getElementById('start_year');
-    if (searchOlder && startYear) {
-        searchOlder.addEventListener('change', function() {
-            startYear.disabled = !this.checked;
-        });
-    }
-
-    const resultLimitSelect = document.getElementById('result_limit');
-    const hiddenResultLimit = document.getElementById('hidden_result_limit');
-    if (resultLimitSelect && hiddenResultLimit) {
-        const savedLimit = {{ result_limit|tojson }} || sessionStorage.getItem('result_limit') || '20';
-        if (['10', '20', '50', '100'].includes(savedLimit)) {
-            resultLimitSelect.value = savedLimit;
-            hiddenResultLimit.value = savedLimit;
-            console.log('Result limit restored:', savedLimit);
-        }
-        resultLimitSelect.addEventListener('change', function() {
-            sessionStorage.setItem('result_limit', this.value);
-            hiddenResultLimit.value = this.value;
-            console.log('Result limit saved:', this.value);
-        });
-    }
-
-    const searchForm = document.getElementById('searchForm');
-    const searchButton = document.getElementById('searchButton');
-    const chatButton = document.getElementById('chatButton');
-    const searchStatus = document.getElementById('searchStatus');
-    const searchSpinner = document.getElementById('searchSpinner');
-    if (searchForm) {
-        searchForm.addEventListener('submit', function(event) {
-            searchButton.disabled = true;
-            searchButton.textContent = 'Searching...';
-            searchStatus.textContent = 'Starting search...';
-            searchSpinner.style.display = 'inline-block';
+        searchForm.addEventListener('submit', () => {
+            spinner.classList.add('active');
+            statusText.textContent = 'Starting search...';
+            localStorage.removeItem('latestSearchId');
             chatButton.style.display = 'none';
-            console.log('Form submitted, starting progress updates');
-            startProgressUpdates();
         });
-    }
 
-    if (chatButton) {
-        chatButton.addEventListener('click', function() {
-            window.location.href = '{{ url_for("chat") }}?search_id={{ session.get("latest_search_id", "") }}';
-        });
-    }
+        const source = new EventSource(`/search_progress?query=${encodeURIComponent('{{ query or '' }}')}`);
+        source.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            statusText.textContent = data.status || 'Processing...';
+            if (data.status === 'complete' && data.search_id) {
+                spinner.classList.remove('active');
+                localStorage.setItem('latestSearchId', data.search_id);
+                chatButton.style.display = 'block';
+                chatButton.onclick = () => window.location.href = `/chat?search_id=${data.search_id}`;
+            }
+        };
+        source.onerror = () => {
+            spinner.classList.remove('active');
+            statusText.textContent = 'Error retrieving search progress';
+            source.close();
+        };
 
-    var tabElms = document.querySelectorAll('#sourceTabs .nav-link');
-    tabElms.forEach(function(tabElm) {
-        tabElm.addEventListener('click', function(e) {
-            e.preventDefault();
-            new bootstrap.Tab(this).show();
+        window.addEventListener('focus', () => {
+            if (localStorage.getItem('latestSearchId')) {
+                chatButton.style.display = 'block';
+            }
         });
     });
-    var activeTab = new bootstrap.Tab(document.querySelector('#sourceTabs .active'));
-    if (activeTab) activeTab.show();
-
-    function startProgressUpdates() {
-        const query = document.getElementById('query').value;
-        if (!query) {
-            console.error('No query provided for progress updates');
-            searchStatus.textContent = 'No query provided';
-            searchButton.disabled = false;
-            searchButton.textContent = 'Search';
-            searchSpinner.style.display = 'none';
-            return;
-        }
-        const encodedQuery = encodeURIComponent(query);
-        let eventSource = new EventSource('/search_progress?query=' + encodedQuery);
-
-        eventSource.onmessage = function(event) {
-            try {
-                const data = JSON.parse(event.data);
-                console.log('SSE message received:', data);
-                searchStatus.textContent = data.status;
-                if (data.status.startsWith('complete') || data.status.startsWith('error')) {
-                    searchButton.disabled = false;
-                    searchButton.textContent = 'Search';
-                    searchSpinner.style.display = 'none';
-                    chatButton.style.display = 'inline-block';
-                    eventSource.close();
-                    if (data.status.startsWith('complete')) {
-                        searchStatus.textContent = 'Search completed';
-                    } else {
-                        searchStatus.textContent = data.status;
-                    }
-                }
-            } catch (e) {
-                console.error('Error parsing SSE message:', e);
-            }
-        };
-
-        eventSource.onerror = function() {
-            console.error('SSE error occurred');
-            searchStatus.textContent = 'Error fetching search progress';
-            searchButton.disabled = false;
-            searchButton.textContent = 'Search';
-            searchSpinner.style.display = 'none';
-            eventSource.close();
-        };
-    }
-
-    window.searchResults = [
-        {% for source in sources %}
-            {% for result in source.results.ranked %}
-                {{ {
-                    'source': source.id,
-                    'title': result.title,
-                    'abstract': result.abstract|truncate(500),
-                    'authors': result.authors,
-                    'journal': result.journal,
-                    'publication_date': result.publication_date,
-                    'url': result.url
-                }|tojson }},
-            {% endfor %}
-            {% for result in source.results.all %}
-                {{ {
-                    'source': source.id,
-                    'title': result.title,
-                    'abstract': result.abstract|truncate(500),
-                    'authors': result.authors,
-                    'journal': result.journal,
-                    'publication_date': result.publication_date,
-                    'url': result.url
-                }|tojson }},
-            {% endfor %}
-            {% for result in source.results.fallback %}
-                {{ {
-                    'source': source.id,
-                    'title': result.title,
-                    'abstract': result.abstract|truncate(500),
-                    'authors': result.authors,
-                    'journal': result.journal,
-                    'publication_date': result.publication_date,
-                    'url': result.url
-                }|tojson }},
-            {% endfor %}
-        {% endfor %}
-    ];
-    console.log('Search results exposed:', window.searchResults);
-});
 </script>
 {% endblock %}

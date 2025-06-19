@@ -76,6 +76,25 @@ def delete_search_history(user_id, period):
         cur.close()
         conn.close()
 
+def delete_single_search(user_id, search_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM search_history WHERE user_id = %s AND id = %s", (user_id, search_id))
+        if cur.rowcount == 0:
+            logger.warning(f"No search found with id={search_id} for user={user_id}")
+            return False
+        conn.commit()
+        logger.info(f"Deleted search id={search_id} for user={user_id}")
+        return True
+    except psycopg2.Error as e:
+        logger.error(f"Error deleting single search: {str(e)}")
+        conn.rollback()
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
 def save_chat_message(user_id, session_id, message, is_user, search_id=None):
     conn = get_db_connection()
     cur = conn.cursor()
@@ -157,7 +176,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
     date_range = f"{start_date}:{end_date}"
 
     prompt_params = parse_prompt(prompt_text) or {}
-    result_limit = 50  # Match search page default
+    result_limit = 50
     summary_result_count = prompt_params.get('summary_result_count', 20)
 
     search_handlers = {
@@ -204,7 +223,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     plain_text_content=plain_content,
                     html_content=HtmlContent(html_content)
                 )
-                message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
+                message.mime_type = 'multipart/alternative'
                 logger.debug(f"Sending no-results email with MIME type: {message.mime_type}")
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
@@ -235,7 +254,13 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
             f"URL: {r.get('url', 'N/A')}"
             for r in results[:summary_result_count]
         ])
-        summary_prompt = prompt_text or "Summarize the provided research articles in a concise manner, using Markdown for formatting with hyperlinks, **bold** text for key terms, and bullet points for lists."
+        summary_prompt = prompt_text or """
+Summarize the provided research articles in a concise manner using Markdown. Use:
+- **Bold** for key terms
+- Bullet points for main findings
+- [Hyperlinks](URL) for article references
+- Separate paragraphs for each article
+"""
         output = query_grok_api(summary_prompt, context)
 
         if email_format == "list":
@@ -252,7 +277,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 f"**Abstract**: {r.get('abstract', '') or 'No abstract'}\n"
                 for r in results[:summary_result_count]
             ])
-        else:  # summary
+        else:
             content = output
 
         try:
@@ -273,7 +298,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                 plain_text_content=plain_content,
                 html_content=HtmlContent(html_content)
             )
-            message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
+            message.mime_type = 'multipart/alternative'
             logger.debug(f"Sending results email with MIME type: {message.mime_type}")
             response = sg.send(message)
             response_headers = {k: v for k, v in response.headers.items()}
@@ -312,7 +337,7 @@ def run_notification_rule(rule_id, user_id, rule_name, keywords, timeframe, prom
                     plain_text_content=plain_content,
                     html_content=HtmlContent(html_content)
                 )
-                message.mime_type = 'multipart/alternative'  # Ensure HTML is prioritized
+                message.mime_type = 'multipart/alternative'
                 logger.debug(f"Sending error email with MIME type: {message.mime_type}")
                 response = sg.send(message)
                 response_headers = {k: v for k, v in response.headers.items()}
@@ -380,7 +405,7 @@ def chat():
     search_id = request.args.get('search_id', session.get('selected_search_id', None))
     session['selected_search_id'] = search_id
     chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
-    search_history = get_search_history(current_user.id, retention_hours / 24)  # Convert hours to days
+    search_history = get_search_history(current_user.id, retention_hours / 24)
     
     if request.method == 'POST':
         user_message = request.form.get('message', '')
@@ -406,7 +431,13 @@ def chat():
                 query = search['query']
                 context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
                 
-                system_prompt = search.get('prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable.")
+                system_prompt = search.get('prompt_text', """
+Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner using Markdown. Use:
+- **Bold** for key terms
+- Bullet points for lists
+- [Hyperlinks](URL) for references
+- Separate paragraphs for clarity
+""")
                 
                 history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
                 full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
@@ -494,7 +525,13 @@ def chat_message():
         
         context = "\n".join([f"**Source**: {r['source_id']}\n**Title**: [{r['title']}]({r.get('url', 'N/A')})\n**Abstract**: {r.get('abstract', '')}\n**Authors**: {r.get('authors', 'N/A')}\n**Date**: {r.get('publication_date', 'N/A')}" for r in top_results])
         
-        system_prompt = search.get('prompt_text', "Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner, using Markdown for formatting. Include hyperlinks, bold text for key terms, and bullet points for lists where applicable. Focus on results most relevant to the user's query.")
+        system_prompt = search.get('prompt_text', """
+Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner using Markdown. Use:
+- **Bold** for key terms
+- Bullet points for lists
+- [Hyperlinks](URL) for references
+- Separate paragraphs for clarity
+""")
         
         history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
         full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
@@ -506,7 +543,14 @@ def chat_message():
                 source_results = [r for r in top_results if r['source_id'] == source_id][:3]
                 if source_results:
                     context = "\n".join([f"**Title**: [{r['title']}]({r.get('url', 'N/A')})\n**Abstract**: {r.get('abstract', '')}" for r in source_results])
-                    summary_prompt = f"Summarize the abstracts of the following {source_id} articles in simple terms. Provide one paragraph per article, up to 3 paragraphs, separated by a blank line. Use Markdown with hyperlinks, **bold** text for key terms, and bullet points for lists where applicable."
+                    summary_prompt = f"""
+Summarize the abstracts of the following {source_id} articles in simple terms using Markdown. Provide:
+- One paragraph per article, up to 3 paragraphs
+- **Bold** for key terms
+- Bullet points for main findings
+- [Hyperlinks](URL) for references
+Separate paragraphs with a blank line.
+"""
                     summary = query_grok_api(summary_prompt, context)
                     formatted_response += f"### {source_id.capitalize()} Summaries\n{summary}\n\n"
             response = formatted_response.strip() or response
@@ -540,6 +584,20 @@ def delete_search_history_endpoint():
     except Exception as e:
         logger.error(f"Error deleting search history: {str(e)}")
         flash(f"Failed to delete search history: {str(e)}", 'error')
+    
+    return redirect(url_for('previous_searches'))
+
+@app.route('/delete_search/<search_id>', methods=['POST'])
+@login_required
+def delete_single_search_endpoint(search_id):
+    try:
+        if delete_single_search(current_user.id, search_id):
+            flash("Search deleted successfully.", 'success')
+        else:
+            flash("Search not found or you do not have permission to delete it.", 'error')
+    except Exception as e:
+        logger.error(f"Error deleting search {search_id}: {str(e)}")
+        flash(f"Failed to delete search: {str(e)}", 'error')
     
     return redirect(url_for('previous_searches'))
 

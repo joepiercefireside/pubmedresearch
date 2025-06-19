@@ -214,7 +214,6 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         today = datetime.now()
         date_range = None
         
-        # Check for explicit date range or year in query
         if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
             start_year = int(since_match.group(1))
             date_range = f"{start_year}/01/01:{today.strftime('%Y/%m/%d')}"
@@ -226,7 +225,6 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         elif 'past week' in query_lower:
             date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
         else:
-            # Use user-selected start_year if search_older is checked
             start_year_int = int(start_year) if search_older and start_year else today.year - 10
             date_range = f"{start_year_int}/01/01:{today.strftime('%Y/%m/%d')}"
         
@@ -245,7 +243,6 @@ def build_pubmed_query(keywords_with_synonyms, date_range):
             term_query = " OR ".join(terms)
             or_group.append(term_query)
         
-        # Combine terms with AND, but group OR terms together
         if or_group:
             query = f"({' OR '.join(or_group)})"
         else:
@@ -333,7 +330,7 @@ class GoogleScholarSearchHandler(SearchHandler):
             results = []
             results_per_page = min(20, result_limit)
             pages_needed = (result_limit + results_per_page - 1) // results_per_page
-            for page in range(min(pages_needed, 5)):  # Cap at 100 results (5 pages)
+            for page in range(min(pages_needed, 5)):
                 start = page * results_per_page
                 serpapi_url = f"https://serpapi.com/search?engine=google_scholar&q={keywords}&num={results_per_page}&start={start}&api_key={serpapi_key}"
                 if start_year:
@@ -360,7 +357,7 @@ class GoogleScholarSearchHandler(SearchHandler):
                         if len(results) >= result_limit:
                             break
                 
-                time.sleep(1)  # Avoid rate limits
+                time.sleep(1)
                 if len(results) >= result_limit:
                     break
             
@@ -377,8 +374,8 @@ class SemanticScholarSearchHandler(SearchHandler):
         self.name = "Semantic Scholar"
     
     @tenacity.retry(
-        stop=tenacity.stop_after_attempt(5),
-        wait=tenacity.wait_exponential(multiplier=5, min=30, max=600),
+        stop=tenacity.stop_after_attempt(7),
+        wait=tenacity.wait_exponential(multiplier=10, min=60, max=1200),
         retry=tenacity.retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.info(f"Retrying Semantic Scholar search, attempt {retry_state.attempt_number}")
     )
@@ -390,7 +387,7 @@ class SemanticScholarSearchHandler(SearchHandler):
             if start_year:
                 ss_url += f"&year={start_year}-"
             
-            time.sleep(5)  # Increased delay to avoid rate limit
+            time.sleep(10)
             headers = {'User-Agent': random.choice(USER_AGENTS)}
             api_key = os.environ.get('SEMANTIC_SCHOLAR_API_KEY')
             if api_key:

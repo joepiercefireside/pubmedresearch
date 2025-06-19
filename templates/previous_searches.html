@@ -4,17 +4,6 @@
 <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
 <div class="container mt-4">
     <h2>Previous Searches</h2>
-    <form method="POST" action="{{ url_for('delete_search_history_endpoint') }}" class="mb-4">
-        <div class="form-group">
-            <label for="delete_period">Delete searches older than:</label>
-            <select class="form-control" id="delete_period" name="delete_period">
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-                <option value="annually">Annually</option>
-            </select>
-        </div>
-        <button type="submit" class="btn btn-danger mt-2">Delete</button>
-    </form>
     {% if searches %}
         <div class="table-responsive">
             <table class="table table-striped">
@@ -36,6 +25,9 @@
                             <td>{{ search.timestamp|datetimeformat }}</td>
                             <td>
                                 <a href="{{ url_for('search', query=search.query, prompt_text=search.prompt_text, sources=search.sources) }}" class="btn btn-primary btn-sm">Re-run</a>
+                                <form method="POST" action="{{ url_for('delete_single_search', search_id=search.id) }}" style="display:inline;">
+                                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this search?')">Delete</button>
+                                </form>
                             </td>
                         </tr>
                     {% endfor %}

@@ -146,7 +146,10 @@ def init_progress_db():
         cur.close()
         conn.close()
 
-init_progress_db()
+try:
+    init_progress_db()
+except Exception as e:
+    logger.error(f"Failed to initialize database at startup: {str(e)}")
 
 def update_search_progress(user_id, query, status):
     try:
@@ -159,6 +162,7 @@ def update_search_progress(user_id, query, status):
         conn.commit()
     except psycopg2.Error as e:
         logger.error(f"Error updating search progress: {str(e)}")
+        raise
     finally:
         cur.close()
         conn.close()
