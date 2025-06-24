@@ -1,179 +1,216 @@
-{% extends "base.html" %}
-{% block title %}Search{% endblock %}
-{% block content %}
-<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
-<style>
-    .spinner { display: none; }
-    .spinner.active { display: inline-block; animation: spin 1s linear infinite; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    #searchStatus { min-height: 1.5em; }
-    #chatButton { display: none; }
-</style>
-<div class="container">
-    <div class="well">
-        <h2>Search for Articles</h2>
-        <form id="searchForm" method="POST" action="{{ url_for('search') }}">
-            <div class="row">
-                <div class="col-md-12">
-                    <div class="form-inline mb-3">
-                        <div class="form-group mr-3">
-                            <label for="start_year" class="mr-2">Start Year</label>
-                            <input type="number" class="form-control" id="start_year" name="start_year" value="{{ start_year or '' }}" placeholder="e.g., 2015" style="width: 100px;">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search - AI Research Agent</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{{ url_for('search') }}">AI Research Agent</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item"><a class="nav-link active" href="{{ url_for('search') }}">Search</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('chat') }}">Chat</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('previous_searches') }}">Previous Searches</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('prompt') }}">Prompts</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('notifications') }}">Notifications</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('help') }}">Help</a></li>
+                </ul>
+                <span class="navbar-text text-light me-3">{{ username }}</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-outline-light">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-12">
+                <h2>Search for Articles</h2>
+                {% if error %}
+                    <div class="alert alert-danger" role="alert">{{ error }}</div>
+                {% endif %}
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+                <form method="POST" action="{{ url_for('search') }}" class="form-inline">
+                    <div class="row">
+                        <div class="col-md-3 mb-3">
+                            <label for="start_year" class="form-label">Start Year</label>
+                            <select class="form-control" id="start_year" name="start_year" aria-label="Start year">
+                                <option value="">Any</option>
+                                {% for year in range(current_year, 1900, -1) %}
+                                    <option value="{{ year }}" {{ 'selected' if year == start_year else '' }}>{{ year }}</option>
+                                {% endfor %}
+                            </select>
                         </div>
-                        <div class="form-group mr-3">
-                            <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
-                            <label class="form-check-label" for="search_older">Search Older Articles</label>
+                        <div class="col-md-3 mb-3">
+                            <div class="form-check mt-4">
+                                <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {{ 'checked' if search_older else '' }} aria-label="Search older articles">
+                                <label class="form-check-label" for="search_older">Search Older Articles</label>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label for="result_limit" class="mr-2">Limit Results:</label>
-                            <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
-                                <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
-                                <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                                <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
-                                <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                        <div class="col-md-3 mb-3">
+                            <label for="result_limit" class="form-label">Limit Results</label>
+                            <select class="form-control" id="result_limit" name="result_limit" aria-label="Limit results">
+                                <option value="10" {{ 'selected' if result_limit == 10 else '' }}>10</option>
+                                <option value="20" {{ 'selected' if result_limit == 20 else '' }}>20</option>
+                                <option value="50" {{ 'selected' if result_limit == 50 else '' }}>50</option>
+                                <option value="100" {{ 'selected' if result_limit == 100 else '' }}>100</option>
                             </select>
                         </div>
                     </div>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="query">Search Query</label>
-                <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
-            </div>
-            <div class="row">
-                <div class="col-md-4">
-                    <div class="form-group">
-                        <label for="prompt_id">Select Prompt</label>
-                        <select class="form-control" id="prompt_id" name="prompt_id">
-                            <option value="">No Prompt</option>
-                            {% for prompt in prompts %}
-                                <option value="{{ prompt.id }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-                <div class="col-md-8">
-                    <div class="form-group">
-                        <label for="prompt_text">Custom Prompt</label>
-                        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="3">{{ prompt_text|default('') }}</textarea>
-                    </div>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>Sources</label>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources %}checked{% endif %}>
-                    <label class="form-check-label" for="pubmed">PubMed</label>
-                </div>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources %}checked{% endif %}>
-                    <label class="form-check-label" for="googlescholar">Google Scholar</label>
-                </div>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources %}checked{% endif %}>
-                    <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="sort_by">Sort By</label>
-                <select class="form-control" id="sort_by" name="sort_by" style="width: 200px;">
-                    <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
-                    <option value="publication_date" {% if sort_by == 'publication_date' %}selected{% endif %}>Publication Date</option>
-                </select>
-            </div>
-            <button type="submit" class="btn btn-primary">Search</button>
-        </form>
-        {% if error %}
-            <div class="alert alert-danger mt-3">{{ error }}</div>
-        {% endif %}
-        <div id="searchStatus" class="mt-3">
-            <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
-        </div>
-        <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
-    </div>
-    {% if results %}
-        <div class="mt-4">
-            <h3>Search Results</h3>
-            {% for source_id, source_results in results.items() %}
-                {% if source_results %}
-                    <h4>{{ source_id.capitalize() }} Results</h4>
-                    {% if source_id in prompt_outputs %}
-                        <div class="alert alert-info">
-                            <h5>Prompt Output</h5>
-                            <pre>{{ prompt_outputs[source_id] }}</pre>
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            <label for="query" class="form-label">Search Query</label>
+                            <input type="text" class="form-control" id="query" name="query" value="{{ query|default('') }}" placeholder="Enter search terms" required aria-label="Search query">
                         </div>
-                    {% endif %}
-                    <div class="table-responsive">
-                        <table class="table table-striped">
-                            <thead>
-                                <tr>
-                                    <th>Title</th>
-                                    <th>Authors</th>
-                                    <th>Journal</th>
-                                    <th>Date</th>
-                                    <th>Abstract</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for result in source_results %}
-                                    <tr>
-                                        <td><a href="{{ result.url }}" target="_blank" class="result-title">{{ result.title }}</a></td>
-                                        <td>{{ result.authors }}</td>
-                                        <td>{{ result.journal }}</td>
-                                        <td>{{ result.publication_date }}</td>
-                                        <td class="result-abstract">{{ result.abstract|truncate(200) }}</td>
-                                    </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
                     </div>
-                {% endif %}
-            {% endfor %}
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="prompt_id" class="form-label">Select Prompt</label>
+                            <select class="form-control" id="prompt_id" name="prompt_id" aria-label="Select prompt">
+                                <option value="">No Prompt</option>
+                                {% for prompt in prompts %}
+                                    <option value="{{ prompt.id }}" {{ 'selected' if prompt_id == prompt.id else '' }}>{{ prompt.prompt_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="prompt_text" class="form-label">Custom Prompt</label>
+                            <textarea class="form-control" id="prompt_text" name="prompt_text" rows="4" placeholder="Enter custom prompt" aria-label="Custom prompt">{{ prompt_text|default('') }}</textarea>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label">Sources</label>
+                            <div class="form-check form-check-inline">
+                                <input type="checkbox" class="form-check-input" id="source_pubmed" name="sources" value="pubmed" {{ 'checked' if 'pubmed' in sources_selected else '' }} aria-label="PubMed source">
+                                <label class="form-check-label" for="source_pubmed">PubMed</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input type="checkbox" class="form-check-input" id="source_googlescholar" name="sources" value="googlescholar" {{ 'checked' if 'googlescholar' in sources_selected else '' }} aria-label="Google Scholar source">
+                                <label class="form-check-label" for="source_googlescholar">Google Scholar</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input type="checkbox" class="form-check-input" id="source_semanticscholar" name="sources" value="semanticscholar" {{ 'checked' if 'semanticscholar' in sources_selected else '' }} aria-label="Semantic Scholar source">
+                                <label class="form-check-label" for="source_semanticscholar">Semantic Scholar</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            <label for="sort_by" class="form-label">Sort By</label>
+                            <select class="form-control" id="sort_by" name="sort_by" aria-label="Sort by">
+                                <option value="relevance" {{ 'selected' if sort_by == 'relevance' else '' }}>Relevance</option>
+                                <option value="date" {{ 'selected' if sort_by == 'date' else '' }}>Publication Date</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-12">
+                            <button type="submit" class="btn btn-primary" aria-label="Search">Search</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
         </div>
-    {% endif %}
-</div>
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const searchForm = document.getElementById('searchForm');
-        const statusText = document.getElementById('statusText');
-        const spinner = document.querySelector('.spinner');
-        const chatButton = document.getElementById('chatButton');
-        let searchId = localStorage.getItem('latestSearchId') || null;
 
-        if (searchId) {
-            chatButton.style.display = 'block';
-            chatButton.onclick = () => window.location.href = `/chat?search_id=${searchId}`;
-        }
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div id="progress-container"></div>
+                {% if sources %}
+                    <h3>Search Results</h3>
+                    {% for source in sources %}
+                        <h4>{{ source.name }} ({{ total_results[source.id] }} results)</h4>
+                        {% if source.summary and has_prompt %}
+                            <div class="card mb-3">
+                                <div class="card-body">
+                                    <h5 class="card-title">{{ source.name }} Summary</h5>
+                                    <div class="card-text">{{ source.summary | safe }}</div>
+                                </div>
+                            </div>
+                        {% endif %}
+                        {% if source.results.ranked %}
+                            <ul class="list-group mb-3">
+                                {% for result in source.results.ranked %}
+                                    <li class="list-group-item">
+                                        <strong><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></strong><br>
+                                        <small>{{ result.authors }} - {{ result.journal }} ({{ result.publication_date }})</small><br>
+                                        {{ result.abstract|truncate(500) }}
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                            {% set source_page = page[source.id] %}
+                            {% set source_total_pages = total_pages[source.id] %}
+                            {% if source_total_pages > 1 %}
+                                <nav aria-label="Page navigation for {{ source.name }}">
+                                    <ul class="pagination">
+                                        <li class="page-item {{ 'disabled' if source_page == 1 else '' }}">
+                                            <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, search_older=search_older, start_year=start_year, sort_by=sort_by, **{'page_' + source.id: source_page - 1 if source_page > 1 else 1}) }}" aria-label="Previous">
+                                                <span aria-hidden="true">&laquo;</span>
+                                            </a>
+                                        </li>
+                                        {% for p in range(1, source_total_pages + 1) %}
+                                            <li class="page-item {{ 'active' if p == source_page else '' }}">
+                                                <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, search_older=search_older, start_year=start_year, sort_by=sort_by, **{'page_' + source.id: p}) }}">{{ p }}</a>
+                                            </li>
+                                        {% endfor %}
+                                        <li class="page-item {{ 'disabled' if source_page == source_total_pages else '' }}">
+                                            <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, prompt_text=prompt_text, sources=sources_selected, search_older=search_older, start_year=start_year, sort_by=sort_by, **{'page_' + source.id: source_page + 1 if source_page < source_total_pages else source_total_pages}) }}" aria-label="Next">
+                                                <span aria-hidden="true">&raquo;</span>
+                                            </a>
+                                        </li>
+                                    </ul>
+                                </nav>
+                            {% endif %}
+                        {% endif %}
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
 
-        searchForm.addEventListener('submit', () => {
-            spinner.classList.add('active');
-            statusText.textContent = 'Starting search...';
-            localStorage.removeItem('latestSearchId');
-            chatButton.style.display = 'none';
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.querySelector('form');
+            form.addEventListener('submit', function() {
+                const progressContainer = document.getElementById('progress-container');
+                progressContainer.innerHTML = '<div class="alert alert-info" role="alert">Searching... Please wait.</div>';
+
+                const query = document.getElementById('query').value;
+                const eventSource = new EventSource(`/search_progress?query=${encodeURIComponent(query)}`);
+                
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    progressContainer.innerHTML = `<div class="alert alert-info" role="alert">${data.status}</div>`;
+                    if (data.status.startsWith('complete') || data.status.startsWith('error')) {
+                        eventSource.close();
+                        if (data.status.startsWith('complete')) {
+                            progressContainer.innerHTML = '<div class="alert alert-success" role="alert">Search completed.</div>';
+                        } else {
+                            progressContainer.innerHTML = `<div class="alert alert-danger" role="alert">${data.status}</div>`;
+                        }
+                    }
+                };
+
+                eventSource.onerror = function() {
+                    progressContainer.innerHTML = '<div class="alert alert-danger" role="alert">Error monitoring search progress.</div>';
+                    eventSource.close();
+                };
+            });
         });
-
-        const source = new EventSource(`/search_progress?query=${encodeURIComponent('{{ query or '' }}')}`);
-        source.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            statusText.textContent = data.status || 'Processing...';
-            if (data.status === 'complete' && data.search_id) {
-                spinner.classList.remove('active');
-                localStorage.setItem('latestSearchId', data.search_id);
-                chatButton.style.display = 'block';
-                chatButton.onclick = () => window.location.href = `/chat?search_id=${data.search_id}`;
-            }
-        };
-        source.onerror = () => {
-            spinner.classList.remove('active');
-            statusText.textContent = 'Error retrieving search progress';
-            source.close();
-        };
-
-        window.addEventListener('focus', () => {
-            if (localStorage.getItem('latestSearchId')) {
-                chatButton.style.display = 'block';
-            }
-        });
-    });
-</script>
-{% endblock %}
+    </script>
+</body>
+</html>

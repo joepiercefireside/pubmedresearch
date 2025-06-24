@@ -81,6 +81,28 @@ def get_db_connection():
         logger.error(f"Failed to connect to database: {str(e)}")
         raise
 
+def init_search_progress_table():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS search_progress (
+                user_id TEXT,
+                query TEXT DEFAULT '',
+                status TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                UNIQUE(user_id, query)
+            )
+        ''')
+        conn.commit()
+        logger.info("search_progress table initialized successfully")
+    except psycopg2.Error as e:
+        logger.error(f"Error initializing search_progress table: {str(e)}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
 def init_progress_db():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -148,6 +170,7 @@ def init_progress_db():
 
 try:
     init_progress_db()
+    init_search_progress_table()  # Ensure search_progress table exists
 except Exception as e:
     logger.error(f"Failed to initialize database at startup: {str(e)}")
 

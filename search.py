@@ -3,7 +3,7 @@ from flask_login import login_required, current_user
 import json
 import hashlib
 import time
-import sqlite3
+import psycopg2
 from datetime import datetime
 from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
 from core import app, logger, update_search_progress, query_grok_api, get_db_connection, get_cached_grok_response, cache_grok_response
@@ -75,12 +75,12 @@ def search_progress():
             try:
                 last_status = None
                 while True:
-                    conn = sqlite3.connect('search_progress.db')
-                    c = conn.cursor()
+                    conn = get_db_connection()
+                    cur = conn.cursor()
                     try:
-                        c.execute("SELECT status, timestamp FROM search_progress WHERE user_id = ? AND query = ? ORDER BY timestamp DESC LIMIT 1",
-                                  (user_id, query))
-                        result = c.fetchone()
+                        cur.execute("SELECT status, timestamp FROM search_progress WHERE user_id = %s AND query = %s ORDER BY timestamp DESC LIMIT 1",
+                                    (user_id, query))
+                        result = cur.fetchone()
                         if result and result[0] != last_status:
                             escaped_status = result[0].replace('"', '\\"')
                             yield f'data: {{"status": "{escaped_status}"}}\n\n'
@@ -88,13 +88,13 @@ def search_progress():
                             last_status = result[0]
                         if result and result[0].startswith(("complete", "error")):
                             break
-                    except sqlite3.Error as e:
+                    except psycopg2.Error as e:
                         logger.error(f"Error in search_progress: {str(e)}")
                         escaped_error = str(e).replace('"', '\\"')
                         yield f'data: {{"status": "error: {escaped_error}"}}\n\n'
                         break
                     finally:
-                        c.close()
+                        cur.close()
                         conn.close()
                     time.sleep(0.2)  # Faster polling for real-time updates
             except Exception as e:
