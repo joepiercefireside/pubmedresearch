@@ -12,7 +12,7 @@
     .disabled-dropdown { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
     .disabled-dropdown option { color: #6c757d; }
     .search-controls .form-check-inline { margin-right: 15px; }
-    .search-controls .form-group { margin-bottom: 0; }
+    .search-controls .form-group { margin-bottom: 0; display: flex; align-items: center; }
 </style>
 <div class="container">
     <div class="well">
@@ -198,9 +198,10 @@
         }
 
         function toggleStartYear() {
-            startYearGroup.style.display = searchOlder.checked ? 'inline-block' : 'none';
-            startYearSelect.disabled = !searchOlder.checked;
-            if (!searchOlder.checked) {
+            const isChecked = searchOlder.checked;
+            startYearGroup.style.display = isChecked ? 'inline-block' : 'none';
+            startYearSelect.disabled = !isChecked;
+            if (!isChecked) {
                 startYearSelect.classList.add('disabled-dropdown');
             } else {
                 startYearSelect.classList.remove('disabled-dropdown');
