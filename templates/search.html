@@ -9,6 +9,8 @@
     #searchStatus { min-height: 1.5em; }
     #chatButton { display: none; }
     .nav-tabs { margin-top: 20px; }
+    .disabled-dropdown { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
+    .disabled-dropdown option { color: #6c757d; }
 </style>
 <div class="container">
     <div class="well">
@@ -28,12 +30,12 @@
                 <div class="col-md-12">
                     <div class="form-inline mb-3">
                         <div class="form-group mr-3">
-                            <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
+                            <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
                             <label class="form-check-label" for="search_older">Search Older Articles</label>
                         </div>
-                        <div class="form-group mr-3" id="start_year_group" style="display: {% if search_older %}block{% else %}none{% endif %};">
+                        <div class="form-group mr-3" id="start_year_group" style="display: inline-block;">
                             <label for="start_year" class="mr-2">Start Year</label>
-                            <select class="form-control" id="start_year" name="start_year" style="width: 100px;">
+                            <select class="form-control {% if not search_older %}disabled-dropdown{% endif %}" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %} style="width: 100px;">
                                 <option value="">Any</option>
                                 {% for year in range(current_year, 1899, -1) %}
                                     <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
@@ -179,6 +181,7 @@
         const chatButton = document.getElementById('chatButton');
         const searchOlder = document.getElementById('search_older');
         const startYearGroup = document.getElementById('start_year_group');
+        const startYearSelect = document.getElementById('start_year');
         let searchId = localStorage.getItem('latestSearchId') || null;
 
         statusText.textContent = 'Ready to search...';
@@ -194,6 +197,16 @@
             }
         }
 
+        function toggleStartYear() {
+            startYearGroup.style.display = searchOlder.checked ? 'inline-block' : 'none';
+            startYearSelect.disabled = !searchOlder.checked;
+            if (!searchOlder.checked) {
+                startYearSelect.classList.add('disabled-dropdown');
+            } else {
+                startYearSelect.classList.remove('disabled-dropdown');
+            }
+        }
+
         if (searchId) {
             chatButton.style.display = 'block';
             chatButton.onclick = () => window.location.href = `/chat?search_id=${searchId}`;
@@ -206,9 +219,7 @@
             chatButton.style.display = 'none';
         });
 
-        searchOlder.addEventListener('change', () => {
-            startYearGroup.style.display = searchOlder.checked ? 'block' : 'none';
-        });
+        searchOlder.addEventListener('change', toggleStartYear);
 
         const query = encodeURIComponent('{{ query or '' }}');
         const source = new EventSource(`/search_progress?query=${query}`);
@@ -235,6 +246,7 @@
         });
 
         populatePromptText();
+        toggleStartYear(); // Initialize the state
     });
 </script>
 {% endblock %}
