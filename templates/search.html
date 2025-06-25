@@ -68,7 +68,7 @@
                         <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
                             <option value="">No Prompt</option>
                             {% for prompt in prompts %}
-                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -194,9 +194,11 @@
             const promptText = document.getElementById('prompt_text');
             const selectedOption = promptSelect.options[promptSelect.selectedIndex];
             if (selectedOption && selectedOption.dataset.text) {
-                promptText.value = selectedOption.dataset.text;
+                promptText.value = selectedOption.dataset.text || ''; // Ensure value is set even if empty
+                console.log('Prompt text populated:', selectedOption.dataset.text); // Debug log
             } else {
                 promptText.value = '';
+                console.log('No prompt text found'); // Debug log
             }
         }
 
@@ -205,6 +207,9 @@
             startYearGroup.style.display = isChecked ? 'inline-block' : 'none';
             startYearSelect.disabled = !isChecked;
             startYearSelect.classList.toggle('disabled-dropdown', !isChecked);
+            if (isChecked) {
+                startYearSelect.focus(); // Optional: Focus for user feedback
+            }
         }
 
         if (searchId) {
@@ -213,13 +218,13 @@
         }
 
         searchForm.addEventListener('submit', (event) => {
-            event.preventDefault(); // Debug: Prevent default to check form data
+            event.preventDefault(); // Temporary for debug
+            console.log('Form submitted:', new FormData(searchForm)); // Debug form data
             spinner.classList.add('active');
             statusText.textContent = 'Starting search...';
             localStorage.removeItem('latestSearchId');
             chatButton.style.display = 'none';
-            // Submit the form programmatically
-            searchForm.submit();
+            searchForm.submit(); // Programmatic submission
         });
 
         searchOlder.addEventListener('change', toggleStartYear);

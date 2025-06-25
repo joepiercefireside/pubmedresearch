@@ -14,7 +14,95 @@ import nltk
 from nltk.tokenize import sent_tokenize
 import mistune
 
-# ... (other existing code remains unchanged until the search function)
+def markdown_to_html(text):
+    return mistune.html(text)
+
+def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
+    if not results:
+        return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''}."
+    
+    summary_result_count = prompt_params.get('summary_result_count', 20) if prompt_params else 20
+    context_results = results[:min(summary_result_count, len(results))]
+    
+    if not context_results:
+        return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''} matching criteria."
+    
+    context = "\n".join([f"Source: {r.get('source_id', 'unknown')}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
+    
+    MAX_CONTEXT_LENGTH = 8000
+    if len(context) > MAX_CONTEXT_LENGTH:
+        context = context[:MAX_CONTEXT_LENGTH] + "... [truncated]"
+        logger.warning(f"Context truncated to {MAX_CONTEXT_LENGTH} characters for query: {query[:50]}...")
+    
+    try:
+        cache_key = hashlib.md5((query.lower().strip() + context + prompt_text).encode()).hexdigest()
+        cached_response = get_cached_grok_response(cache_key)
+        if cached_response:
+            output = cached_response
+        else:
+            strict_prompt = f"""
+{prompt_text}
+
+**Instructions**:
+- Provide the response in Markdown format.
+- Include hyperlinks to article URLs using [Article Title](URL).
+- Use bold (**text**) for key terms and bullet points for key findings where applicable.
+- Follow the prompt instructions for structure and content.
+"""
+            output = query_grok_api(strict_prompt, context)
+            logger.info(f"Raw Grok response for summary: {output[:200]}...")
+            cache_grok_response(cache_key, output)
+        
+        formatted_output = markdown_to_html(output)
+        logger.info(f"Generated prompt output: length={len(formatted_output)}, is_fallback: {is_fallback}")
+        return formatted_output
+    except Exception as e:
+        logger.error(f"Error generating AI summary: {str(e)}")
+        output = f"Fallback: Unable to generate AI summary due to error: {str(e)}. Top results include: " + "; ".join([f"[{r['title']}]({r['url']}) ({r['publication_date']})" for r in context_results[:3]])
+        formatted_output = markdown_to_html(output)
+        return formatted_output
+
+@app.route('/search_progress', methods=['GET'])
+@login_required
+def search_progress():
+    def stream_progress(user_id, query):
+        with app.app_context():
+            try:
+                last_status = None
+                while True:
+                    conn = get_db_connection()
+                    cur = conn.cursor()
+                    try:
+                        cur.execute("SELECT status, timestamp FROM search_progress WHERE user_id = %s AND query = %s ORDER BY timestamp DESC LIMIT 1",
+                                    (user_id, query))
+                        result = cur.fetchone()
+                        if result and result[0] != last_status:
+                            escaped_status = result[0].replace('"', '\\"')
+                            yield f'data: {{"status": "{escaped_status}"}}\n\n'
+                            logger.debug(f"Streamed status: {escaped_status}")
+                            last_status = result[0]
+                        if result and result[0].startswith(("complete", "error")):
+                            break
+                    except psycopg2.Error as e:
+                        logger.error(f"Error in search_progress: {str(e)}")
+                        escaped_error = str(e).replace('"', '\\"')
+                        yield f'data: {{"status": "error: {escaped_error}"}}\n\n'
+                        break
+                    finally:
+                        cur.close()
+                        conn.close()
+                    time.sleep(0.2)
+            except Exception as e:
+                logger.error(f"Error in search_progress stream: {str(e)}")
+                escaped_error = str(e).replace('"', '\\"')
+                yield f'data: {{"status": "error: {escaped_error}"}}\n\n'
+    
+    query = request.args.get('query', '')
+    response = Response(stream_progress(current_user.id, query), mimetype='text/event-stream')
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
+    return response
 
 @app.route('/search', methods=['GET', 'POST'])
 @login_required
@@ -33,10 +121,6 @@ def search():
     logger.info(f"Loaded prompts: {len(prompts)} prompts for user {current_user.id}")
     session.pop('latest_search_result_ids', None)
     
-    # Clear old session result_limit to avoid persistence issues
-    if 'result_limit' in session:
-        del session['result_limit']
-
     page = {source: int(request.args.get(f'page_{source}', 1)) for source in ['pubmed', 'googlescholar', 'semanticscholar']}
     per_page = 20
     sort_by = request.form.get('sort_by', request.args.get('sort_by', 'relevance'))
@@ -44,10 +128,8 @@ def search():
     prompt_text = request.form.get('prompt_text', request.args.get('prompt_text', ''))
     query = request.form.get('query', request.args.get('query', ''))
 
-    # Calculate current year once at the start
     current_year = datetime.now().year
 
-    # Log result_limit sources for debugging
     form_limit = request.form.get('result_limit')
     args_limit = request.args.get('result_limit')
     logger.debug(f"result_limit sources: form={form_limit}, args={args_limit}")
@@ -58,15 +140,14 @@ def search():
             result_limit = 20
     except ValueError:
         result_limit = 20
-    session['result_limit'] = str(result_limit)  # Save to session
+    session['result_limit'] = str(result_limit)
     logger.debug(f"Final result_limit: {result_limit}")
 
     search_older = request.form.get('search_older', 'off') == 'on' or request.args.get('search_older', 'False') == 'True'
     start_year = request.form.get('start_year', request.args.get('start_year', None))
 
-    # Adjusted start_year logic
     if not search_older:
-        start_year = current_year - 5  # Default to last 5 years
+        start_year = current_year - 5
     else:
         if start_year and start_year != "None":
             try:
@@ -104,7 +185,7 @@ def search():
     if request.method == 'POST' or (request.method == 'GET' and query and sources_selected):
         if not query:
             update_search_progress(current_user.id, query, "error: Query cannot be empty")
-            response = make_response(render_template('search.html', 
+            response = make_response(render_template('search.html',
                 current_year=current_year,
                 error="Query cannot be empty", prompts=prompts, prompt_id=prompt_id,
                 prompt_text=selected_prompt_text, sources=[], total_results={}, total_pages={}, page=page, per_page=per_page,
@@ -169,7 +250,7 @@ def search():
                 update_search_progress(current_user.id, query, f"Searching {handler.name}")
 
                 max_retries = 3
-                retry_delay = 5  # seconds
+                retry_delay = 5
                 for attempt in range(max_retries):
                     try:
                         primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int or current_year - 10, result_limit=result_limit)
@@ -261,15 +342,15 @@ def search():
 
             logger.debug("Rendering search template for POST/GET request")
             response = make_response(render_template(
-                'search.html', 
+                'search.html',
                 current_year=current_year,
                 sources=sources,
                 total_results=total_results,
                 total_pages=total_pages,
                 page=page,
                 per_page=per_page,
-                query=query, 
-                prompts=prompts, 
+                query=query,
+                prompts=prompts,
                 prompt_id=prompt_id,
                 prompt_text=selected_prompt_text,
                 summary_result_count=summary_result_count,
@@ -304,21 +385,21 @@ def search():
 
     logger.debug("Rendering search template for GET request")
     response = make_response(render_template(
-        'search.html', 
+        'search.html',
         current_year=current_year,
-        prompts=prompts, 
-        prompt_id=prompt_id, 
-        prompt_text=selected_prompt_text, 
+        prompts=prompts,
+        prompt_id=prompt_id,
+        prompt_text=selected_prompt_text,
         sources=[],
         total_results={},
         total_pages={},
         page=page,
         per_page=per_page,
-        username=current_user.email, 
-        has_prompt=bool(selected_prompt_text), 
-        prompt_params={}, 
-        summary_result_count=20, 
-        search_older=False, 
+        username=current_user.email,
+        has_prompt=bool(selected_prompt_text),
+        prompt_params={},
+        summary_result_count=20,
+        search_older=False,
         start_year=None,
         sort_by=sort_by,
         pubmed_results=[],
