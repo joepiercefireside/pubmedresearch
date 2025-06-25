@@ -11,19 +11,23 @@
     .nav-tabs { margin-top: 20px; }
     .disabled-dropdown { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
     .disabled-dropdown option { color: #6c757d; }
+    .search-controls .form-check-inline { margin-right: 15px; }
+    .search-controls .form-group { margin-bottom: 0; }
 </style>
 <div class="container">
     <div class="well">
-        <h2 class="d-inline-block">Search for Articles</h2>
-        <form id="searchForm" method="POST" action="{{ url_for('search') }}" class="form-inline">
-            <div class="form-group">
+        <div class="row align-items-center">
+            <div class="col-md-3">
+                <h2>Search for Articles</h2>
+            </div>
+            <div class="col-md-9 search-controls">
                 <div class="form-check-inline">
                     <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
                     <label class="form-check-label" for="search_older">Search Older Articles</label>
                 </div>
                 <div class="form-group" id="start_year_group">
                     <label for="start_year" class="mr-2">Start Year</label>
-                    <select class="form-control {% if not search_older %}disabled-dropdown{% endif %}" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %} style="width: 100px;">
+                    <select class="form-control {% if not search_older %}disabled-dropdown{% endif %}" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %} style="width: 100px; display: inline-block;">
                         <option value="">Any</option>
                         {% for year in range(current_year, 1899, -1) %}
                             <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
@@ -32,7 +36,7 @@
                 </div>
                 <div class="form-group">
                     <label for="result_limit" class="mr-2">Limit Results:</label>
-                    <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
+                    <select class="form-control" id="result_limit" name="result_limit" style="width: 100px; display: inline-block;">
                         <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
                         <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
                         <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
@@ -40,7 +44,7 @@
                     </select>
                 </div>
             </div>
-        </form>
+        </div>
         {% if error %}
             <div class="alert alert-danger mt-3">{{ error }}</div>
         {% endif %}
