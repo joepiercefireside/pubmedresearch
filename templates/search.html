@@ -11,10 +11,39 @@
     .nav-tabs { margin-top: 20px; }
     .disabled-dropdown { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
     .disabled-dropdown option { color: #6c757d; }
+    .form-inline .form-group { margin-right: 15px; display: flex; align-items: center; }
 </style>
 <div class="container">
     <div class="well">
-        <h2>Search for Articles</h2>
+        <h2 class="d-inline-block">Search for Articles</h2>
+        <div class="row">
+            <div class="col-md-12">
+                <form id="searchForm" method="POST" action="{{ url_for('search') }}" class="form-inline">
+                    <div class="form-group">
+                        <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
+                        <label class="form-check-label" for="search_older">Search Older Articles</label>
+                    </div>
+                    <div class="form-group" id="start_year_group">
+                        <label for="start_year" class="mr-2">Start Year</label>
+                        <select class="form-control {% if not search_older %}disabled-dropdown{% endif %}" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %} style="width: 100px;">
+                            <option value="">Any</option>
+                            {% for year in range(current_year, 1899, -1) %}
+                                <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="result_limit" class="mr-2">Limit Results:</label>
+                        <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
+                            <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                            <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                            <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
+                            <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                        </select>
+                    </div>
+                </form>
+            </div>
+        </div>
         {% if error %}
             <div class="alert alert-danger mt-3">{{ error }}</div>
         {% endif %}
@@ -25,82 +54,52 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        <form id="searchForm" method="POST" action="{{ url_for('search') }}">
-            <div class="row">
-                <div class="col-md-12">
-                    <div class="form-inline mb-3">
-                        <div class="form-group mr-3">
-                            <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
-                            <label class="form-check-label" for="search_older">Search Older Articles</label>
-                        </div>
-                        <div class="form-group mr-3" id="start_year_group" style="display: inline-block;">
-                            <label for="start_year" class="mr-2">Start Year</label>
-                            <select class="form-control {% if not search_older %}disabled-dropdown{% endif %}" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %} style="width: 100px;">
-                                <option value="">Any</option>
-                                {% for year in range(current_year, 1899, -1) %}
-                                    <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="result_limit" class="mr-2">Limit Results:</label>
-                            <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
-                                <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
-                                <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                                <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
-                                <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
-                            </select>
-                        </div>
-                    </div>
+        <div class="form-group">
+            <label for="query">Search Query</label>
+            <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
+        </div>
+        <div class="row">
+            <div class="col-md-4">
+                <div class="form-group">
+                    <label for="prompt_id">Select Prompt</label>
+                    <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
+                        <option value="">No Prompt</option>
+                        {% for prompt in prompts %}
+                            <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
             </div>
-            <div class="form-group">
-                <label for="query">Search Query</label>
-                <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
-            </div>
-            <div class="row">
-                <div class="col-md-4">
-                    <div class="form-group">
-                        <label for="prompt_id">Select Prompt</label>
-                        <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
-                            <option value="">No Prompt</option>
-                            {% for prompt in prompts %}
-                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-                <div class="col-md-8">
-                    <div class="form-group">
-                        <label for="prompt_text">Custom Prompt</label>
-                        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="3">{{ prompt_text|default('') }}</textarea>
-                    </div>
+            <div class="col-md-8">
+                <div class="form-group">
+                    <label for="prompt_text">Custom Prompt</label>
+                    <textarea class="form-control" id="prompt_text" name="prompt_text" rows="3">{{ prompt_text|default('') }}</textarea>
                 </div>
             </div>
-            <div class="form-group">
-                <label>Sources</label>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="pubmed">PubMed</label>
-                </div>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="googlescholar">Google Scholar</label>
-                </div>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
-                </div>
+        </div>
+        <div class="form-group">
+            <label>Sources</label>
+            <div class="form-check-inline">
+                <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
+                <label class="form-check-label" for="pubmed">PubMed</label>
             </div>
-            <div class="form-group">
-                <label for="sort_by">Sort By</label>
-                <select class="form-control" id="sort_by" name="sort_by" style="width: 200px;">
-                    <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
-                    <option value="publication_date" {% if sort_by == 'publication_date' %}selected{% endif %}>Publication Date</option>
-                </select>
+            <div class="form-check-inline">
+                <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
+                <label class="form-check-label" for="googlescholar">Google Scholar</label>
             </div>
-            <button type="submit" class="btn btn-primary">Search</button>
-        </form>
+            <div class="form-check-inline">
+                <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
+                <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="sort_by">Sort By</label>
+            <select class="form-control" id="sort_by" name="sort_by" style="width: 200px;">
+                <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
+                <option value="publication_date" {% if sort_by == 'publication_date' %}selected{% endif %}>Publication Date</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Search</button>
         <div id="searchStatus" class="mt-3">
             <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
         </div>
