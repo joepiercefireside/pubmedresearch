@@ -1,6 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Search{% endblock %}
 {% block content %}
+<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
+<style>
+    .spinner { display: none; }
+    .spinner.active { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    #searchStatus { min-height: 1.5em; }
+    #chatButton { display: none; }
+    .nav-tabs { margin-top: 20px; }
+    .disabled-dropdown { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
+    .disabled-dropdown option { color: #6c757d; }
+    .search-controls { display: flex; align-items: center; }
+    .search-controls .form-check-inline { margin-right: 15px; }
+    .search-controls .form-group { margin-bottom: 0; margin-right: 15px; }
+    .summary-card {
+        background-color: white;
+        padding: 15px;
+        margin-bottom: 15px;
+        border-radius: 6px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-left: 4px solid #00689b;
+        font-family: Arial, sans-serif;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+</style>
 <div class="container">
     <div class="well">
         <div class="row align-items-center">
@@ -91,7 +116,7 @@
             <button type="submit" class="btn btn-primary">Search</button>
         </form>
         <div id="searchStatus" class="mt-3">
-            <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
+            <span class="spinner">🔄</span> <span id="statusText"></span>
         </div>
         <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
     </div>
@@ -109,9 +134,9 @@
                     <div id="{{ source.id }}" class="tab-pane fade {% if loop.first %}show active{% endif %}">
                         <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
                         {% if source.summary and has_prompt %}
-                            <div class="alert alert-info">
+                            <div class="summary-card">
                                 <h5>{{ source.name }} Summary</h5>
-                                <pre>{{ source.summary|safe }}</pre>
+                                <div class="summary-text">{{ source.summary|safe }}</div>
                             </div>
                         {% endif %}
                         {% if source.results.ranked %}
