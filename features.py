@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
 from core import app, logger, update_search_progress, query_grok_api, scheduler, sg, generate_embedding, get_db_connection
-from search import save_search_results, get_search_results, rank_results
+from search import save_search_results, get_search_results, rank_results, markdown_to_html
 from prompt_utils import parse_prompt
 from auth import validate_user_email
 from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
@@ -405,6 +405,14 @@ def chat():
     search_id = request.args.get('search_id', session.get('selected_search_id', None))
     session['selected_search_id'] = search_id
     chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
+    chat_history = [
+        {
+            'message': msg['message'],
+            'is_user': msg['is_user'],
+            'timestamp': msg['timestamp'],
+            'html_message': markdown_to_html(msg['message']) if not msg['is_user'] else None
+        } for msg in chat_history
+    ]
     search_history = get_search_history(current_user.id, retention_hours / 24)
     
     if request.method == 'POST':
@@ -446,7 +454,7 @@ Answer the user's query based on the provided search results and chat history in
                     response = query_grok_api(system_prompt, full_context)
                     save_chat_message(current_user.id, session_id, response, False, search_id)
                     chat_history.append({'message': user_message, 'is_user': True, 'timestamp': time.time()})
-                    chat_history.append({'message': response, 'is_user': False, 'timestamp': time.time()})
+                    chat_history.append({'message': response, 'is_user': False, 'timestamp': time.time(), 'html_message': markdown_to_html(response)})
                 except Exception as e:
                     flash(f"Error generating chat response: {str(e)}", "error")
         
@@ -497,6 +505,7 @@ def chat_message():
         
         retention_hours = get_user_settings(current_user.id)
         chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
+        
         search_history = get_search_history(current_user.id, retention_hours / 24)
         
         search = next((s for s in search_history if str(s['id']) == str(search_id)), None)
@@ -555,9 +564,10 @@ Separate paragraphs with a blank line.
                     formatted_response += f"### {source_id.capitalize()} Summaries\n{summary}\n\n"
             response = formatted_response.strip() or response
         
+        html_response = markdown_to_html(response)
         save_chat_message(current_user.id, session_id, response, False, search_id)
         
-        return jsonify({'status': 'success', 'message': response})
+        return jsonify({'status': 'success', 'html_message': html_response})
     except Exception as e:
         logger.error(f"Error in chat_message: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
