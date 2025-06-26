@@ -10,7 +10,8 @@ from apscheduler.triggers.cron import CronTrigger
 import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
 from core import app, logger, update_search_progress, query_grok_api, scheduler, sg, generate_embedding, get_db_connection
-from search_utils import save_search_results, get_search_results, rank_results, markdown_to_htmlfrom prompt_utils import parse_prompt
+from search_utils import save_search_results, get_search_results, rank_results, markdown_to_html
+from prompt_utils import parse_prompt
 from auth import validate_user_email
 from utils import extract_keywords_and_date, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
 import numpy as np
