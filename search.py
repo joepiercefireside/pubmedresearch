@@ -12,10 +12,7 @@ from features import save_search_history
 from prompt_utils import parse_prompt
 import nltk
 from nltk.tokenize import sent_tokenize
-import mistune
-
-def markdown_to_html(text):
-    return mistune.html(text)
+from search_utils import markdown_to_html
 
 def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
     if not results:

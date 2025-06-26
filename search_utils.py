@@ -1,9 +1,12 @@
+import mistune
+from core import app, logger, query_grok_api, get_cached_grok_response, cache_grok_response, generate_embedding, get_cached_embedding, cache_embedding, get_db_connection
+import psycopg2
 import hashlib
 import json
 from datetime import datetime
-from scipy.spatial.distance import cosine
-from core import app, logger, query_grok_api, get_cached_grok_response, cache_grok_response, generate_embedding, get_cached_embedding, cache_embedding, get_db_connection
-import psycopg2
+
+def markdown_to_html(text):
+    return mistune.html(text)
 
 def save_search_results(user_id, query, results):
     conn = get_db_connection()
