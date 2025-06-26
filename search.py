@@ -97,8 +97,8 @@ def search_progress():
     query = request.args.get('query', '')
     response = Response(stream_progress(current_user.id, query), mimetype='text/event-stream')
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['Cache-Control'] = 'no-cache'
-    response.headers['Connection'] = 'keep-alive'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Access-Control-Allow-Origin'] = '*'  # Temporary CORS fix
     return response
 
 @app.route('/search', methods=['GET', 'POST'])
@@ -190,6 +190,7 @@ def search():
                 summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by,
                 pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
             response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             return response
 
         if not sources_selected:
@@ -202,6 +203,7 @@ def search():
                 summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by,
                 pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
             response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             return response
 
         update_search_progress(current_user.id, query, "Searching articles")
@@ -223,6 +225,7 @@ def search():
                     summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by,
                     pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
                 response.headers['X-Content-Type-Options'] = 'nosniff'
+                response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
                 return response
 
             prompt_params = parse_prompt(selected_prompt_text) or {}
@@ -370,6 +373,7 @@ def search():
                 result_limit=result_limit
             ))
             response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             return response
         except Exception as e:
             logger.error(f"API error in POST/GET: {str(e)}")
@@ -382,6 +386,7 @@ def search():
                 summary_result_count=20, search_older=search_older, start_year=start_year, sort_by=sort_by,
                 pubmed_results=[], pubmed_fallback_results=[], sources_selected=sources_selected, combined_summary='', result_limit=result_limit))
             response.headers['X-Content-Type-Options'] = 'nosniff'
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             return response
 
     logger.debug("Rendering search template for GET request")
@@ -412,4 +417,5 @@ def search():
         result_limit=result_limit
     ))
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     return response

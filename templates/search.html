@@ -11,6 +11,8 @@
     .search-controls { display: flex; align-items: center; }
     .search-controls .form-check-inline { margin-right: 15px; }
     .search-controls .form-group { margin-bottom: 0; margin-right: 15px; }
+    .disabled-dropdown { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
+    .disabled-dropdown option { color: #6c757d; }
 </style>
 <div class="container">
     <div class="well">
@@ -20,8 +22,8 @@
             </div>
             <div class="col-md-9 search-controls">
                 <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
-                    <label class="form-check-label" for="search_older">Search Older Articles</label>
+                    <input type="checkbox" class="form-check-input" id="search_older-checkbox" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
+                    <label class="form-check-label" for="search_older-checkbox">Search Older Articles</label>
                 </div>
                 <div class="form-group" id="start_year_group" style="display: {% if search_older %}inline-block{% else %}none{% endif %};">
                     <label for="start_year" class="mr-2">Start Year</label>
@@ -80,16 +82,16 @@
             <div class="form-group">
                 <label>Sources</label>
                 <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="pubmed">PubMed</label>
+                    <input type="checkbox" class="form-check-input" id="pubmed-checkbox" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="pubmed-checkbox">PubMed</label>
                 </div>
                 <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="googlescholar">Google Scholar</label>
+                    <input type="checkbox" class="form-check-input" id="googlescholar-checkbox" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="googlescholar-checkbox">Google Scholar</label>
                 </div>
                 <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
+                    <input type="checkbox" class="form-check-input" id="semanticscholar-checkbox" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="semanticscholar-checkbox">Semantic Scholar</label>
                 </div>
             </div>
             <div class="form-group">
@@ -111,13 +113,13 @@
             <ul class="nav nav-tabs" id="resultTabs">
                 {% for source in sources %}
                     <li class="nav-item">
-                        <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}">{{ source.name }} ({{ total_results[source.id] }})</a>
+                        <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}-tab">{{ source.name }} ({{ total_results[source.id] }})</a>
                     </li>
                 {% endfor %}
             </ul>
             <div class="tab-content">
                 {% for source in sources %}
-                    <div id="{{ source.id }}" class="tab-pane fade {% if loop.first %}show active{% endif %}">
+                    <div id="{{ source.id }}-tab" class="tab-pane fade {% if loop.first %}show active{% endif %}">
                         <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
                         {% if source.summary and has_prompt %}
                             <div class="summary-card">
@@ -181,7 +183,7 @@
         const statusText = document.getElementById('statusText');
         const spinner = document.querySelector('.spinner');
         const chatButton = document.getElementById('chatButton');
-        const searchOlder = document.getElementById('search_older');
+        const searchOlder = document.getElementById('search_older-checkbox');
         const startYearGroup = document.getElementById('start_year_group');
         const startYearSelect = document.getElementById('start_year');
         let searchId = localStorage.getItem('latestSearchId') || null;
@@ -192,13 +194,13 @@
             const promptSelect = document.getElementById('prompt_id');
             const promptText = document.getElementById('prompt_text');
             const selectedOption = promptSelect.options[promptSelect.selectedIndex];
-            console.log('populatePromptText called, selectedOption:', selectedOption);
+            console.log('populatePromptText called, selectedOption:', selectedOption, 'prompt_id:', promptSelect.value);
             if (selectedOption && selectedOption.dataset.text) {
                 promptText.value = selectedOption.dataset.text || '';
                 console.log('Prompt text set to:', selectedOption.dataset.text);
             } else {
                 promptText.value = '';
-                console.log('No data-text or selected option');
+                console.log('No data-text or selected option, prompt_id:', promptSelect.value);
             }
         }
 
@@ -242,17 +244,33 @@
                 chatButton.onclick = () => window.location.href = `/chat?search_id=${data.search_id}`;
             }
         };
-        source.onerror = () => {
+        source.onerror = (e) => {
+            console.error('EventSource error:', e);
             spinner.classList.remove('active');
-            statusText.textContent = 'Waiting for search progress...';
+            statusText.textContent = 'Error fetching search progress, retrying...';
+            // Fallback polling
+            setTimeout(() => {
+                fetch(`/search_progress?query=${query}`)
+                    .then(response => response.text())
+                    .then(text => {
+                        const data = JSON.parse(text);
+                        if (data.status) statusText.textContent = data.status;
+                    })
+                    .catch(err => console.error('Polling error:', err));
+            }, 1000);
             source.close();
         };
 
-        // Initialize Bootstrap tabs
+        // Initialize Bootstrap tabs with unique IDs
         $('#resultTabs a').on('click', function (e) {
             e.preventDefault();
             $(this).tab('show');
+            console.log('Tab clicked:', $(this).attr('href'));
         });
+
+        // Verify jQuery and Bootstrap
+        console.log('jQuery version:', $.fn.jquery);
+        console.log('Bootstrap version:', $.fn.modal.Constructor.VERSION);
 
         window.addEventListener('focus', () => {
             if (localStorage.getItem('latestSearchId')) {
