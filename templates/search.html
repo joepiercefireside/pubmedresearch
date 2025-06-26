@@ -14,6 +14,17 @@
     .search-controls { display: flex; align-items: center; }
     .search-controls .form-check-inline { margin-right: 15px; }
     .search-controls .form-group { margin-bottom: 0; margin-right: 15px; }
+    .summary-card {
+        background-color: white;
+        padding: 15px;
+        margin-bottom: 15px;
+        border-radius: 6px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border-left: 4px solid #00689b;
+        font-family: Arial, sans-serif;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
 </style>
 <div class="container">
     <div class="well">
@@ -105,13 +116,13 @@
             <button type="submit" class="btn btn-primary">Search</button>
         </form>
         <div id="searchStatus" class="mt-3">
-            <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
+            <span class="spinner">🔄</span> <span id="statusText"></span>
         </div>
         <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
     </div>
     {% if sources %}
         <div class="mt-4">
-            <ul class="nav nav-tabs">
+            <ul class="nav nav-tabs" id="resultTabs">
                 {% for source in sources %}
                     <li class="nav-item">
                         <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}">{{ source.name }} ({{ total_results[source.id] }})</a>
@@ -123,9 +134,9 @@
                     <div id="{{ source.id }}" class="tab-pane fade {% if loop.first %}show active{% endif %}">
                         <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
                         {% if source.summary and has_prompt %}
-                            <div class="alert alert-info">
+                            <div class="summary-card">
                                 <h5>{{ source.name }} Summary</h5>
-                                <pre>{{ source.summary|safe }}</pre>
+                                <div class="summary-text">{{ source.summary|safe }}</div>
                             </div>
                         {% endif %}
                         {% if source.results.ranked %}
@@ -176,6 +187,8 @@
         </div>
     {% endif %}
 </div>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         const searchForm = document.getElementById('searchForm');
@@ -187,18 +200,19 @@
         const startYearSelect = document.getElementById('start_year');
         let searchId = localStorage.getItem('latestSearchId') || null;
 
-        statusText.textContent = 'Ready to search...';
+        statusText.textContent = '';
 
         function populatePromptText() {
             const promptSelect = document.getElementById('prompt_id');
             const promptText = document.getElementById('prompt_text');
             const selectedOption = promptSelect.options[promptSelect.selectedIndex];
+            console.log('Selected option:', selectedOption); // Debug
             if (selectedOption && selectedOption.dataset.text) {
-                promptText.value = selectedOption.dataset.text || ''; // Ensure value is set even if empty
-                console.log('Prompt text populated:', selectedOption.dataset.text); // Debug log
+                promptText.value = selectedOption.dataset.text || '';
+                console.log('Prompt text set to:', selectedOption.dataset.text); // Debug
             } else {
                 promptText.value = '';
-                console.log('No prompt text found'); // Debug log
+                console.log('No prompt text available'); // Debug
             }
         }
 
@@ -207,9 +221,7 @@
             startYearGroup.style.display = isChecked ? 'inline-block' : 'none';
             startYearSelect.disabled = !isChecked;
             startYearSelect.classList.toggle('disabled-dropdown', !isChecked);
-            if (isChecked) {
-                startYearSelect.focus(); // Optional: Focus for user feedback
-            }
+            if (isChecked) startYearSelect.focus();
         }
 
         if (searchId) {
@@ -219,12 +231,12 @@
 
         searchForm.addEventListener('submit', (event) => {
             event.preventDefault(); // Temporary for debug
-            console.log('Form submitted:', new FormData(searchForm)); // Debug form data
+            console.log('Form data:', new FormData(searchForm)); // Debug
             spinner.classList.add('active');
             statusText.textContent = 'Starting search...';
             localStorage.removeItem('latestSearchId');
             chatButton.style.display = 'none';
-            searchForm.submit(); // Programmatic submission
+            searchForm.submit();
         });
 
         searchOlder.addEventListener('change', toggleStartYear);
@@ -233,7 +245,10 @@
         const source = new EventSource(`/search_progress?query=${query}`);
         source.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            statusText.textContent = data.status || 'Processing...';
+            if (data.status) {
+                statusText.textContent = data.status; // Update with each status
+                console.log('Received status:', data.status); // Debug
+            }
             if (data.status === 'complete' && data.search_id) {
                 spinner.classList.remove('active');
                 localStorage.setItem('latestSearchId', data.search_id);
@@ -247,6 +262,12 @@
             source.close();
         };
 
+        // Initialize Bootstrap tabs
+        $('#resultTabs a').on('click', function (e) {
+            e.preventDefault();
+            $(this).tab('show');
+        });
+
         window.addEventListener('focus', () => {
             if (localStorage.getItem('latestSearchId')) {
                 chatButton.style.display = 'block';
@@ -254,7 +275,7 @@
         });
 
         populatePromptText();
-        toggleStartYear(); // Initialize the state
+        toggleStartYear();
     });
 </script>
 {% endblock %}

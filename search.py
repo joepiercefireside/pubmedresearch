@@ -78,7 +78,7 @@ def search_progress():
                         result = cur.fetchone()
                         if result and result[0] != last_status:
                             escaped_status = result[0].replace('"', '\\"')
-                            yield f'data: {{"status": "{escaped_status}"}}\n\n'
+                            yield f'data: {{"status": "{escaped_status}", "search_id": "{hashlib.sha256((query + str(time.time())).encode()).hexdigest()[:16]}"}}\n\n'
                             logger.debug(f"Streamed status: {escaped_status}")
                             last_status = result[0]
                         if result and result[0].startswith(("complete", "error")):
@@ -259,6 +259,10 @@ def search():
                         if attempt < max_retries - 1 and "429" in str(e):
                             logger.warning(f"Rate limit hit for {handler.name}, retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
                             time.sleep(retry_delay)
+                            if source_id == 'semanticscholar' and 'SEMANTIC_SCHOLAR_API_KEY' not in os.environ:
+                                logger.warning("SEMANTIC_SCHOLAR_API_KEY not set, skipping Semantic Scholar")
+                                primary_results = fallback_results = []
+                                break
                             continue
                         raise
 

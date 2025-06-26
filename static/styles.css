@@ -246,11 +246,31 @@ h1, h2, h3, h5, h6 {
 .result-abstract {
     color: #333;
     margin: 10px 0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .result-meta {
     color: #666;
     font-size: 0.9em;
+}
+
+/* Summary Styles */
+.summary-card {
+    background-color: white;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-left: 4px solid #00689b;
+    font-family: Arial, sans-serif;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.summary-text {
+    margin-top: 10px;
+    line-height: 1.5;
 }
 
 /* Alerts */
