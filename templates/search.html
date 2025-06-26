@@ -1,235 +1,254 @@
 {% extends "base.html" %}
 {% block title %}Search{% endblock %}
 {% block content %}
-    <div class="container">
-        <form id="searchForm" method="POST" action="/search">
-            <div class="card">
-                <div class="card-header">Search for Articles</div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label for="query">Search Query</label>
-                        <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
-                    </div>
+<div class="container">
+    <div class="well">
+        <div class="row align-items-center">
+            <div class="col-md-3">
+                <h2>Search for Articles</h2>
+            </div>
+            <div class="col-md-9 search-controls">
+                <div class="form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
+                    <label class="form-check-label" for="search_older">Search Older Articles</label>
+                </div>
+                <div class="form-group" id="start_year_group">
+                    <label for="start_year" class="mr-2">Start Year</label>
+                    <select class="form-control {% if not search_older %}disabled-dropdown{% endif %}" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %} style="width: 100px;">
+                        <option value="">Any</option>
+                        {% for year in range(current_year, 1899, -1) %}
+                            <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="result_limit" class="mr-2">Limit Results:</label>
+                    <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
+                        <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
+                        <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
+                        <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
+                        <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <form id="searchForm" method="POST" action="{{ url_for('search') }}">
+            {% if error %}
+                <div class="alert alert-danger mt-3">{{ error }}</div>
+            {% endif %}
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} mt-3">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            <div class="form-group">
+                <label for="query">Search Query</label>
+                <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
+            </div>
+            <div class="row">
+                <div class="col-md-4">
                     <div class="form-group">
                         <label for="prompt_id">Select Prompt</label>
                         <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
                             <option value="">No Prompt</option>
                             {% for prompt in prompts %}
-                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt.id == prompt_id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
                             {% endfor %}
                         </select>
                     </div>
+                </div>
+                <div class="col-md-8">
                     <div class="form-group">
                         <label for="prompt_text">Custom Prompt</label>
                         <textarea class="form-control" id="prompt_text" name="prompt_text" rows="3">{{ prompt_text|default('') }}</textarea>
                     </div>
-                    <div class="form-group">
-                        <label>Sources</label>
-                        <div class="form-check-inline">
-                            <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
-                            <label class="form-check-label" for="pubmed">PubMed</label>
-                        </div>
-                        <div class="form-check-inline">
-                            <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
-                            <label class="form-check-label" for="googlescholar">Google Scholar</label>
-                        </div>
-                        <div class="form-check-inline">
-                            <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
-                            <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <div class="form-check-inline">
-                            <input type="checkbox" class="form-check-input" id="search_older" name="search_older" {% if search_older %}checked{% endif %}>
-                            <label class="form-check-label" for="search_older">Search Older Articles</label>
-                        </div>
-                        <div id="start_year_group" style="display: {% if search_older %}inline-block{% else %}none{% endif %};">
-                            <label for="start_year">Start Year</label>
-                            <select class="form-control" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %}>
-                                <option value="">Any</option>
-                                {% for year in range(current_year, 1899, -1) %}
-                                    <option value="{{ year }}" {% if year == start_year|int %}selected{% endif %}>{{ year }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="result_limit">Limit Results:</label>
-                        <select class="form-control" id="result_limit" name="result_limit">
-                            <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
-                            <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                            <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
-                            <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="sort_by">Sort By</label>
-                        <select class="form-control" id="sort_by" name="sort_by">
-                            <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
-                            <option value="publication_date" {% if sort_by == 'publication_date' %}selected{% endif %}>Publication Date</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Search</button>
                 </div>
             </div>
+            <div class="form-group">
+                <label>Sources</label>
+                <div class="form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="pubmed" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="pubmed">PubMed</label>
+                </div>
+                <div class="form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="googlescholar" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="googlescholar">Google Scholar</label>
+                </div>
+                <div class="form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="semanticscholar" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
+                    <label class="form-check-label" for="semanticscholar">Semantic Scholar</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="sort_by">Sort By</label>
+                <select class="form-control" id="sort_by" name="sort_by" style="width: 200px;">
+                    <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
+                    <option value="publication_date" {% if sort_by == 'publication_date' %}selected{% endif %}>Publication Date</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Search</button>
         </form>
-        <div id="statusText"></div>
-        <div class="spinner" style="display: none;">🔄</div>
-        <button id="chatButton" class="btn btn-primary" style="display: none;">Chat with Results</button>
-        {% if error %}
-            <div class="alert alert-danger">{{ error }}</div>
-        {% endif %}
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        {% if sources %}
-            <div class="mt-4">
-                <ul class="nav nav-tabs" id="resultTabs">
-                    {% for source in sources %}
-                        <li class="nav-item">
-                            <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}">{{ source.name }} ({{ total_results[source.id] }})</a>
-                        </li>
-                    {% endfor %}
-                </ul>
-                <div class="tab-content">
-                    {% for source in sources %}
-                        <div id="{{ source.id }}" class="tab-pane fade {% if loop.first %}show active{% endif %}">
-                            <p>Found {{ total_results[source.id]|default(0) }} results</p>
-                            {% if source.summary and has_prompt %}
-                                <div class="summary-card">
-                                    <h3>{{ source.name }} Summary</h3>
-                                    <div class="summary-text">{{ source.summary|safe }}</div>
-                                </div>
-                            {% endif %}
-                            {% if source.results.ranked %}
-                                <h5>Top Ranked Results</h5>
-                                {% for result in source.results.ranked %}
-                                    <div class="result-card">
-                                        <div class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></div>
-                                        <div class="result-abstract">{{ result.abstract|truncate(500) }}</div>
-                                        <div class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</div>
-                                    </div>
-                                {% endfor %}
-                            {% endif %}
-                            {% if source.results.all %}
-                                <h5>All Results</h5>
-                                {% for result in source.results.all %}
-                                    <div class="result-card">
-                                        <div class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></div>
-                                        <div class="result-abstract">{{ result.abstract|truncate(500) }}</div>
-                                        <div class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</div>
-                                    </div>
-                                {% endfor %}
-                            {% endif %}
-                            {% if source.results.fallback %}
-                                <h5>Fallback Results</h5>
-                                {% for result in source.results.fallback %}
-                                    <div class="result-card">
-                                        <div class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></div>
-                                        <div class="result-abstract">{{ result.abstract|truncate(500) }}</div>
-                                        <div class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</div>
-                                    </div>
-                                {% endfor %}
-                            {% endif %}
-                            {% if total_results[source.id] > per_page %}
-                                <nav class="pagination">
-                                    <ul class="pagination">
-                                        {% for p in range(1, total_pages[source.id] + 1) %}
-                                            {% set new_page = dict(page, **{source.id: p}) %}
-                                            <li class="page-item {% if p == page[source.id] %}active{% endif %}">
-                                                <a class="page-link" href="{{ url_for('search', query=query, sources=sources_selected, sort_by=sort_by, prompt_id=prompt_id, prompt_text=prompt_text, search_older=search_older, start_year=start_year, result_limit=result_limit, **{'page_' + source.id: p}) }}">{{ p }}</a>
-                                            </li>
-                                        {% endfor %}
-                                    </ul>
-                                </nav>
-                            {% endif %}
-                        </div>
-                    {% endfor %}
-                </div>
-            </div>
-        {% endif %}
+        <div id="searchStatus" class="mt-3">
+            <span class="spinner">🔄</span> <span id="statusText">Ready to search...</span>
+        </div>
+        <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
     </div>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            const searchForm = document.getElementById('searchForm');
-            const statusText = document.getElementById('statusText');
-            const spinner = document.querySelector('.spinner');
-            const chatButton = document.getElementById('chatButton');
-            const searchOlder = document.getElementById('search_older');
-            const startYearGroup = document.getElementById('start_year_group');
-            const startYearSelect = document.getElementById('start_year');
-            let searchId = localStorage.getItem('latestSearchId') || null;
-            statusText.textContent = '';
-            function populatePromptText() {
-                console.log('populatePromptText called');
-                const promptSelect = document.getElementById('prompt_id');
-                const promptText = document.getElementById('prompt_text');
-                const selectedOption = promptSelect.options[promptSelect.selectedIndex];
-                console.log('selectedOption:', selectedOption);
-                if (selectedOption) {
-                    const dataText = selectedOption.dataset.text || '';
-                    console.log('data-text:', dataText);
-                    promptText.value = dataText;
-                    console.log('promptText.value set to:', dataText);
-                } else {
-                    promptText.value = '';
-                    console.log('No selected option');
-                }
+    {% if sources %}
+        <div class="mt-4">
+            <ul class="nav nav-tabs" id="resultTabs">
+                {% for source in sources %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}">{{ source.name }} ({{ total_results[source.id] }})</a>
+                    </li>
+                {% endfor %}
+            </ul>
+            <div class="tab-content">
+                {% for source in sources %}
+                    <div id="{{ source.id }}" class="tab-pane fade {% if loop.first %}show active{% endif %}">
+                        <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
+                        {% if source.summary and has_prompt %}
+                            <div class="alert alert-info">
+                                <h5>{{ source.name }} Summary</h5>
+                                <pre>{{ source.summary|safe }}</pre>
+                            </div>
+                        {% endif %}
+                        {% if source.results.ranked %}
+                            <h5>Top Ranked Results</h5>
+                            {% for result in source.results.ranked %}
+                                <div class="result-card">
+                                    <h6 class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h6>
+                                    <p class="result-abstract">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</p>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                        {% if source.results.all %}
+                            <h5>All Results</h5>
+                            {% for result in source.results.all %}
+                                <div class="result-card">
+                                    <h6 class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h6>
+                                    <p class="result-abstract">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</p>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                        {% if source.results.fallback %}
+                            <h5>Fallback Results</h5>
+                            {% for result in source.results.fallback %}
+                                <div class="result-card">
+                                    <h6 class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h6>
+                                    <p class="result-abstract">{{ result.abstract|truncate(500) }}</p>
+                                    <p class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</p>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                        {% if total_results[source.id] > per_page %}
+                            <nav aria-label="Page navigation">
+                                <ul class="pagination">
+                                    {% for p in range(1, total_pages[source.id] + 1) %}
+                                        {% set new_page = dict(page, **{source.id: p}) %}
+                                        <li class="page-item {% if p == page[source.id] %}active{% endif %}">
+                                            <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, sources=sources_selected, **new_page) }}">{{ p }}</a>
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            </nav>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+</div>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const searchForm = document.getElementById('searchForm');
+        const statusText = document.getElementById('statusText');
+        const spinner = document.querySelector('.spinner');
+        const chatButton = document.getElementById('chatButton');
+        const searchOlder = document.getElementById('search_older');
+        const startYearGroup = document.getElementById('start_year_group');
+        const startYearSelect = document.getElementById('start_year');
+        let searchId = localStorage.getItem('latestSearchId') || null;
+
+        function populatePromptText() {
+            const promptSelect = document.getElementById('prompt_id');
+            const promptText = document.getElementById('prompt_text');
+            const selectedOption = promptSelect.options[promptSelect.selectedIndex];
+            console.log('populatePromptText called, selectedOption:', selectedOption);
+            if (selectedOption && selectedOption.dataset.text) {
+                promptText.value = selectedOption.dataset.text || '';
+                console.log('Prompt text set to:', selectedOption.dataset.text);
+            } else {
+                promptText.value = '';
+                console.log('No data-text or selected option');
             }
-            function toggleStartYear() {
-                const isChecked = searchOlder.checked;
-                startYearGroup.style.display = isChecked ? 'inline-block' : 'none';
-                startYearSelect.disabled = !isChecked;
-                startYearSelect.classList.toggle('disabled-dropdown', !isChecked);
-                if (isChecked) startYearSelect.focus();
-            }
-            if (searchId) {
-                chatButton.style.display = 'block';
-                chatButton.onclick = () => window.location.href = `/chat?search_id=${searchId}`;
-            }
-            searchForm.addEventListener('submit', (event) => asin {
-                event.preventDefault();
-                console.log('Form data:', new FormData(searchForm));
-                spinner.classList.add('active');
-                statusText.textContent = 'Starting search...';
-                localStorage.removeItem('latestSearchId');
-                chatButton.style.display = 'none';
-                searchForm.submit();
-            });
-            searchOlder.addEventListener('change', toggleStartYear);
-            const query = encodeURIComponent('{{ query or '' }}');
-            const source = new EventSource(`/search_progress?query=${query}`);
-            source.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.status) {
-                    statusText.textContent = data.status;
-                    console.log('Received status:', data.status);
-                }
-                if (data.status === 'complete' && data.search_id) {
-                    spinner.classList.remove('active');
-                    localStorage.setItem('latestSearchId', data.search_id);
-                    chatButton.style.display = 'block';
-                    chatButton.onclick = () => window.location.href = `/chat?search_id=${data.search_id}`;
-                }
-            };
-            source.onerror = () => {
-                spinner.classList.remove('active');
-                statusText.textContent = 'Waiting for search progress...';
-                source.close();
-            };
-            window.addEventListener('focus', () => {
-                if (localStorage.getItem('latestSearchId')) {
-                    chatButton.style.display = 'block';
-                }
-            });
-            populatePromptText();
-            toggleStartYear();
+        }
+
+        function toggleStartYear() {
+            const isChecked = searchOlder.checked;
+            startYearGroup.style.display = isChecked ? 'inline-block' : 'none';
+            startYearSelect.disabled = !isChecked;
+            startYearSelect.classList.toggle('disabled-dropdown', !isChecked);
+            if (isChecked) startYearSelect.focus();
+        }
+
+        if (searchId) {
+            chatButton.style.display = 'block';
+            chatButton.onclick = () => window.location.href = `/chat?search_id=${searchId}`;
+        }
+
+        searchForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            console.log('Form submitted with data:', new FormData(searchForm));
+            spinner.classList.add('active');
+            statusText.textContent = 'Starting search...';
+            localStorage.removeItem('latestSearchId');
+            chatButton.style.display = 'none';
+            searchForm.submit();
         });
-    </script>
+
+        searchOlder.addEventListener('change', toggleStartYear);
+
+        const query = encodeURIComponent('{{ query or '' }}');
+        const source = new EventSource(`/search_progress?query=${query}`);
+        source.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.status) {
+                statusText.textContent = data.status;
+                console.log('Received status:', data.status);
+            }
+            if (data.status === 'complete' && data.search_id) {
+                spinner.classList.remove('active');
+                localStorage.setItem('latestSearchId', data.search_id);
+                chatButton.style.display = 'block';
+                chatButton.onclick = () => window.location.href = `/chat?search_id=${data.search_id}`;
+            }
+        };
+        source.onerror = () => {
+            spinner.classList.remove('active');
+            statusText.textContent = 'Waiting for search progress...';
+            source.close();
+        };
+
+        // Initialize Bootstrap tabs
+        $('#resultTabs a').on('click', function (e) {
+            e.preventDefault();
+            $(this).tab('show');
+        });
+
+        window.addEventListener('focus', () => {
+            if (localStorage.getItem('latestSearchId')) {
+                chatButton.style.display = 'block';
+            }
+        });
+
+        populatePromptText();
+        toggleStartYear();
+    });
+</script>
 {% endblock %}
