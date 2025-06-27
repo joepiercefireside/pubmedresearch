@@ -1,180 +1,232 @@
 {% extends "base.html" %}
 {% block title %}Search{% endblock %}
 {% block content %}
-<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
-<style>
-    .spinner { display: none; }
-    .spinner.active { display: inline-block; animation: spin 1s linear infinite; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    #searchStatus { min-height: 1.5em; }
-    #chatButton { display: none; }
-    .search-controls { display: flex; align-items: center; }
-    .search-controls .form-check-inline { margin-right: 15px; }
-    .search-controls .form-group { margin-bottom: 0; margin-right: 15px; }
-    .disabled-dropdown { background-color: #e9ecef; color: #6c757d; cursor: not-allowed; }
-    .disabled-dropdown option { color: #6c757d; }
-</style>
-<div class="container">
-    <div class="well">
-        <div class="row align-items-center">
-            <div class="col-md-3">
-                <h2>Search for Articles</h2>
-            </div>
-            <div class="col-md-9 search-controls">
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="search_older-checkbox" name="search_older" {% if search_older %}checked{% endif %} onchange="toggleStartYear()">
-                    <label class="form-check-label" for="search_older-checkbox">Search Older Articles</label>
-                </div>
-                <div class="form-group" id="start_year_group" style="display: {% if search_older %}inline-block{% else %}none{% endif %};">
-                    <label for="start_year" class="mr-2">Start Year</label>
-                    <select class="form-control {% if not search_older %}disabled-dropdown{% endif %}" id="start_year" name="start_year" {% if not search_older %}disabled{% endif %} style="width: 100px;">
-                        <option value="">Any</option>
+
+
+
+
+    
+        
+            
+                Search for Articles
+
+            
+
+            
+                
+                    
+                    Search Older Articles
+                
+
+                
+                    Start Year
+                    Any
+
+
                         {% for year in range(current_year, 1899, -1) %}
-                            <option value="{{ year }}" {% if start_year == year %}selected{% endif %}>{{ year }}</option>
+                            {{ year }}
+
+
                         {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="result_limit" class="mr-2">Limit Results:</label>
-                    <select class="form-control" id="result_limit" name="result_limit" style="width: 100px;">
-                        <option value="10" {% if result_limit == 10 %}selected{% endif %}>10</option>
-                        <option value="20" {% if result_limit == 20 %}selected{% endif %}>20</option>
-                        <option value="50" {% if result_limit == 50 %}selected{% endif %}>50</option>
-                        <option value="100" {% if result_limit == 100 %}selected{% endif %}>100</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-        <form id="searchForm" method="POST" action="{{ url_for('search') }}">
+                    
+                
+
+                
+                    Limit Results:
+                    10
+20
+50
+100
+
+
+                
+
+            
+
+        
+
+        
             {% if error %}
-                <div class="alert alert-danger mt-3">{{ error }}</div>
+                {{ error }}
+
             {% endif %}
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
-                        <div class="alert alert-{{ category }} mt-3">{{ message }}</div>
+                        {{ message }}
+
                     {% endfor %}
                 {% endif %}
             {% endwith %}
-            <div class="form-group">
-                <label for="query">Search Query</label>
-                <input type="text" class="form-control" id="query" name="query" value="{{ query or '' }}" required>
-            </div>
-            <div class="row">
-                <div class="col-md-4">
-                    <div class="form-group">
-                        <label for="prompt_id">Select Prompt</label>
-                        <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
-                            <option value="">No Prompt</option>
+            
+                Search Query
+                
+            
+
+            
+                
+                    
+                        Select Prompt
+                        No Prompt
+
+
                             {% for prompt in prompts %}
-                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                                {{ prompt.prompt_name }}
+
+
                             {% endfor %}
-                        </select>
-                    </div>
-                </div>
-                <div class="col-md-8">
-                    <div class="form-group">
-                        <label for="prompt_text">Custom Prompt</label>
-                        <textarea class="form-control" id="prompt_text" name="prompt_text" rows="3">{{ prompt_text|default('') }}</textarea>
-                    </div>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>Sources</label>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="pubmed-checkbox" name="sources" value="pubmed" {% if 'pubmed' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="pubmed-checkbox">PubMed</label>
-                </div>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="googlescholar-checkbox" name="sources" value="googlescholar" {% if 'googlescholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="googlescholar-checkbox">Google Scholar</label>
-                </div>
-                <div class="form-check-inline">
-                    <input type="checkbox" class="form-check-input" id="semanticscholar-checkbox" name="sources" value="semanticscholar" {% if 'semanticscholar' in sources_selected %}checked{% endif %}>
-                    <label class="form-check-label" for="semanticscholar-checkbox">Semantic Scholar</label>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="sort_by">Sort By</label>
-                <select class="form-control" id="sort_by" name="sort_by" style="width: 200px;">
-                    <option value="relevance" {% if sort_by == 'relevance' %}selected{% endif %}>Relevance</option>
-                    <option value="publication_date" {% if sort_by == 'publication_date' %}selected{% endif %}>Publication Date</option>
-                </select>
-            </div>
-            <button type="submit" class="btn btn-primary">Search</button>
-        </form>
-        <div id="searchStatus" class="mt-3">
-            <span class="spinner">🔄</span> <span id="statusText"></span>
-        </div>
-        <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
-    </div>
+                        
+                    
+
+                
+
+                
+                    
+                        Custom Prompt
+                        {{ prompt_text|default('') }}
+                    
+
+                
+
+            
+
+            
+                Sources
+                
+                    
+                    PubMed
+                
+
+                
+                    
+                    Google Scholar
+                
+
+                
+                    
+                    Semantic Scholar
+                
+
+            
+
+            
+                Sort By
+                Relevance
+Publication Date
+
+
+            
+
+            Search
+        
+
+        
+            🔄 
+        
+
+        Chat with Results
+    
+
     {% if sources %}
-        <div class="mt-4">
-            <ul class="nav nav-tabs" id="resultTabs">
+        
+            
+
                 {% for source in sources %}
-                    <li class="nav-item">
-                        <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}-tab">{{ source.name }} ({{ total_results[source.id] }})</a>
-                    </li>
+                    	
+                        {{ source.name }} ({{ total_results[source.id] }})
+                    
+
+
                 {% endfor %}
-            </ul>
-            <div class="tab-content">
+            
+            
                 {% for source in sources %}
-                    <div id="{{ source.id }}-tab" class="tab-pane fade {% if loop.first %}show active{% endif %}">
-                        <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
+                    
+                        Found {{ total_results[source.id]|default(0) }} results
+
                         {% if source.summary and has_prompt %}
-                            <div class="summary-card">
-                                <h5>{{ source.name }} Summary</h5>
-                                <div class="summary-text">{{ source.summary|safe }}</div>
-                            </div>
+                            
+                                {{ source.name }} Summary
+
+                                {{ source.summary|safe }}
+
+                            
+
                         {% endif %}
                         {% if source.results.ranked %}
-                            <h5>Top Ranked Results</h5>
+                            Top Ranked Results
+
                             {% for result in source.results.ranked %}
-                                <div class="result-card">
-                                    <h6 class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h6>
-                                    <p class="result-abstract">{{ result.abstract|truncate(500) }}</p>
-                                    <p class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</p>
-                                </div>
+                                
+                                    {{ result.title }}
+
+                                    {{ result.abstract|truncate(500) }}
+
+                                    Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}
+
+                                
+
                             {% endfor %}
                         {% endif %}
                         {% if source.results.all %}
-                            <h5>All Results</h5>
+                            All Results
+
                             {% for result in source.results.all %}
-                                <div class="result-card">
-                                    <h6 class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h6>
-                                    <p class="result-abstract">{{ result.abstract|truncate(500) }}</p>
-                                    <p class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</p>
-                                </div>
+                                
+                                    {{ result.title }}
+
+                                    {{ result.abstract|truncate(500) }}
+
+                                    Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}
+
+                                
+
                             {% endfor %}
                         {% endif %}
                         {% if source.results.fallback %}
-                            <h5>Fallback Results</h5>
+                            Fallback Results
+
                             {% for result in source.results.fallback %}
-                                <div class="result-card">
-                                    <h6 class="result-title"><a href="{{ result.url }}" target="_blank">{{ result.title }}</a></h6>
-                                    <p class="result-abstract">{{ result.abstract|truncate(500) }}</p>
-                                    <p class="result-meta">Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}</p>
-                                </div>
+                                
+                                    {{ result.title }}
+
+                                    {{ result.abstract|truncate(500) }}
+
+                                    Authors: {{ result.authors }} | Journal: {{ result.journal }} | Date: {{ result.publication_date }}
+
+                                
+
                             {% endfor %}
                         {% endif %}
                         {% if total_results[source.id] > per_page %}
-                            <nav aria-label="Page navigation">
-                                <ul class="pagination">
+                            
+                                
+
                                     {% for p in range(1, total_pages[source.id] + 1) %}
                                         {% set new_page = dict(page, **{source.id: p}) %}
-                                        <li class="page-item {% if p == page[source.id] %}active{% endif %}">
-                                            <a class="page-link" href="{{ url_for('search', query=query, prompt_id=prompt_id, sources=sources_selected, **new_page) }}">{{ p }}</a>
-                                        </li>
+                                        	
+                                            {{ p }}
+                                        
+
+
                                     {% endfor %}
-                                </ul>
-                            </nav>
+                                
+                            
                         {% endif %}
-                    </div>
+                    
+
                 {% endfor %}
-            </div>
-        </div>
+            
+
+        
+
     {% endif %}
-</div>
+
+
+
+
+
+{% endblock %}
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
@@ -183,7 +235,7 @@
         const statusText = document.getElementById('statusText');
         const spinner = document.querySelector('.spinner');
         const chatButton = document.getElementById('chatButton');
-        const searchOlder = document.getElementById('search_older-checkbox');
+        const searchOlder = document.querySelector('input[name="search_older"]');
         const startYearGroup = document.getElementById('start_year_group');
         const startYearSelect = document.getElementById('start_year');
         let searchId = localStorage.getItem('latestSearchId') || null;
@@ -253,15 +305,20 @@
                 fetch(`/search_progress?query=${query}`)
                     .then(response => response.text())
                     .then(text => {
-                        const data = JSON.parse(text);
-                        if (data.status) statusText.textContent = data.status;
+                        const dataMatch = text.match(/data: (\{.*\})/);
+                        if (dataMatch && dataMatch[1]) {
+                            const data = JSON.parse(dataMatch[1]);
+                            if (data.status) statusText.textContent = data.status;
+                        } else {
+                            console.error('No valid data in polling response:', text);
+                        }
                     })
                     .catch(err => console.error('Polling error:', err));
             }, 1000);
             source.close();
         };
 
-        // Initialize Bootstrap tabs with unique IDs
+        // Initialize Bootstrap tabs (already working, kept for consistency)
         $('#resultTabs a').on('click', function (e) {
             e.preventDefault();
             $(this).tab('show');
@@ -270,7 +327,11 @@
 
         // Verify jQuery and Bootstrap
         console.log('jQuery version:', $.fn.jquery);
-        console.log('Bootstrap version:', $.fn.modal.Constructor.VERSION);
+        if ($.fn.modal && $.fn.modal.Constructor) {
+            console.log('Bootstrap version:', $.fn.modal.Constructor.VERSION);
+        } else {
+            console.warn('Bootstrap modal constructor not available, tab functionality may be affected');
+        }
 
         window.addEventListener('focus', () => {
             if (localStorage.getItem('latestSearchId')) {
