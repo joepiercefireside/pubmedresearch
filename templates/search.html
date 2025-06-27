@@ -64,12 +64,12 @@
                 <div class="col-md-4">
                     <div class="form-group">
                         <label for="prompt_id">Select Prompt</label>
-                        <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
-                            <option value="">No Prompt</option>
-                            {% for prompt in prompts %}
-                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                            {% endfor %}
-                        </select>
+                    <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
+                        <option value="">No Prompt</option>
+                        {% for prompt in prompts %}
+                            <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                        {% endfor %}
+                    </select>
                     </div>
                 </div>
                 <div class="col-md-8">
@@ -179,6 +179,7 @@
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
     document.addEventListener('DOMContentLoaded', () => {
+        console.log('Search page script loaded');
         const searchForm = document.getElementById('searchForm');
         const statusText = document.getElementById('statusText');
         const spinner = document.querySelector('.spinner');
@@ -262,7 +263,6 @@
                     })
                     .catch(err => console.error('Polling error:', err));
             }, 1000);
-            source.close();
         };
 
         $('#resultTabs a').on('click', function (e) {
