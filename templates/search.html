@@ -103,23 +103,23 @@
             </div>
             <button type="submit" class="btn btn-primary">Search</button>
         </form>
-        <div id="searchStatus" class="mt-3">
+        <div id="searchStatus" class="mt-3" aria-live="polite">
             <span class="spinner">🔄</span> <span id="statusText"></span>
         </div>
         <button id="chatButton" class="btn btn-primary mt-3" style="display: none;">Chat with Results</button>
     </div>
     {% if sources %}
         <div class="mt-4">
-            <ul class="nav nav-tabs" id="resultTabs">
+            <ul class="nav nav-tabs" id="resultTabs" role="tablist">
                 {% for source in sources %}
                     <li class="nav-item">
-                        <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}-tab">{{ source.name }} ({{ total_results[source.id] }})</a>
+                        <a class="nav-link {% if loop.first %}active{% endif %}" data-toggle="tab" href="#{{ source.id }}-tab" role="tab" {% if loop.first %}aria-selected="true"{% else %}aria-selected="false"{% endif %}>{{ source.name }} ({{ total_results[source.id] }})</a>
                     </li>
                 {% endfor %}
             </ul>
             <div class="tab-content">
                 {% for source in sources %}
-                    <div id="{{ source.id }}-tab" class="tab-pane fade {% if loop.first %}show active{% endif %}">
+                    <div id="{{ source.id }}-tab" class="tab-pane fade {% if loop.first %}show active{% endif %}" role="tabpanel">
                         <h4>Found {{ total_results[source.id]|default(0) }} results</h4>
                         {% if source.summary and has_prompt %}
                             <div class="summary-card">
@@ -178,7 +178,6 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
-    // Global function definitions
     function populatePromptText() {
         const promptSelect = document.getElementById('prompt_id');
         const promptText = document.getElementById('prompt_text');
@@ -234,11 +233,13 @@
 
         const query = encodeURIComponent('{{ query or '' }}');
         const source = new EventSource(`/search_progress?query=${query}`);
+        let lastStatus = '';
         source.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            if (data.status) {
+            if (data.status && data.status !== lastStatus) {
                 statusText.textContent = data.status;
                 console.log('Received status:', data.status);
+                lastStatus = data.status;
             }
             if (data.status === 'complete' && data.search_id) {
                 spinner.classList.remove('active');
@@ -250,22 +251,30 @@
         source.onerror = (e) => {
             console.error('EventSource error:', e);
             spinner.classList.remove('active');
-            statusText.textContent = 'Error fetching search progress, retrying...';
-            setTimeout(() => {
-                fetch(`/search_progress?query=${query}`)
-                    .then(response => response.text())
-                    .then(text => {
-                        const dataMatch = text.match(/data: (\{.*\})/);
-                        if (dataMatch && dataMatch[1]) {
-                            const data = JSON.parse(dataMatch[1]);
-                            if (data.status) statusText.textContent = data.status;
-                        } else {
-                            console.error('No valid data in polling response:', text);
-                        }
-                    })
-                    .catch(err => console.error('Polling error:', err));
-                console.log('Polling timeout executed');
-            }, 1000);
+            if (statusText.textContent !== 'complete') {
+                statusText.textContent = 'Error fetching search progress, retrying...';
+                setTimeout(() => {
+                    fetch(`/search_progress?query=${query}`)
+                        .then(response => response.text())
+                        .then(text => {
+                            const dataMatch = text.match(/data: (\{.*\})/g);
+                            if (dataMatch) {
+                                const lastData = dataMatch[dataMatch.length - 1];
+                                const data = JSON.parse(lastData.replace('data: ', ''));
+                                if (data.status && data.status !== lastStatus) {
+                                    statusText.textContent = data.status;
+                                    console.log('Polled status:', data.status);
+                                    lastStatus = data.status;
+                                }
+                            } else {
+                                console.error('No valid data in polling response:', text);
+                            }
+                        })
+                        .catch(err => console.error('Polling error:', err))
+                        .finally(() => console.log('Polling timeout executed'));
+                }, 1000);
+            }
+            source.close();
         };
 
         $('#resultTabs a').on('click', function (e) {
