@@ -64,12 +64,12 @@
                 <div class="col-md-4">
                     <div class="form-group">
                         <label for="prompt_id">Select Prompt</label>
-                    <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
-                        <option value="">No Prompt</option>
-                        {% for prompt in prompts %}
-                            <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
-                        {% endfor %}
-                    </select>
+                        <select class="form-control" id="prompt_id" name="prompt_id" onchange="populatePromptText()">
+                            <option value="">No Prompt</option>
+                            {% for prompt in prompts %}
+                                <option value="{{ prompt.id }}" data-text="{{ prompt.prompt_text|e if prompt.prompt_text else '' }}" {% if prompt_id == prompt.id %}selected{% endif %}>{{ prompt.prompt_name }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                 </div>
                 <div class="col-md-8">
@@ -178,40 +178,41 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
+    // Global function definitions
+    function populatePromptText() {
+        const promptSelect = document.getElementById('prompt_id');
+        const promptText = document.getElementById('prompt_text');
+        const selectedOption = promptSelect.options[promptSelect.selectedIndex];
+        console.log('populatePromptText called, selectedOption:', selectedOption, 'prompt_id:', promptSelect.value);
+        if (selectedOption && selectedOption.dataset.text) {
+            promptText.value = selectedOption.dataset.text || '';
+            console.log('Prompt text set to:', selectedOption.dataset.text);
+        } else {
+            promptText.value = '';
+            console.log('No data-text or selected option, prompt_id:', promptSelect.value);
+        }
+    }
+
+    function toggleStartYear() {
+        const searchOlder = document.querySelector('input[name="search_older"]');
+        const startYearGroup = document.getElementById('start_year_group');
+        const startYearSelect = document.getElementById('start_year');
+        const isChecked = searchOlder.checked;
+        startYearGroup.style.display = isChecked ? 'inline-block' : 'none';
+        startYearSelect.disabled = !isChecked;
+        startYearSelect.classList.toggle('disabled-dropdown', !isChecked);
+        if (isChecked) startYearSelect.focus();
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         console.log('Search page script loaded');
         const searchForm = document.getElementById('searchForm');
         const statusText = document.getElementById('statusText');
         const spinner = document.querySelector('.spinner');
         const chatButton = document.getElementById('chatButton');
-        const searchOlder = document.querySelector('input[name="search_older"]');
-        const startYearGroup = document.getElementById('start_year_group');
-        const startYearSelect = document.getElementById('start_year');
         let searchId = localStorage.getItem('latestSearchId') || null;
 
         statusText.textContent = '';
-
-        function populatePromptText() {
-            const promptSelect = document.getElementById('prompt_id');
-            const promptText = document.getElementById('prompt_text');
-            const selectedOption = promptSelect.options[promptSelect.selectedIndex];
-            console.log('populatePromptText called, selectedOption:', selectedOption, 'prompt_id:', promptSelect.value);
-            if (selectedOption && selectedOption.dataset.text) {
-                promptText.value = selectedOption.dataset.text || '';
-                console.log('Prompt text set to:', selectedOption.dataset.text);
-            } else {
-                promptText.value = '';
-                console.log('No data-text or selected option, prompt_id:', promptSelect.value);
-            }
-        }
-
-        function toggleStartYear() {
-            const isChecked = searchOlder.checked;
-            startYearGroup.style.display = isChecked ? 'inline-block' : 'none';
-            startYearSelect.disabled = !isChecked;
-            startYearSelect.classList.toggle('disabled-dropdown', !isChecked);
-            if (isChecked) startYearSelect.focus();
-        }
 
         if (searchId) {
             chatButton.style.display = 'block';
@@ -228,6 +229,7 @@
             searchForm.submit();
         });
 
+        const searchOlder = document.querySelector('input[name="search_older"]');
         searchOlder.addEventListener('change', toggleStartYear);
 
         const query = encodeURIComponent('{{ query or '' }}');
@@ -262,6 +264,7 @@
                         }
                     })
                     .catch(err => console.error('Polling error:', err));
+                console.log('Polling timeout executed');
             }, 1000);
         };
 
