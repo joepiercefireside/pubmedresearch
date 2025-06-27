@@ -95,12 +95,12 @@ def delete_single_search(user_id, search_id):
         cur.close()
         conn.close()
 
-def save_chat_message(user_id, session_id, message, is_user, search_id=None):
+def save_chat_message(user_id, session_id, message, is_user, search_ids=None):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute("INSERT INTO chat_history (user_id, session_id, message, is_user, timestamp, search_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (user_id, session_id, message, is_user, time.time(), search_id))
+                    (user_id, session_id, message, is_user, time.time(), json.dumps(search_ids) if search_ids else None))
         conn.commit()
     except psycopg2.Error as e:
         logger.error(f"Error saving chat message: {str(e)}")
@@ -108,18 +108,18 @@ def save_chat_message(user_id, session_id, message, is_user, search_id=None):
         cur.close()
         conn.close()
 
-def get_chat_history(user_id, session_id, retention_hours, search_id=None):
+def get_chat_history(user_id, session_id, retention_hours, search_ids=None):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cutoff_time = time.time() - (retention_hours * 3600)
-        if search_id:
-            cur.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s AND search_id = %s ORDER BY timestamp ASC",
-                        (user_id, session_id, cutoff_time, search_id))
+        if search_ids:
+            cur.execute("SELECT message, is_user, timestamp, search_id FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s AND search_id = %s ORDER BY timestamp ASC",
+                        (user_id, session_id, cutoff_time, json.dumps(search_ids)))
         else:
-            cur.execute("SELECT message, is_user, timestamp FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s ORDER BY timestamp ASC",
+            cur.execute("SELECT message, is_user, timestamp, search_id FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s ORDER BY timestamp ASC",
                         (user_id, session_id, cutoff_time))
-        messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2]} for row in cur.fetchall()]
+        messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2], 'search_ids': json.loads(row[3]) if row[3] else None} for row in cur.fetchall()]
         return messages
     except psycopg2.Error as e:
         logger.error(f"Error retrieving chat history: {str(e)}")
@@ -402,9 +402,10 @@ def chat():
     session['chat_session_id'] = session_id
     
     retention_hours = get_user_settings(current_user.id)
-    search_id = request.args.get('search_id', session.get('selected_search_id', None))
-    session['selected_search_id'] = search_id
-    chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
+    search_ids = request.args.getlist('search_id') or session.get('selected_search_ids', [])
+    if search_ids:
+        session['selected_search_ids'] = search_ids
+    chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_ids if search_ids else None)
     chat_history = [
         {
             'message': msg['message'],
@@ -425,11 +426,11 @@ def chat():
                 else:
                     update_user_settings(current_user.id, retention_hours)
                     flash("Chat memory retention updated.", "success")
-                    return redirect(url_for('chat', search_id=search_id))  # Redirect to refresh with new retention
+                    return redirect(url_for('chat', search_id=search_ids))
             except ValueError:
                 flash("Invalid retention hours.", "error")
     
-    response = make_response(render_template('chat.html', chat_history=chat_history, search_history=search_history, username=current_user.email, retention_hours=retention_hours, search_id=search_id))
+    response = make_response(render_template('chat.html', chat_history=chat_history, search_history=search_history, username=current_user.email, retention_hours=retention_hours, search_ids=search_ids))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
 
@@ -442,12 +443,12 @@ def select_searches():
     data = request.get_json()
     selected_searches = data.get('selected_searches', [])
     
-    if not selected_searches or len(selected_searches) != 1:
-        return jsonify({'status': 'error', 'message': 'Exactly one search must be selected'}), 400
+    if not selected_searches:
+        return jsonify({'status': 'error', 'message': 'At least one search must be selected'}), 400
     
-    session['selected_search_id'] = selected_searches[0]
-    logger.info(f"Selected search ID {selected_searches[0]} for user {current_user.id}")
-    return jsonify({'status': 'success', 'message': 'Search selected'})
+    session['selected_search_ids'] = selected_searches
+    logger.info(f"Selected search IDs {selected_searches} for user {current_user.id}")
+    return jsonify({'status': 'success', 'message': 'Searches selected'})
 
 @app.route('/chat_message', methods=['POST'])
 @login_required
@@ -456,473 +457,38 @@ def chat_message():
         return jsonify({'status': 'error', 'message': 'User not authenticated'}), 401
     
     session_id = session.get('chat_session_id', str(hashlib.sha256(str(time.time()).encode()).hexdigest()))
-    session['chat_session_id'] = session_id
+    data = request.get_json()
+    message = data.get('message', '').strip()
+    search_ids = session.get('selected_search_ids', [])
     
-    user_message = request.form.get('message', '').strip()
-    search_id = request.form.get('search_id', session.get('selected_search_id', None))
-    
-    if not user_message:
+    if not message:
         return jsonify({'status': 'error', 'message': 'Message cannot be empty'}), 400
     
-    if not search_id:
-        return jsonify({'status': 'error', 'message': 'No search selected'}), 400
+    save_chat_message(current_user.id, session_id, message, True, search_ids)
     
-    try:
-        save_chat_message(current_user.id, session_id, user_message, True, search_id)
-        
-        retention_hours = get_user_settings(current_user.id)
-        chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
-        
-        search_history = get_search_history(current_user.id, retention_hours / 24)
-        search = next((s for s in search_history if str(s['id']) == str(search_id)), None)
-        if not search:
-            return jsonify({'status': 'error', 'message': 'Selected search not found'}), 404
-        
-        query = search['query']
-        search_results = get_search_results(current_user.id, query)
-        
-        query_embedding = generate_embedding(user_message)
-        if query_embedding is None:
-            logger.error("Failed to generate embedding for user query")
-            return jsonify({'status': 'error', 'message': 'Failed to process query'}), 500
-        
-        ranked_results = []
-        for result in search_results:
-            text = f"{result['title']} {result.get('abstract', '')}"
-            result_embedding = generate_embedding(text)
-            if result_embedding is None:
-                continue
-            similarity = 1 - cosine(query_embedding, result_embedding)
-            ranked_results.append((result, similarity))
-        
-        ranked_results.sort(key=lambda x: x[1], reverse=True)
-        top_results = [r[0] for r in ranked_results[:5]]
-        
-        context = "\n".join([f"**Source**: {r['source_id']}\n**Title**: [{r['title']}]({r.get('url', 'N/A')})\n**Abstract**: {r.get('abstract', '')}\n**Authors**: {r.get('authors', 'N/A')}\n**Date**: {r.get('publication_date', 'N/A')}" for r in top_results])
-        
-        system_prompt = search.get('prompt_text', """
-Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner using Markdown. Use:
-- **Bold** for key terms
-- Bullet points for lists
-- [Hyperlinks](URL) for references
-- Separate paragraphs for clarity
-""")
-        
-        history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
-        full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
-        
-        response = query_grok_api(system_prompt, full_context)
-        if "summary" in user_message.lower() and "top" in user_message.lower():
-            formatted_response = ""
-            for source_id in ['pubmed', 'googlescholar', 'semanticscholar']:
-                source_results = [r for r in top_results if r['source_id'] == source_id][:3]
-                if source_results:
-                    context = "\n".join([f"**Title**: [{r['title']}]({r.get('url', 'N/A')})\n**Abstract**: {r.get('abstract', '')}" for r in source_results])
-                    summary_prompt = f"""
-Summarize the abstracts of the following {source_id} articles in simple terms using Markdown. Provide:
-- One paragraph per article, up to 3 paragraphs
-- **Bold** for key terms
-- Bullet points for main findings
-- [Hyperlinks](URL) for references
-Separate paragraphs with a blank line.
+    retention_hours = get_user_settings(current_user.id)
+    chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_ids if search_ids else None)
+    context = "\n".join([msg['message'] for msg in chat_history if not msg['is_user']])
+    
+    if search_ids:
+        search_results = []
+        for search_id in search_ids:
+            results = get_search_results(current_user.id, search_id)
+            search_results.extend(results)
+        search_context = "\n".join([
+            f"Title: {r['title']}\nAbstract: {r.get('abstract', 'N/A')}\nURL: {r.get('url', 'N/A')}"
+            for r in search_results
+        ])
+        context += "\n\nSearch Results Context:\n" + search_context
+    
+    system_prompt = """
+You are an AI research assistant designed to provide unique, conversational responses based on the provided context and search results. Avoid generic summaries and instead offer insightful, engaging answers tailored to the user's question. Use Markdown for formatting when appropriate.
 """
-                    summary = query_grok_api(summary_prompt, context)
-                    formatted_response += f"### {source_id.capitalize()} Summaries\n{summary}\n\n"
-            response = formatted_response.strip() or response
-        
-        html_response = markdown_to_html(response)
-        save_chat_message(current_user.id, session_id, response, False, search_id)
-        
-        updated_chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
-        updated_chat_history = [
-            {
-                'message': msg['message'],
-                'is_user': msg['is_user'],
-                'timestamp': msg['timestamp'],
-                'html_message': markdown_to_html(msg['message']) if not msg['is_user'] else None
-            } for msg in updated_chat_history
-        ]
-        
-        return jsonify({
-            'status': 'success',
-            'html_message': html_response,
-            'chat_history': [{'message': h['message'], 'is_user': h['is_user'], 'timestamp': h['timestamp'], 'html_message': h['html_message']} for h in updated_chat_history]
-        })
-    except Exception as e:
-        logger.error(f"Error in chat_message: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/previous_searches', methods=['GET'])
-@login_required
-def previous_searches():
-    search_history = get_search_history(current_user.id)
-    response = make_response(render_template('previous_searches.html', searches=search_history, username=current_user.email))
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    return response
-
-@app.route('/delete_search_history', methods=['POST'])
-@login_required
-def delete_search_history_endpoint():
-    period = request.form.get('delete_period', 'weekly')
-    if period not in ['weekly', 'monthly', 'annually']:
-        flash('Invalid deletion period selected.', 'error')
-        return redirect(url_for('previous_searches'))
+    ai_response = query_grok_api(system_prompt + "\nUser: " + message, context)
+    save_chat_message(current_user.id, session_id, ai_response, False, search_ids)
     
-    try:
-        delete_search_history(current_user.id, period)
-        flash(f"Search history older than {period} deleted successfully.", 'success')
-    except Exception as e:
-        logger.error(f"Error deleting search history: {str(e)}")
-        flash(f"Failed to delete search history: {str(e)}", 'error')
-    
-    return redirect(url_for('previous_searches'))
-
-@app.route('/delete_search/<search_id>', methods=['POST'])
-@login_required
-def delete_single_search_endpoint(search_id):
-    try:
-        if delete_single_search(current_user.id, search_id):
-            flash("Search deleted successfully.", 'success')
-        else:
-            flash("Search not found or you do not have permission to delete it.", 'error')
-    except Exception as e:
-        logger.error(f"Error deleting search {search_id}: {str(e)}")
-        flash(f"Failed to delete search: {str(e)}", 'error')
-    
-    return redirect(url_for('previous_searches'))
-
-@app.route('/prompt', methods=['GET', 'POST'])
-@login_required
-def prompt():
-    if request.method == 'POST':
-        prompt_name = request.form.get('prompt_name')
-        prompt_text = request.form.get('prompt_text')
-        if not prompt_name or not prompt_text:
-            flash('Prompt name and text cannot be empty.', 'error')
-        else:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            try:
-                cur.execute('INSERT INTO prompts (user_id, prompt_name, prompt_text) VALUES (%s, %s, %s)', 
-                            (current_user.id, prompt_name, prompt_text))
-                conn.commit()
-                flash('Prompt saved successfully.', 'success')
-            except psycopg2.Error as e:
-                logger.error(f"Failed to save prompt: {str(e)}")
-                conn.rollback()
-                flash(f'Failed to save prompt: {str(e)}', 'error')
-            finally:
-                cur.close()
-                conn.close()
-    
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute('SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s ORDER BY created_at DESC', 
-                    (current_user.id,))
-        prompts = [{'id': str(p[0]), 'prompt_name': p[1], 'prompt_text': p[2], 'created_at': p[3]} for p in cur.fetchall()]
-    except psycopg2.Error as e:
-        logger.error(f"Error loading prompts: {str(e)}")
-        prompts = []
-    finally:
-        cur.close()
-        conn.close()
-    response = make_response(render_template('prompt.html', prompts=prompts, username=current_user.email))
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    return response
-
-@app.route('/prompt/edit/<int:id>', methods=['GET', 'POST'])
-@login_required
-def edit_prompt(id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute('SELECT id, prompt_name, prompt_text FROM prompts WHERE id = %s AND user_id = %s', 
-                    (id, current_user.id))
-        prompt = cur.fetchone()
-        
-        if not prompt:
-            flash('Prompt not found or you do not have permission to edit it.', 'error')
-            response = make_response(redirect(url_for('prompt')))
-            response.headers['X-Content-Type-Options'] = 'nosniff'
-            return response
-        
-        if request.method == 'POST':
-            prompt_name = request.form.get('prompt_name')
-            prompt_text = request.form.get('prompt_text')
-            if not prompt_name or not prompt_text:
-                flash('Prompt name and text cannot be empty.', 'error')
-            else:
-                try:
-                    cur.execute('UPDATE prompts SET prompt_name = %s, prompt_text = %s WHERE id = %s AND user_id = %s', 
-                                (prompt_name, prompt_text, id, current_user.id))
-                    conn.commit()
-                    flash('Prompt updated successfully.', 'success')
-                    response = make_response(redirect(url_for('prompt')))
-                    response.headers['X-Content-Type-Options'] = 'nosniff'
-                    return response
-                except psycopg2.Error as e:
-                    logger.error(f"Failed to update prompt: {str(e)}")
-                    conn.rollback()
-                    flash(f'Failed to update prompt: {str(e)}', 'error')
-        
-        response = make_response(render_template('prompt_edit.html', prompt={'id': prompt[0], 'prompt_name': prompt[1], 'prompt_text': prompt[2]}, username=current_user.email))
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        return response
-    except psycopg2.Error as e:
-        logger.error(f"Error in edit_prompt: {str(e)}")
-        flash('An error occurred. Please try again.', 'error')
-        response = make_response(redirect(url_for('prompt')))
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        return response
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route('/prompt/delete/<int:id>', methods=['POST'])
-@login_required
-def delete_prompt(id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute('SELECT id FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
-        prompt = cur.fetchone()
-        
-        if not prompt:
-            flash('Prompt not found or you do not have permission to delete it.', 'error')
-            response = make_response(redirect(url_for('prompt')))
-            response.headers['X-Content-Type-Options'] = 'nosniff'
-            return response
-        
-        cur.execute('DELETE FROM prompts WHERE id = %s AND user_id = %s', (id, current_user.id))
-        conn.commit()
-        flash('Prompt deleted successfully.', 'success')
-    except psycopg2.Error as e:
-        logger.error(f"Error deleting prompt: {str(e)}")
-        conn.rollback()
-        flash(f'Failed to delete prompt: {str(e)}', 'error')
-    finally:
-        cur.close()
-        conn.close()
-    
-    response = make_response(redirect(url_for('prompt')))
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    return response
-
-@app.route('/notifications', methods=['GET', 'POST'])
-@login_required
-def notifications():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    if request.method == 'POST':
-        rule_name = request.form.get('rule_name')
-        keywords = request.form.get('keywords')
-        timeframe = request.form.get('timeframe')
-        prompt_text = request.form.get('prompt_text')
-        email_format = request.form.get('email_format')
-        sources = request.form.getlist('sources')
-        
-        if not all([rule_name, keywords, timeframe, sources, email_format]):
-            logger.error(f"Missing required fields: rule_name={rule_name}, keywords={keywords}, timeframe={timeframe}, sources={sources}, email_format={email_format}")
-            flash('All required fields must be filled.', 'error')
-            return redirect(url_for('notifications'))
-        elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
-            logger.error(f"Invalid timeframe: {timeframe}")
-            flash('Invalid timeframe.', 'error')
-            return redirect(url_for('notifications'))
-        elif email_format not in ['summary', 'list', 'detailed']:
-            logger.error(f"Invalid email format: {email_format}")
-            flash('Invalid email format.', 'error')
-            return redirect(url_for('notifications'))
-        
-        try:
-            cur.execute(
-                """
-                INSERT INTO notifications (user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources))
-            )
-            conn.commit()
-            flash('Notification rule created successfully.', 'success')
-            schedule_notification_rules()
-        except psycopg2.Error as e:
-            logger.error(f"Error creating notification: {str(e)}")
-            conn.rollback()
-            flash(f'Failed to create notification rule: {str(e)}', 'error')
-    
-    try:
-        cur.execute(
-            "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, created_at, sources "
-            "FROM notifications WHERE user_id = %s ORDER BY created_at DESC",
-            (current_user.id,)
-        )
-        notifications = [
-            {
-                'id': n[0],
-                'rule_name': n[1],
-                'keywords': n[2],
-                'timeframe': n[3],
-                'prompt_text': n[4],
-                'email_format': n[5],
-                'created_at': n[6],
-                'sources': json.loads(n[7]) if n[7] else ['pubmed']
-            } for n in cur.fetchall()
-        ]
-    except psycopg2.Error as e:
-        logger.error(f"Error loading notifications: {str(e)}")
-        notifications = []
-    finally:
-        cur.close()
-        conn.close()
-    response = make_response(render_template('notifications.html', notifications=notifications, username=current_user.email))
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    return response
-
-@app.route('/notifications/edit/<int:id>', methods=['GET', 'POST'])
-@login_required
-def edit_notification(id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "SELECT id, rule_name, keywords, timeframe, prompt_text, email_format, sources "
-            "FROM notifications WHERE id = %s AND user_id = %s",
-            (id, current_user.id)
-        )
-        notification = cur.fetchone()
-        
-        if not notification:
-            logger.error(f"Notification rule {id} not found for user {current_user.id}")
-            flash('Notification rule not found or you do not have permission to edit it.', 'error')
-            response = make_response(redirect(url_for('notifications')))
-            response.headers['X-Content-Type-Options'] = 'nosniff'
-            return response
-        
-        if request.method == 'POST':
-            rule_name = request.form.get('rule_name')
-            keywords = request.form.get('keywords')
-            timeframe = request.form.get('timeframe')
-            prompt_text = request.form.get('prompt_text')
-            email_format = request.form.get('email_format')
-            sources = request.form.getlist('sources')
-            
-            if not all([rule_name, keywords, timeframe, sources, email_format]):
-                logger.error(f"Missing required fields: rule_name={rule_name}, keywords={keywords}, timeframe={timeframe}, sources={sources}, email_format={email_format}")
-                flash('All required fields must be filled.', 'error')
-            elif timeframe not in ['daily', 'weekly', 'monthly', 'annually']:
-                logger.error(f"Invalid timeframe: {timeframe}")
-                flash('Invalid timeframe selected.', 'error')
-            elif email_format not in ['summary', 'list', 'detailed']:
-                logger.error(f"Invalid email format: {email_format}")
-                flash('Invalid email format selected.', 'error')
-            else:
-                try:
-                    cur.execute(
-                        """
-                        UPDATE notifications SET rule_name = %s, keywords = %s, timeframe = %s, prompt_text = %s, email_format = %s, sources = %s
-                        WHERE id = %s AND user_id = %s
-                        """,
-                        (rule_name, keywords, timeframe, prompt_text, email_format, json.dumps(sources), id, current_user.id)
-                    )
-                    conn.commit()
-                    flash('Notification rule updated successfully.', 'success')
-                    schedule_notification_rules()
-                    response = make_response(redirect(url_for('notifications')))
-                    response.headers['X-Content-Type-Options'] = 'nosniff'
-                    return response
-                except psycopg2.Error as e:
-                    logger.error(f"Error updating notification: {str(e)}")
-                    conn.rollback()
-                    flash(f'Failed to update notification rule: {str(e)}', 'error')
-        
-        notification_data = {
-            'id': notification[0],
-            'rule_name': notification[1],
-            'keywords': notification[2],
-            'timeframe': notification[3],
-            'prompt_text': notification[4],
-            'email_format': notification[5],
-            'sources': json.loads(notification[6]) if notification[6] else ['pubmed']
-        }
-        response = make_response(render_template('notification_edit.html', notification=notification_data, username=current_user.email))
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        return response
-    except psycopg2.Error as e:
-        logger.error(f"Error in edit_notification: {str(e)}")
-        flash('An error occurred. Please try again.', 'error')
-        response = make_response(redirect(url_for('notifications')))
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        return response
-    finally:
-        cur.close()
-        conn.close()
-
-@app.route('/notifications/delete/<int:id>', methods=['POST'])
-@login_required
-def delete_notification(id):
-    logger.info(f"Attempting to delete notification rule {id} for user {current_user.id}")
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute('SELECT id, rule_name FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
-        notification = cur.fetchone()
-        
-        if not notification:
-            logger.error(f"Notification rule {id} not found for user {current_user.id}")
-            flash('Notification rule not found or you do not have permission to delete it.', 'error')
-            response = make_response(redirect(url_for('notifications')))
-            response.headers['X-Content-Type-Options'] = 'nosniff'
-            return response
-        
-        logger.info(f"Deleting notification rule {id}: {notification[1]}")
-        cur.execute('DELETE FROM notifications WHERE id = %s AND user_id = %s', (id, current_user.id))
-        conn.commit()
-        flash('Notification rule deleted successfully.', 'success')
-        schedule_notification_rules()
-    except psycopg2.Error as e:
-        logger.error(f"Error deleting notification rule {id}: {str(e)}")
-        conn.rollback()
-        flash(f'Failed to delete notification rule: {str(e)}', 'error')
-    finally:
-        cur.close()
-        conn.close()
-    
-    response = make_response(redirect(url_for('notifications')))
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    return response
-
-@app.route('/notifications/test/<int:id>', methods=['GET'])
-@login_required
-def test_notification(id):
-    logger.info(f"Testing notification rule {id} for user {current_user.id}")
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "SELECT id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources "
-            "FROM notifications WHERE id = %s AND user_id = %s",
-            (id, current_user.id)
-        )
-        notification = cur.fetchone()
-        
-        if not notification:
-            logger.error(f"Notification rule {id} not found for user {current_user.id}")
-            return jsonify({'status': 'error', 'message': 'Notification rule not found or you do not have permission to test it.'}), 404
-        
-        rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, sources = notification
-        sources = json.loads(sources) if sources else ['pubmed']
-        logger.debug(f"Test notification {rule_id}: keywords={keywords}, sources={sources}, email={current_user.email}")
-        
-        result = run_notification_rule(
-            rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources, test_mode=True
-        )
-        logger.info(f"Test result for rule {rule_id}: status={result['status']}, email_sent={result.get('email_sent', False)}")
-        return jsonify(result)
-    except psycopg2.Error as e:
-        logger.error(f"Error testing notification rule {id}: {str(e)}")
-        return jsonify({'status': 'error', 'message': f"Error testing notification: {str(e)}"}), 500
-    finally:
-        cur.close()
-        conn.close()
+    return jsonify({
+        'status': 'success',
+        'message': ai_response,
+        'html_message': markdown_to_html(ai_response)
+    })
