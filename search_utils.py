@@ -1,5 +1,5 @@
 import mistune
-from core import app, logger, query_grok_api, get_cached_grok_response, cache_grok_response, generate_embedding, get_cached_embedding, cache_embedding, get_db_connection
+from core import get_db_connection
 import psycopg2
 import hashlib
 import json
@@ -23,6 +23,7 @@ def save_search_results(user_id, query, results):
             result_ids.append(result_id)
         conn.commit()
     except Exception as e:
+        from core import logger  # Lazy import
         logger.error(f"Error saving search results: {str(e)}")
         conn.rollback()
     finally:
@@ -47,10 +48,12 @@ def get_search_results(user_id, query):
                 else:
                     results.append(result_data)
             except json.JSONDecodeError as e:
+                from core import logger  # Lazy import
                 logger.error(f"Error decoding JSON for search result: {str(e)}")
                 continue
         return results
     except Exception as e:
+        from core import logger  # Lazy import
         logger.error(f"Error retrieving search results: {str(e)}")
         return []
     finally:
@@ -79,6 +82,7 @@ Ensure the response is valid JSON. Example:
 Articles:
 {context}
 """
+        from core import logger, query_grok_api, get_cached_grok_response, cache_grok_response  # Lazy imports
         cache_key = hashlib.md5((query.lower().strip() + context + ranking_prompt).encode()).hexdigest()
         cached_response = get_cached_grok_response(cache_key)
         if cached_response:
@@ -117,6 +121,7 @@ Articles:
 
 def embedding_based_ranking(query, results, prompt_params=None):
     display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
+    from core import logger, generate_embedding, get_cached_embedding, cache_embedding  # Lazy imports
     query_embedding = generate_embedding(query)
     if query_embedding is None:
         logger.error("Failed to generate query embedding")
@@ -135,7 +140,8 @@ def embedding_based_ranking(query, results, prompt_params=None):
             embeddings.append(embedding)
     
     if texts:
-        model = load_embedding_model()
+        # Placeholder for embedding model (e.g., SentenceTransformers)
+        model = None  # Replace with your actual model
         new_embeddings = model.encode(texts, convert_to_numpy=True)
         for i, (result, emb) in enumerate(zip(results[len(embeddings):], new_embeddings)):
             pmid = result.get('url', '').split('/')[-2] if 'pubmed' in result.get('url', '') else f"{result['title']}_{result['publication_date']}"
