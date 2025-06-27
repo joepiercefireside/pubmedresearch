@@ -25,7 +25,7 @@ def save_search_history(user_id, query, prompt_text, sources, results, search_id
     try:
         cur.execute(
             "INSERT INTO search_history (id, user_id, query, prompt_text, sources, result_ids, timestamp) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (search_id, user_id, query, prompt_text, json.dumps(sources), json.dumps(result_ids), time.time())
+            (search_id or hashlib.sha256(str(time.time()).encode()).hexdigest()[:16], user_id, query, prompt_text, json.dumps(sources), json.dumps(result_ids), time.time())
         )
         conn.commit()
     except psycopg2.Error as e:
@@ -415,10 +415,8 @@ def chat():
     ]
     search_history = get_search_history(current_user.id, retention_hours / 24)
     
-    if request.method == 'POST':
-        user_message = request.form.get('message', '')
+    if request.method == 'POST' and 'retention_hours' in request.form:
         new_retention = request.form.get('retention_hours')
-        
         if new_retention:
             try:
                 retention_hours = int(new_retention)
@@ -427,42 +425,11 @@ def chat():
                 else:
                     update_user_settings(current_user.id, retention_hours)
                     flash("Chat memory retention updated.", "success")
+                    return redirect(url_for('chat', search_id=search_id))  # Redirect to refresh with new retention
             except ValueError:
                 flash("Invalid retention hours.", "error")
-        
-        if user_message and search_id:
-            save_chat_message(current_user.id, session_id, user_message, True, search_id)
-            
-            search = next((s for s in search_history if str(s['id']) == str(search_id)), None)
-            if search:
-                search_results = get_search_results(current_user.id, search['query'])
-                query = search['query']
-                context = "\n".join([f"Source: {r['source_id']}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in search_results[:5]])
-                
-                system_prompt = search.get('prompt_text', """
-Answer the user's query based on the provided search results and chat history in a clear, concise, and accurate manner using Markdown. Use:
-- **Bold** for key terms
-- Bullet points for lists
-- [Hyperlinks](URL) for references
-- Separate paragraphs for clarity
-""")
-                
-                history_context = "\n".join([f"{'User' if msg['is_user'] else 'Assistant'}: {msg['message']}" for msg in chat_history[-5:]])
-                full_context = f"Search Query: {query}\n\nSearch Results:\n{context}\n\nChat History:\n{history_context}\n\nUser Query: {user_message}"
-                
-                try:
-                    response = query_grok_api(system_prompt, full_context)
-                    save_chat_message(current_user.id, session_id, response, False, search_id)
-                    chat_history.append({'message': user_message, 'is_user': True, 'timestamp': time.time()})
-                    chat_history.append({'message': response, 'is_user': False, 'timestamp': time.time(), 'html_message': markdown_to_html(response)})
-                except Exception as e:
-                    flash(f"Error generating chat response: {str(e)}", "error")
-        
-        response = make_response(render_template('chat.html', chat_history=chat_history, search_history=search_history, username=current_user.email, retention_hours=retention_hours))
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        return response
     
-    response = make_response(render_template('chat.html', chat_history=chat_history, search_history=search_history, username=current_user.email, retention_hours=retention_hours))
+    response = make_response(render_template('chat.html', chat_history=chat_history, search_history=search_history, username=current_user.email, retention_hours=retention_hours, search_id=search_id))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
 
@@ -491,8 +458,8 @@ def chat_message():
     session_id = session.get('chat_session_id', str(hashlib.sha256(str(time.time()).encode()).hexdigest()))
     session['chat_session_id'] = session_id
     
-    user_message = request.form.get('message', '')
-    search_id = session.get('selected_search_id', None)
+    user_message = request.form.get('message', '').strip()
+    search_id = request.form.get('search_id', session.get('selected_search_id', None))
     
     if not user_message:
         return jsonify({'status': 'error', 'message': 'Message cannot be empty'}), 400
@@ -507,7 +474,6 @@ def chat_message():
         chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
         
         search_history = get_search_history(current_user.id, retention_hours / 24)
-        
         search = next((s for s in search_history if str(s['id']) == str(search_id)), None)
         if not search:
             return jsonify({'status': 'error', 'message': 'Selected search not found'}), 404
@@ -567,7 +533,21 @@ Separate paragraphs with a blank line.
         html_response = markdown_to_html(response)
         save_chat_message(current_user.id, session_id, response, False, search_id)
         
-        return jsonify({'status': 'success', 'html_message': html_response})
+        updated_chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_id)
+        updated_chat_history = [
+            {
+                'message': msg['message'],
+                'is_user': msg['is_user'],
+                'timestamp': msg['timestamp'],
+                'html_message': markdown_to_html(msg['message']) if not msg['is_user'] else None
+            } for msg in updated_chat_history
+        ]
+        
+        return jsonify({
+            'status': 'success',
+            'html_message': html_response,
+            'chat_history': [{'message': h['message'], 'is_user': h['is_user'], 'timestamp': h['timestamp'], 'html_message': h['html_message']} for h in updated_chat_history]
+        })
     except Exception as e:
         logger.error(f"Error in chat_message: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500

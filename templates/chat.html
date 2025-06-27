@@ -1,42 +1,164 @@
 {% extends "base.html" %}
 {% block title %}Chat{% endblock %}
 {% block content %}
-    <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
-    <div class="container">
-        <h1>Chat</h1>
-        <form method="POST" action="/chat">
-            <div class="form-group">
-                <label for="retention_hours">Chat Memory Retention (hours)</label>
-                <input type="number" class="form-control" id="retention_hours" name="retention_hours" value="{{ retention_hours }}" min="1" max="720">
-                <button type="submit" class="btn btn-primary mt-2">Update Retention</button>
-            </div>
-        </form>
-        <form method="POST" action="/chat">
-            <div class="form-group">
-                <label>Select Previous Searches</label>
-                {% for search in search_history %}
-                    <div class="form-check-inline">
-                        <input type="checkbox" class="form-check-input" name="selected_searches" value="{{ search.id }}" id="search_{{ search.id }}" {% if search.id == session.get('selected_search_id') %}checked{% endif %}>
-                        <label class="form-check-label" for="search_{{ search.id }}">{{ search.query }} ({{ search.timestamp|datetimeformat }})</label>
-                    </div>
-                {% endfor %}
-            </div>
-            <div class="form-group">
-                <label for="message">Your Message</label>
-                <textarea class="form-control" id="message" name="message" rows="3" required></textarea>
-            </div>
-            <button type="submit" class="btn btn-primary">Send</button>
-        </form>
-        <div id="chatHistory">
-            {% for msg in chat_history|sort(attribute='timestamp', reverse=True) %}
-                <div class="message {% if msg.is_user %}user-message{% else %}assistant-message{% endif %}">
-                    {% if msg.is_user %}
-                        {{ msg.message|e }}
-                    {% else %}
-                        {{ msg.html_message|safe }}
-                    {% endif %}
+<div class="container">
+    <div class="well">
+        <h2>Chat with Results</h2>
+        <div class="row">
+            <div class="col-md-4">
+                <div class="form-group">
+                    <label for="search_select">Select Search to Chat About</label>
+                    <select class="form-control" id="search_select" name="search_select" title="Select a previous search to chat about">
+                        <option value="">Select a Search</option>
+                        {% for search in search_history %}
+                            <option value="{{ search.id }}">{{ search.query }} ({{ search.timestamp|datetimeformat }})</option>
+                        {% endfor %}
+                    </select>
                 </div>
-            {% endfor %}
+                <div class="form-group">
+                    <label for="chat_memory">Chat Memory Retention (hours)</label>
+                    <input type="number" class="form-control" id="chat_memory" name="chat_memory" value="{{ retention_hours }}" min="1" max="720">
+                    <button type="button" class="btn btn-primary mt-2" onclick="updateRetention()">Update Retention</button>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="chat-container" aria-live="polite">
+                    <div class="chat-messages" id="chat_messages">
+                        {% for msg in chat_history %}
+                            <div class="chat-message {% if msg.is_user %}user-message{% else %}ai-message{% endif %}">
+                                <strong>{{ "You" if msg.is_user else "AI" }}:</strong>
+                                {{ msg.html_message|safe if msg.html_message else msg.message|e }}
+                                <small class="text-muted">{{ msg.timestamp|datetimeformat('%H:%M:%S') }}</small>
+                            </div>
+                        {% endfor %}
+                    </div>
+                    <form id="chat_form" method="POST" action="{{ url_for('chat_message') }}" class="mt-3">
+                        <div class="form-group">
+                            <label for="message">Your Message</label>
+                            <textarea class="form-control" id="message" name="message" rows="3" placeholder="Ask about the search results..." required></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Send</button>
+                    </form>
+                </div>
+            </div>
         </div>
     </div>
+</div>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap-select@1.13.14/dist/js/bootstrap-select.min.js"></script>
+<script>
+    $(document).ready(function() {
+        $('#search_select').selectpicker();
+    });
+
+    function updateChatContext() {
+        const searchId = $('#search_select').val();
+        if (searchId) {
+            $.ajax({
+                url: '{{ url_for("select_searches") }}',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ selected_searches: [searchId] }),
+                success: function(response) {
+                    console.log('Search context updated:', response);
+                    $('#chat_messages').empty(); // Clear chat for new context
+                    loadChatHistory();
+                },
+                error: function(xhr, status, error) {
+                    console.error('Failed to update search context:', error);
+                }
+            });
+        }
+    }
+
+    function updateRetention() {
+        const retentionHours = $('#chat_memory').val();
+        if (retentionHours && !isNaN(retentionHours) && retentionHours >= 1 && retentionHours <= 720) {
+            $.ajax({
+                url: '{{ url_for("chat") }}',
+                type: 'POST',
+                data: { retention_hours: retentionHours },
+                success: function(response) {
+                    console.log('Retention updated:', retentionHours);
+                    location.reload(); // Refresh to reflect new retention
+                },
+                error: function(xhr, status, error) {
+                    console.error('Failed to update retention:', error);
+                }
+            });
+        } else {
+            alert('Retention hours must be between 1 and 720.');
+        }
+    }
+
+    function loadChatHistory() {
+        const searchId = $('#search_select').val();
+        $.ajax({
+            url: '{{ url_for("chat") }}?search_id=' + searchId,
+            type: 'GET',
+            success: function(data) {
+                const chatHtml = $(data).find('#chat_messages').html();
+                $('#chat_messages').html(chatHtml);
+                $('#chat_messages').scrollTop($('#chat_messages')[0].scrollHeight);
+            },
+            error: function(xhr, status, error) {
+                console.error('Failed to load chat history:', error);
+            }
+        });
+    }
+
+    $('#chat_form').on('submit', function(e) {
+        e.preventDefault();
+        const message = $('#message').val().trim();
+        if (!message) return;
+
+        const searchId = $('#search_select').val();
+        if (!searchId) {
+            alert('Please select a search to chat about.');
+            return;
+        }
+
+        $.ajax({
+            url: '{{ url_for("chat_message") }}',
+            type: 'POST',
+            data: { message: message, search_id: searchId },
+            success: function(response) {
+                if (response.status === 'success') {
+                    const htmlMessage = response.html_message;
+                    $('#chat_messages').append('<div class="chat-message user-message"><strong>You:</strong> ' + message + '<small class="text-muted">' + new Date().toLocaleTimeString() + '</small></div>');
+                    $('#chat_messages').append('<div class="chat-message ai-message"><strong>AI:</strong> ' + htmlMessage + '<small class="text-muted">' + new Date().toLocaleTimeString() + '</small></div>');
+                    $('#message').val(''); // Clear input
+                    $('#chat_messages').scrollTop($('#chat_messages')[0].scrollHeight); // Scroll to bottom
+                    loadChatHistory(); // Refresh history to ensure consistency
+                } else {
+                    console.error('Chat error:', response.message);
+                    alert('Error: ' + response.message);
+                }
+            },
+            error: function(xhr, status, error) {
+                console.error('Chat submission failed:', error);
+                alert('Failed to send message: ' + error);
+            }
+        });
+    });
+
+    // Load initial chat history if a search is selected
+    $(document).ready(function() {
+        const initialSearchId = '{{ search_id or "" }}';
+        if (initialSearchId) {
+            $('#search_select').val(initialSearchId);
+            $('#search_select').selectpicker('refresh');
+            updateChatContext();
+        }
+    });
+</script>
+<style>
+    .chat-container { max-width: 800px; margin: 0 auto; }
+    .chat-messages { height: 400px; overflow-y: auto; padding: 10px; background-color: #f8f9fa; border-radius: 5px; }
+    .chat-message { margin-bottom: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+    .user-message { background-color: #e9ecef; }
+    .ai-message { background-color: #fff; }
+    .text-muted { font-size: 0.8em; color: #6c757d; }
+    .bootstrap-select .dropdown-toggle { width: 100%; }
+</style>
 {% endblock %}
