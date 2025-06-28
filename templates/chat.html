@@ -1,65 +1,68 @@
 {% extends "base.html" %}
 {% block title %}Chat{% endblock %}
 {% block content %}
-<div class="container">
+<div class="container chat-container">
     <h1>Chat with AI Research Agent</h1>
     <p>Logged in as: {{ username }}</p>
-    <div class="card">
-        <div class="card-header">Chat Memory Retention</div>
-        <div class="card-body">
-            <form method="POST">
-                <div class="form-group">
-                    <input type="number" name="retention_hours" value="{{ retention_hours }}" class="form-control" min="1" max="720">
-                    <small class="form-text text-muted">hours</small>
-                    <button type="submit" class="btn btn-primary mt-2">Update</button>
+    <div class="chat-layout">
+        <div class="chat-sidebar">
+            <div class="card retention-card">
+                <div class="card-header">Chat Memory Retention</div>
+                <div class="card-body">
+                    <form method="POST">
+                        <div class="form-group">
+                            <input type="number" name="retention_hours" value="{{ retention_hours }}" class="form-control" min="1" max="720">
+                            <small class="form-text text-muted">hours</small>
+                            <button type="submit" class="btn btn-primary mt-2">Update</button>
+                        </div>
+                    </form>
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                        {% if messages %}
+                            {% for category, message in messages %}
+                                <div class="alert alert-{{ category }}">{{ message }}</div>
+                            {% endfor %}
+                        {% endif %}
+                    {% endwith %}
                 </div>
-            </form>
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert alert-{{ category }}">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+                <div class="card-header">Select Searches</div>
+                <div class="card-body">
+                    <form id="select-searches-form">
+                        <div class="form-group">
+                            <select name="selected_searches" class="form-control" multiple>
+                                {% for search in search_history %}
+                                    <option value="{{ search.id }}" {% if search.id in search_ids %}selected{% endif %}>{{ search.query }} ({{ search.timestamp | datetimeformat }})</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="btn btn-primary mt-2">Update</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
         </div>
-    </div>
-    <div class="card">
-        <div class="card-header">Select Searches to Chat About</div>
-        <div class="card-body">
-            <form id="select-searches-form">
-                {% for search in search_history %}
-                    <div class="form-check">
-                        <input type="checkbox" class="form-check-input search-checkbox" value="{{ search.id }}" {% if search.id in search_ids %}checked{% endif %}>
-                        <label class="form-check-label">{{ search.query }} ({{ search.timestamp | datetimeformat }})</label>
+        <div class="chat-main">
+            <div class="card chat-card">
+                <div class="card-header">Chat</div>
+                <div class="card-body">
+                    <form id="chat-form">
+                        <div class="form-group">
+                            <textarea name="message" class="form-control" rows="4" placeholder="Type your message..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Send</button>
+                    </form>
+                    <div id="thinking" style="display: none;">Thinking...</div>
+                    <div id="chat-messages">
+                        {% for msg in chat_history|reverse %}
+                            <div class="chat-message {% if msg.is_user %}user-message{% else %}ai-message{% endif %}">
+                                {% if msg.is_user %}
+                                    <p><strong>User:</strong> {{ msg.message }}</p>
+                                {% else %}
+                                    <p><strong>AI:</strong> {{ msg.html_message | safe }}</p>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
                     </div>
-                {% endfor %}
-                <button type="submit" class="btn btn-primary mt-2">Update Selected Searches</button>
-            </form>
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-header">Chat</div>
-        <div class="card-body" id="chat-messages">
-            {% for msg in chat_history %}
-                <div class="chat-message {% if msg.is_user %}user-message{% else %}ai-message{% endif %}">
-                    {% if msg.is_user %}
-                        <p><strong>User:</strong> {{ msg.message }}</p>
-                    {% else %}
-                        <p><strong>AI:</strong> {{ msg.html_message | safe }}</p>
-                    {% endif %}
                 </div>
-            {% endfor %}
-            <div id="thinking" style="display: none;">Thinking...</div>
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-body">
-            <form id="chat-form">
-                <div class="form-group">
-                    <textarea name="message" class="form-control" rows="4" placeholder="Type your message..."></textarea>
-                </div>
-                <button type="submit" class="btn btn-primary">Send</button>
-            </form>
+            </div>
         </div>
     </div>
 </div>
@@ -68,7 +71,7 @@
     $(document).ready(function() {
         $('#select-searches-form').on('submit', function(e) {
             e.preventDefault();
-            var selectedSearches = $('.search-checkbox:checked').map(function() { return this.value; }).get();
+            var selectedSearches = $('select[name="selected_searches"]').val() || [];
             $.ajax({
                 url: '{{ url_for("select_searches") }}',
                 type: 'POST',
@@ -102,7 +105,7 @@
                 data: JSON.stringify({ message: message }),
                 success: function(response) {
                     if (response.status === 'success') {
-                        $('#chat-messages').append(
+                        $('#chat-messages').prepend(
                             '<div class="chat-message user-message"><p><strong>User:</strong> ' + message + '</p></div>' +
                             '<div class="chat-message ai-message"><p><strong>AI:</strong> ' + response.html_message + '</p></div>'
                         );

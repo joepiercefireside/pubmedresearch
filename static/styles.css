@@ -315,3 +315,71 @@ h1, h2, h3, h5, h6 {
     background-position: right 8px center;
     padding-right: 28px;
 }
+
+/* Chat Layout */
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.chat-layout {
+    display: flex;
+    flex-direction: row;
+    gap: 20px;
+}
+
+.chat-sidebar {
+    flex: 0 0 300px; /* Fixed width for sidebar */
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.retention-card {
+    flex: 0 0 auto; /* Fixed height for retention card */
+}
+
+.chat-main {
+    flex: 1; /* Takes remaining space */
+    min-width: 0; /* Prevents overflow */
+}
+
+.chat-card {
+    height: 100%; /* Fills available height */
+}
+
+#chat-messages {
+    max-height: 400px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column-reverse; /* Ensures newest messages appear at the top */
+}
+
+.chat-message {
+    margin-bottom: 10px;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.user-message {
+    background-color: #e6f3ff;
+    border-left: 4px solid #00689b;
+}
+
+.ai-message {
+    background-color: #f8f9fa;
+    border-left: 4px solid #28a745;
+}
+
+@media (max-width: 768px) {
+    .chat-layout {
+        flex-direction: column;
+    }
+    .chat-sidebar {
+        flex: 1;
+        width: 100%;
+    }
+}

@@ -1,23 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Previous Searches{% endblock %}
 {% block content %}
-<link rel="icon" href="{{ url_for('static', filename='favicon.png') }}" type="image/png">
-<div class="container mt-4">
-    <h2>Previous Searches</h2>
+
+    <h1>Previous Searches</h1>
+
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, message in messages %}
-                <div class="alert alert-{{ category }} mt-3">{{ message }}</div>
+                <div class="alert alert-{{ category }}">{{ message }}</div>
             {% endfor %}
         {% endif %}
     {% endwith %}
     {% if searches %}
-        <div class="card mb-4">
+        <div class="card">
             <div class="card-header">Delete Old Searches</div>
             <div class="card-body">
-                <form method="POST" action="{{ url_for('delete_search_history_endpoint') }}">
+                <form method="POST" action="{{ url_for('previous_searches') }}">
                     <div class="form-group">
-                        <select class="form-control" name="delete_period" style="width: 200px;">
+                        <select name="delete_period" class="form-control" role="combobox">
                             <option value="weekly">Older than 1 week</option>
                             <option value="monthly">Older than 1 month</option>
                             <option value="annually">Older than 1 year</option>
@@ -27,57 +27,58 @@
                 </form>
             </div>
         </div>
+
         <div class="card">
             <div class="card-header">Your Previous Searches</div>
             <div class="card-body">
-                <div class="table-responsive">
-                    <table class="table table-striped">
-                        <thead>
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Query</th>
+                            <th>Prompt</th>
+                            <th>Sources</th>
+                            <th>Timestamp</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for search in searches %}
                             <tr>
-                                <th>Query</th>
-                                <th>Prompt</th>
-                                <th>Sources</th>
-                                <th>Timestamp</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for search in searches %}
-                                <tr>
-                                    <td>{{ search.query }}</td>
-                                    <td>{{ search.prompt_text|truncate(50) or 'None' }}</td>
-                                    <td>{{ search.sources|join(', ') }}</td>
-                                    <td>{{ search.timestamp|datetimeformat }}</td>
-                                    <td>
-                                        <a href="{{ url_for('search', query=search.query, prompt_text=search.prompt_text, sources=search.sources) }}" class="btn btn-primary btn-sm">Re-run</a>
-                                        <button type="button" class="btn btn-danger btn-sm" data-toggle="modal" data-target="#deleteModal{{ search.id }}">Delete</button>
-                                        <div class="modal fade" id="deleteModal{{ search.id }}" tabindex="-1" role="dialog" aria-labelledby="deleteModalLabel{{ search.id }}" aria-hidden="true">
-                                            <div class="modal-dialog" role="document">
-                                                <div class="modal-content">
-                                                    <div class="modal-header">
-                                                        <h5 class="modal-title" id="deleteModalLabel{{ search.id }}">Confirm Delete</h5>
-                                                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                                                            <span aria-hidden="true">&times;</span>
-                                                        </button>
-                                                    </div>
-                                                    <div class="modal-body">
-                                                        Are you sure you want to delete the search "{{ search.query }}"?
-                                                    </div>
-                                                    <div class="modal-footer">
-                                                        <form method="POST" action="{{ url_for('delete_single_search_endpoint', search_id=search.id) }}">
-                                                            <button type="submit" class="btn btn-danger">Delete</button>
-                                                            <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
-                                                        </form>
-                                                    </div>
+                                <td>{{ search.query }}</td>
+                                <td>{{ search.prompt_text|truncate(50) or 'None' }}</td>
+                                <td>{{ search.sources|join(', ') }}</td>
+                                <td>{{ search.timestamp|datetimeformat }}</td>
+                                <td>
+                                    <form method="POST" action="{{ url_for('previous_searches') }}" style="display:inline;">
+                                        <input type="hidden" name="rerun_search_id" value="{{ search.id }}">
+                                        <button type="submit" class="btn btn-sm btn-primary">Re-run</button>
+                                    </form>
+                                    <button type="button" class="btn btn-sm btn-danger" data-bs-toggle="modal" data-bs-target="#deleteSearchModal{{ search.id }}">Delete</button>
+                                    <div class="modal fade" id="deleteSearchModal{{ search.id }}" tabindex="-1" aria-labelledby="deleteSearchModalLabel{{ search.id }}" aria-hidden="true">
+                                        <div class="modal-dialog">
+                                            <div class="modal-content">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title" id="deleteSearchModalLabel{{ search.id }}">Confirm Delete</h5>
+                                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close">×</button>
+                                                </div>
+                                                <div class="modal-body">
+                                                    Are you sure you want to delete the search "{{ search.query }}"?
+                                                </div>
+                                                <div class="modal-footer">
+                                                    <form method="POST" action="{{ url_for('previous_searches') }}">
+                                                        <input type="hidden" name="delete_search_id" value="{{ search.id }}">
+                                                        <button type="submit" class="btn btn-danger">Delete</button>
+                                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                    </form>
                                                 </div>
                                             </div>
                                         </div>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
     {% else %}
@@ -87,5 +88,5 @@
             </div>
         </div>
     {% endif %}
-</div>
+
 {% endblock %}

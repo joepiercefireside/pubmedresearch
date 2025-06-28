@@ -45,11 +45,11 @@ def get_search_history(user_id, days=7):
         cur.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = %s AND timestamp > %s ORDER BY timestamp DESC",
                     (user_id, cutoff_time))
         results = [
-            {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]) if row[3] else [], 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
+            {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]) if row[3] and isinstance(row[3], str) else [], 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
             for row in cur.fetchall()
         ]
         return results
-    except psycopg2.Error as e:
+    except (psycopg2.Error, json.JSONDecodeError, TypeError) as e:
         logger.error(f"Error retrieving search history: {str(e)}")
         return []
     finally:
@@ -121,7 +121,7 @@ def get_chat_history(user_id, session_id, retention_hours, search_ids=None):
                         (user_id, session_id, cutoff_time))
         messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2], 'search_ids': json.loads(row[3]) if row[3] else None} for row in cur.fetchall()]
         return messages
-    except psycopg2.Error as e:
+    except (psycopg2.Error, json.JSONDecodeError, TypeError) as e:
         logger.error(f"Error retrieving chat history: {str(e)}")
         return []
     finally:
@@ -370,7 +370,7 @@ def schedule_notification_rules():
         for rule in rules:
             rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources = rule
             try:
-                sources = json.loads(sources) if sources else ['pubmed']
+                sources = json.loads(sources) if sources and isinstance(sources, str) else ['pubmed']
             except (json.JSONDecodeError, TypeError):
                 logger.warning(f"Invalid sources JSON for notification rule {rule_id}: {sources}")
                 sources = ['pubmed']
@@ -470,23 +470,34 @@ def chat_message():
     
     save_chat_message(current_user.id, session_id, message, True, search_ids)
     
-    retention_hours = get_user_settings(current_user.id)
-    chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_ids if search_ids else None)
-    context = "\n".join([msg['message'] for msg in chat_history if not msg['is_user']])
+    if not search_ids:
+        return jsonify({
+            'status': 'error',
+            'message': 'No search results selected. Please select at least one search to chat about.'
+        }), 400
     
-    if search_ids:
-        search_results = []
-        for search_id in search_ids:
-            results = get_search_results(current_user.id, search_id)
-            search_results.extend(results)
-        search_context = "\n".join([
-            f"Title: {r['title']}\nAbstract: {r.get('abstract', 'N/A')}\nURL: {r.get('url', 'N/A')}"
-            for r in search_results
-        ])
-        context += "\n\nSearch Results Context:\n" + search_context
+    search_results = []
+    for search_id in search_ids:
+        results = get_search_results(current_user.id, search_id)
+        search_results.extend(results)
+    
+    if not search_results:
+        return jsonify({
+            'status': 'error',
+            'message': 'No relevant search results found for the selected searches.'
+        }), 400
+    
+    context = "\n".join([
+        f"Title: {r['title']}\nAbstract: {r.get('abstract', 'N/A')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}"
+        for r in search_results
+    ])
     
     system_prompt = """
-You are an AI research assistant designed to provide unique, conversational responses based on the provided context and search results. Avoid generic summaries and instead offer insightful, engaging answers tailored to the user's question. Use Markdown for formatting when appropriate.
+You are an AI research assistant designed to provide responses based solely on the provided search results. Do not use any external knowledge or assumptions. Focus on clarifying or finding specific details within the selected search results. Use Markdown for formatting, including:
+- **Bold** for key terms
+- Bullet points for main points
+- [Hyperlinks](URL) for article references
+Respond directly to the user's question, using only the context provided.
 """
     ai_response = query_grok_api(system_prompt + "\nUser: " + message, context)
     save_chat_message(current_user.id, session_id, ai_response, False, search_ids)
@@ -527,7 +538,7 @@ def previous_searches():
                 if result:
                     query, prompt_text, sources = result
                     try:
-                        sources = json.loads(sources) if sources else []
+                        sources = json.loads(sources) if sources and isinstance(sources, str) else []
                     except (json.JSONDecodeError, TypeError):
                         logger.warning(f"Invalid sources JSON for search {search_id}: {sources}")
                         sources = []
