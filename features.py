@@ -45,7 +45,7 @@ def get_search_history(user_id, days=7):
         cur.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = %s AND timestamp > %s ORDER BY timestamp DESC",
                     (user_id, cutoff_time))
         results = [
-            {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]), 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
+            {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]) if row[3] else [], 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
             for row in cur.fetchall()
         ]
         return results
@@ -369,7 +369,11 @@ def schedule_notification_rules():
         rules = cur.fetchall()
         for rule in rules:
             rule_id, user_id, rule_name, keywords, timeframe, prompt_text, email_format, user_email, sources = rule
-            sources = json.loads(sources) if sources else ['pubmed']
+            try:
+                sources = json.loads(sources) if sources else ['pubmed']
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"Invalid sources JSON for notification rule {rule_id}: {sources}")
+                sources = ['pubmed']
             cron_trigger = {
                 'daily': CronTrigger(hour=8, minute=0),
                 'weekly': CronTrigger(day_of_week='mon', hour=8, minute=0),
@@ -522,7 +526,11 @@ def previous_searches():
                 result = cur.fetchone()
                 if result:
                     query, prompt_text, sources = result
-                    sources = json.loads(sources)
+                    try:
+                        sources = json.loads(sources) if sources else []
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"Invalid sources JSON for search {search_id}: {sources}")
+                        sources = []
                     return redirect(url_for('search', query=query, prompt_text=prompt_text, sources=sources))
                 flash("Search not found for re-run", "error")
             except psycopg2.Error as e:
@@ -555,14 +563,14 @@ def notifications():
                 'id': row[0],
                 'rule_name': row[1],
                 'keywords': row[2],
-                'sources': json.loads(row[3]),
+                'sources': json.loads(row[3]) if row[3] and isinstance(row[3], str) else [],
                 'timeframe': row[4],
                 'prompt_text': row[5],
                 'email_format': row[6],
                 'created_at': row[7]
             } for row in cur.fetchall()
         ]
-    except psycopg2.Error as e:
+    except (psycopg2.Error, json.JSONDecodeError, TypeError) as e:
         logger.error(f"Error retrieving notifications: {str(e)}")
         notifications = []
     finally:
@@ -632,7 +640,11 @@ def notifications():
                 result = cur.fetchone()
                 if result:
                     rule_name, keywords, timeframe, prompt_text, email_format, sources = result
-                    sources = json.loads(sources)
+                    try:
+                        sources = json.loads(sources) if sources and isinstance(sources, str) else []
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"Invalid sources JSON for notification rule {rule_id}: {sources}")
+                        sources = []
                     test_result = run_notification_rule(rule_id, current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources, test_mode=True)
                     flash(f"Test email sent. Status: {test_result['status']}. Message ID: {test_result['message_id']}", "success")
                 else:
@@ -668,12 +680,12 @@ def notification_edit(rule_id):
         notification = {
             'rule_name': result[0],
             'keywords': result[1],
-            'sources': json.loads(result[2]),
+            'sources': json.loads(result[2]) if result[2] and isinstance(result[2], str) else [],
             'timeframe': result[3],
             'prompt_text': result[4],
             'email_format': result[5]
         }
-    except psycopg2.Error as e:
+    except (psycopg2.Error, json.JSONDecodeError, TypeError) as e:
         logger.error(f"Error retrieving notification: {str(e)}")
         flash("Error retrieving notification rule", "error")
         return redirect(url_for('notifications'))
@@ -721,5 +733,134 @@ def notification_edit(rule_id):
             conn.close()
 
     response = make_response(render_template('notification_edit.html', notification=notification, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/prompt', methods=['GET', 'POST'])
+@login_required
+def prompt():
+    if not current_user.is_authenticated:
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, prompt_name, prompt_text, created_at FROM prompts WHERE user_id = %s",
+                    (current_user.id,))
+        prompts = [
+            {
+                'id': row[0],
+                'prompt_name': row[1],
+                'prompt_text': row[2],
+                'created_at': row[3]
+            } for row in cur.fetchall()
+        ]
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving prompts: {str(e)}")
+        prompts = []
+    finally:
+        cur.close()
+        conn.close()
+
+    if request.method == 'POST':
+        if 'prompt_name' in request.form:
+            prompt_name = request.form.get('prompt_name')
+            prompt_text = request.form.get('prompt_text')
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO prompts (user_id, prompt_name, prompt_text, created_at) VALUES (%s, %s, %s, %s)",
+                    (current_user.id, prompt_name, prompt_text, datetime.now())
+                )
+                conn.commit()
+                flash("Prompt added successfully", "success")
+            except psycopg2.Error as e:
+                logger.error(f"Error adding prompt: {str(e)}")
+                conn.rollback()
+                flash("Error adding prompt", "error")
+            finally:
+                cur.close()
+                conn.close()
+        elif 'delete_prompt_id' in request.form:
+            prompt_id = request.form.get('delete_prompt_id')
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM prompts WHERE id = %s AND user_id = %s", (prompt_id, current_user.id))
+                if cur.rowcount == 0:
+                    flash("Prompt not found", "error")
+                else:
+                    conn.commit()
+                    flash("Prompt deleted successfully", "success")
+            except psycopg2.Error as e:
+                logger.error(f"Error deleting prompt: {str(e)}")
+                conn.rollback()
+                flash("Error deleting prompt", "error")
+            finally:
+                cur.close()
+                conn.close()
+        return redirect(url_for('prompt'))
+
+    response = make_response(render_template('prompt.html', prompts=prompts, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/prompt_edit/<prompt_id>', methods=['GET', 'POST'])
+@login_required
+def prompt_edit(prompt_id):
+    if not current_user.is_authenticated:
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT prompt_name, prompt_text FROM prompts WHERE id = %s AND user_id = %s",
+                    (prompt_id, current_user.id))
+        result = cur.fetchone()
+        if not result:
+            flash("Prompt not found", "error")
+            return redirect(url_for('prompt'))
+        prompt = {
+            'prompt_name': result[0],
+            'prompt_text': result[1]
+        }
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving prompt: {str(e)}")
+        flash("Error retrieving prompt", "error")
+        return redirect(url_for('prompt'))
+    finally:
+        cur.close()
+        conn.close()
+
+    if request.method == 'POST':
+        prompt_name = request.form.get('prompt_name')
+        prompt_text = request.form.get('prompt_text')
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE prompts SET prompt_name = %s, prompt_text = %s WHERE id = %s AND user_id = %s",
+                (prompt_name, prompt_text, prompt_id, current_user.id)
+            )
+            if cur.rowcount == 0:
+                flash("Prompt not found", "error")
+            else:
+                conn.commit()
+                flash("Prompt updated successfully", "success")
+            return redirect(url_for('prompt'))
+        except psycopg2.Error as e:
+            logger.error(f"Error updating prompt: {str(e)}")
+            conn.rollback()
+            flash("Error updating prompt", "error")
+        finally:
+            cur.close()
+            conn.close()
+
+    response = make_response(render_template('prompt_edit.html', prompt=prompt, username=current_user.email))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
