@@ -16,6 +16,14 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Add Jinja2 filter for datetime formatting
+@app.template_filter('datetimeformat')
+def datetimeformat_filter(timestamp):
+    from datetime import datetime
+    if isinstance(timestamp, (int, float)):
+        return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+    return timestamp
+
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
