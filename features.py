@@ -492,3 +492,234 @@ You are an AI research assistant designed to provide unique, conversational resp
         'message': ai_response,
         'html_message': markdown_to_html(ai_response)
     })
+
+@app.route('/previous_searches', methods=['GET', 'POST'])
+@login_required
+def previous_searches():
+    if not current_user.is_authenticated:
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    
+    if request.method == 'POST':
+        if 'delete_period' in request.form:
+            period = request.form.get('delete_period')
+            delete_search_history(current_user.id, period)
+            flash(f"Deleted searches older than {period}", "success")
+        elif 'delete_search_id' in request.form:
+            search_id = request.form.get('delete_search_id')
+            if delete_single_search(current_user.id, search_id):
+                flash("Search deleted successfully", "success")
+            else:
+                flash("Search not found", "error")
+        elif 'rerun_search_id' in request.form:
+            search_id = request.form.get('rerun_search_id')
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT query, prompt_text, sources FROM search_history WHERE id = %s AND user_id = %s",
+                            (search_id, current_user.id))
+                result = cur.fetchone()
+                if result:
+                    query, prompt_text, sources = result
+                    sources = json.loads(sources)
+                    return redirect(url_for('search', query=query, prompt_text=prompt_text, sources=sources))
+                flash("Search not found for re-run", "error")
+            except psycopg2.Error as e:
+                logger.error(f"Error rerunning search: {str(e)}")
+                flash("Error rerunning search", "error")
+            finally:
+                cur.close()
+                conn.close()
+    
+    searches = get_search_history(current_user.id)
+    response = make_response(render_template('previous_searches.html', searches=searches, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/notifications', methods=['GET', 'POST'])
+@login_required
+def notifications():
+    if not current_user.is_authenticated:
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, rule_name, keywords, sources, timeframe, prompt_text, email_format, created_at FROM notifications WHERE user_id = %s",
+                    (current_user.id,))
+        notifications = [
+            {
+                'id': row[0],
+                'rule_name': row[1],
+                'keywords': row[2],
+                'sources': json.loads(row[3]),
+                'timeframe': row[4],
+                'prompt_text': row[5],
+                'email_format': row[6],
+                'created_at': row[7]
+            } for row in cur.fetchall()
+        ]
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving notifications: {str(e)}")
+        notifications = []
+    finally:
+        cur.close()
+        conn.close()
+
+    if request.method == 'POST':
+        if 'rule_name' in request.form:
+            rule_name = request.form.get('rule_name')
+            keywords = request.form.get('keywords')
+            sources = request.form.getlist('sources')
+            timeframe = request.form.get('timeframe')
+            prompt_text = request.form.get('prompt_text')
+            email_format = request.form.get('email_format')
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO notifications (user_id, rule_name, keywords, sources, timeframe, prompt_text, email_format, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (current_user.id, rule_name, keywords, json.dumps(sources), timeframe, prompt_text, email_format, datetime.now())
+                )
+                conn.commit()
+                flash("Notification rule added successfully", "success")
+                scheduler.add_job(
+                    run_notification_rule,
+                    trigger=CronTrigger(hour=8, minute=0) if timeframe == 'daily' else
+                            CronTrigger(day_of_week='mon', hour=8, minute=0) if timeframe == 'weekly' else
+                            CronTrigger(day=1, hour=8, minute=0) if timeframe == 'monthly' else
+                            CronTrigger(month=1, day=1, hour=8, minute=0),
+                    args=[cur.lastrowid, current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources],
+                    id=f"notification_{cur.lastrowid}",
+                    replace_existing=True
+                )
+            except psycopg2.Error as e:
+                logger.error(f"Error adding notification rule: {str(e)}")
+                conn.rollback()
+                flash("Error adding notification rule", "error")
+            finally:
+                cur.close()
+                conn.close()
+        elif 'delete_rule_id' in request.form:
+            rule_id = request.form.get('delete_rule_id')
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM notifications WHERE id = %s AND user_id = %s", (rule_id, current_user.id))
+                if cur.rowcount == 0:
+                    flash("Notification rule not found", "error")
+                else:
+                    conn.commit()
+                    scheduler.remove_job(f"notification_{rule_id}")
+                    flash("Notification rule deleted successfully", "success")
+            except psycopg2.Error as e:
+                logger.error(f"Error deleting notification rule: {str(e)}")
+                conn.rollback()
+                flash("Error deleting notification rule", "error")
+            finally:
+                cur.close()
+                conn.close()
+        elif 'test_rule_id' in request.form:
+            rule_id = request.form.get('test_rule_id')
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT rule_name, keywords, timeframe, prompt_text, email_format, sources FROM notifications WHERE id = %s AND user_id = %s",
+                            (rule_id, current_user.id))
+                result = cur.fetchone()
+                if result:
+                    rule_name, keywords, timeframe, prompt_text, email_format, sources = result
+                    sources = json.loads(sources)
+                    test_result = run_notification_rule(rule_id, current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources, test_mode=True)
+                    flash(f"Test email sent. Status: {test_result['status']}. Message ID: {test_result['message_id']}", "success")
+                else:
+                    flash("Notification rule not found for testing", "error")
+            except Exception as e:
+                logger.error(f"Error testing notification rule: {str(e)}")
+                flash(f"Error testing notification rule: {str(e)}", "error")
+            finally:
+                cur.close()
+                conn.close()
+
+    response = make_response(render_template('notifications.html', notifications=notifications, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+@app.route('/notification_edit/<rule_id>', methods=['GET', 'POST'])
+@login_required
+def notification_edit(rule_id):
+    if not current_user.is_authenticated:
+        response = make_response(redirect(url_for('login')))
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT rule_name, keywords, sources, timeframe, prompt_text, email_format FROM notifications WHERE id = %s AND user_id = %s",
+                    (rule_id, current_user.id))
+        result = cur.fetchone()
+        if not result:
+            flash("Notification rule not found", "error")
+            return redirect(url_for('notifications'))
+        notification = {
+            'rule_name': result[0],
+            'keywords': result[1],
+            'sources': json.loads(result[2]),
+            'timeframe': result[3],
+            'prompt_text': result[4],
+            'email_format': result[5]
+        }
+    except psycopg2.Error as e:
+        logger.error(f"Error retrieving notification: {str(e)}")
+        flash("Error retrieving notification rule", "error")
+        return redirect(url_for('notifications'))
+    finally:
+        cur.close()
+        conn.close()
+
+    if request.method == 'POST':
+        rule_name = request.form.get('rule_name')
+        keywords = request.form.get('keywords')
+        sources = request.form.getlist('sources')
+        timeframe = request.form.get('timeframe')
+        prompt_text = request.form.get('prompt_text')
+        email_format = request.form.get('email_format')
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE notifications SET rule_name = %s, keywords = %s, sources = %s, timeframe = %s, prompt_text = %s, email_format = %s WHERE id = %s AND user_id = %s",
+                (rule_name, keywords, json.dumps(sources), timeframe, prompt_text, email_format, rule_id, current_user.id)
+            )
+            if cur.rowcount == 0:
+                flash("Notification rule not found", "error")
+            else:
+                conn.commit()
+                flash("Notification rule updated successfully", "success")
+                scheduler.remove_job(f"notification_{rule_id}")
+                scheduler.add_job(
+                    run_notification_rule,
+                    trigger=CronTrigger(hour=8, minute=0) if timeframe == 'daily' else
+                            CronTrigger(day_of_week='mon', hour=8, minute=0) if timeframe == 'weekly' else
+                            CronTrigger(day=1, hour=8, minute=0) if timeframe == 'monthly' else
+                            CronTrigger(month=1, day=1, hour=8, minute=0),
+                    args=[rule_id, current_user.id, rule_name, keywords, timeframe, prompt_text, email_format, current_user.email, sources],
+                    id=f"notification_{rule_id}",
+                    replace_existing=True
+                )
+            return redirect(url_for('notifications'))
+        except psycopg2.Error as e:
+            logger.error(f"Error updating notification rule: {str(e)}")
+            conn.rollback()
+            flash("Error updating notification rule", "error")
+        finally:
+            cur.close()
+            conn.close()
+
+    response = make_response(render_template('notification_edit.html', notification=notification, username=current_user.email))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
