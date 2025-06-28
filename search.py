@@ -6,7 +6,7 @@ import time
 import psycopg2
 from datetime import datetime
 from utils import esearch, efetch, parse_efetch_xml, extract_keywords_and_date, build_pubmed_query, PubMedSearchHandler, GoogleScholarSearchHandler, SemanticScholarSearchHandler
-from core import app, logger, update_search_progress, query_grok_api, get_db_connection, get_cached_grok_response, cache_grok_response
+from core import app, logger, update_search_progress, query_grok_api, get_db_connection
 from search_utils import save_search_results, get_search_results, rank_results
 from features import save_search_history
 from prompt_utils import parse_prompt
@@ -15,6 +15,7 @@ from nltk.tokenize import sent_tokenize
 from search_utils import markdown_to_html
 
 def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
+    from core import get_cached_grok_response, cache_grok_response  # Lazy imports
     if not results:
         return f"No results found for '{query}'{' outside the specified timeframe' if is_fallback else ''}."
     
