@@ -40,6 +40,12 @@ BIOMEDICAL_VOCAB = {
     "adverse effect": ["side effect", "adverse reaction", "negative effect"]
 }
 
+# Add stop words to skip for MeSH lookups
+MESH_STOP_WORDS = {
+    'information', 'last year', 'past year', 'recent', 'new', 'what', 'how', 'when',
+    'where', 'why', 'is', 'are', 'in', 'the', 'of', 'for', 'and', 'or', 'about'
+}
+
 @sleep_and_retry
 @limits(calls=10, period=1)
 @tenacity.retry(
@@ -115,9 +121,13 @@ def parse_efetch_xml(xml_content):
         return []
 
 def get_mesh_synonyms(keyword, api_key=None):
-    if keyword.lower() in BIOMEDICAL_VOCAB:
+    keyword_lower = keyword.lower()
+    if keyword_lower in MESH_STOP_WORDS:
+        logger.info(f"Skipping MeSH lookup for stop word: {keyword}")
+        return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))
+    if keyword_lower in BIOMEDICAL_VOCAB:
         logger.info(f"Using BIOMEDICAL_VOCAB for {keyword}")
-        return BIOMEDICAL_VOCAB[keyword.lower()][:3]
+        return BIOMEDICAL_VOCAB[keyword_lower][:3]
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=mesh&term={urllib.parse.quote(keyword)}&retmax=1&retmode=xml"
     if api_key:
         url += f"&api_key={api_key}"
@@ -128,8 +138,8 @@ def get_mesh_synonyms(keyword, api_key=None):
         try:
             root = ET.fromstring(response.content)
         except ET.ParseError as e:
-            logger.error(f"Invalid XML in MeSH response for {keyword}: {str(e)}")
-            return BIOMEDICAL_VOCAB.get(keyword.lower(), get_datamuse_synonyms(keyword))
+            logger.error(f"Invalid XML in MeSH esearch response for {keyword}: {str(e)}, response: {response.content[:200]}")
+            return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))
         id_list = root.findall(".//Id")
         if not id_list:
             logger.info(f"No MeSH descriptors found for {keyword}")
@@ -141,11 +151,12 @@ def get_mesh_synonyms(keyword, api_key=None):
             efetch_url += f"&api_key={api_key}"
         efetch_response = requests.get(efetch_url, timeout=5)
         efetch_response.raise_for_status()
+        logger.debug(f"MeSH efetch response for {keyword}: {efetch_response.content[:200]}...")
         try:
             efetch_root = ET.fromstring(efetch_response.content)
         except ET.ParseError as e:
-            logger.error(f"Invalid XML in MeSH efetch response for {keyword}: {str(e)}")
-            return BIOMEDICAL_VOCAB.get(keyword.lower(), get_datamuse_synonyms(keyword))
+            logger.error(f"Invalid XML in MeSH efetch response for {keyword}: {str(e)}, response: {efetch_response.content[:200]}")
+            return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))
         
         synonyms = []
         for term in efetch_root.findall(".//TermList/Term"):
@@ -156,9 +167,9 @@ def get_mesh_synonyms(keyword, api_key=None):
                 synonyms.append(entry_term.text.lower())
         
         return list(set(synonyms))[:3]
-    except Exception as e:
-        logger.error(f"MeSH API error for {keyword}: {str(e)}")
-        return BIOMEDICAL_VOCAB.get(keyword.lower(), get_datamuse_synonyms(keyword))
+    except requests.RequestException as e:
+        logger.error(f"MeSH API error for {keyword}: {str(e)}, response: {response.content[:200] if 'response' in locals() else 'N/A'}")
+        return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))
 
 def get_datamuse_synonyms(keyword):
     url = f"https://api.datamuse.com/words?rel_syn={urllib.parse.quote(keyword)}&max=5"
@@ -220,7 +231,7 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
         elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
             year = int(year_match.group(1))
             date_range = f"{year}/01/01:{year}/12/31"
-        elif 'past year' in query_lower:
+        elif 'past year' in query_lower or 'last year' in query_lower:
             date_range = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
         elif 'past week' in query_lower:
             date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
