@@ -465,12 +465,16 @@ def chat_message():
     message = data.get('message', '').strip()
     search_ids = session.get('selected_search_ids', [])
     
+    logger.debug(f"Chat message request: user={current_user.id}, session_id={session_id}, message={message[:50]}..., search_ids={search_ids}")
+    
     if not message:
+        logger.warning(f"Empty message received for user={current_user.id}")
         return jsonify({'status': 'error', 'message': 'Message cannot be empty'}), 400
     
     save_chat_message(current_user.id, session_id, message, True, search_ids)
     
     if not search_ids:
+        logger.warning(f"No search IDs selected for user={current_user.id}, session_id={session_id}")
         return jsonify({
             'status': 'error',
             'message': 'Please select at least one search to chat about.'
@@ -482,6 +486,7 @@ def chat_message():
         search_results.extend(results)
     
     if not search_results:
+        logger.warning(f"No search results found for user={current_user.id}, search_ids={search_ids}")
         return jsonify({
             'status': 'error',
             'message': 'No relevant search results found for the selected searches.'
@@ -504,6 +509,7 @@ Respond directly to the user's question, using only the context provided.
     ai_response = query_grok_api(system_prompt + "\nUser: " + message, context)
     save_chat_message(current_user.id, session_id, ai_response, False, search_ids)
     
+    logger.info(f"Chat response generated for user={current_user.id}, message={message[:50]}..., response_length={len(ai_response)}")
     return jsonify({
         'status': 'success',
         'message': ai_response,

@@ -28,7 +28,7 @@
                 <div class="card-body">
                     <form id="select-searches-form">
                         <div class="form-group">
-                            <select name="selected_searches" id="search-select" class="form-control" multiple>
+                            <select name="selected_searches" id="search-select" class="form-control" multiple required>
                                 {% for search in search_history %}
                                     <option value="{{ search.id }}" {% if search.id in search_ids %}selected{% endif %}>{{ search.query }} ({{ search.timestamp | datetimeformat }})</option>
                                 {% endfor %}
@@ -46,7 +46,7 @@
                     <div id="chat-error" class="alert alert-danger" style="display: none;"></div>
                     <form id="chat-form">
                         <div class="form-group">
-                            <textarea name="message" class="form-control" rows="4" placeholder="Type your message..."></textarea>
+                            <textarea name="message" class="form-control" rows="4" placeholder="Type your message..." required></textarea>
                         </div>
                         <button type="submit" id="send-button" class="btn btn-primary" disabled>Send</button>
                     </form>
@@ -100,17 +100,22 @@
                         $('#chat-error').text(response.message).show();
                     }
                 },
-                error: function() {
-                    $('#chat-error').text('Error selecting searches.').show();
+                error: function(xhr) {
+                    $('#chat-error').text('Error selecting searches: ' + (xhr.responseJSON?.message || 'Please try again.')).show();
                 }
             });
         });
 
         $('#chat-form').on('submit', function(e) {
             e.preventDefault();
-            var message = $('textarea[name="message"]').val();
-            if (!message.trim()) {
+            var message = $('textarea[name="message"]').val().trim();
+            var selectedSearches = $('#search-select').val() || [];
+            if (!message) {
                 $('#chat-error').text('Message cannot be empty.').show();
+                return;
+            }
+            if (selectedSearches.length === 0) {
+                $('#chat-error').text('Please select at least one search to chat about.').show();
                 return;
             }
             $('#thinking').show();
@@ -128,17 +133,15 @@
                         );
                         $('textarea[name="message"]').val('');
                         $('#thinking').hide();
-                        // Add target="_blank" to new AI response links
                         $('.ai-message a').attr('target', '_blank');
-                        // Scroll to top of chat messages
                         $('#chat-messages').scrollTop(0);
                     } else {
                         $('#chat-error').text(response.message).show();
                         $('#thinking').hide();
                     }
                 },
-                error: function() {
-                    $('#chat-error').text('Error sending message. Please try again.').show();
+                error: function(xhr) {
+                    $('#chat-error').text('Error sending message: ' + (xhr.responseJSON?.message || 'Please try again.')).show();
                     $('#thinking').hide();
                 }
             });
