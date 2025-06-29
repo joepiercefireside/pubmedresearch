@@ -43,7 +43,7 @@ BIOMEDICAL_VOCAB = {
 # Add stop words to skip for MeSH lookups
 MESH_STOP_WORDS = {
     'information', 'last year', 'past year', 'recent', 'new', 'what', 'how', 'when',
-    'where', 'why', 'is', 'are', 'in', 'the', 'of', 'for', 'and', 'or', 'about'
+    'where', 'why', 'is', 'are', 'in', 'the', 'of', 'for', 'and', 'or', 'about', 'treatments'
 }
 
 @sleep_and_retry
@@ -213,6 +213,9 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
             keywords.append(' '.join(current_phrase))
         
         keywords = [kw for kw in keywords if kw.strip()][:5]
+        if not keywords:
+            logger.warning(f"No valid keywords extracted from query: {query}")
+            return [], None, None
         
         api_key = os.environ.get('PUBMED_API_KEY')
         keywords_with_synonyms = []
@@ -223,23 +226,38 @@ def extract_keywords_and_date(query, search_older=False, start_year=None):
             keywords_with_synonyms.append((kw, list(set(synonyms))[:3]))
         
         today = datetime.now()
+        current_year = today.year
+        default_start_year = current_year - 5  # Default to last 5 years
         date_range = None
+        start_year_int = default_start_year
         
+        # Handle query-specified timeframes
         if since_match := re.search(r'\bsince\s+(20\d{2})\b', query_lower):
-            start_year = int(since_match.group(1))
-            date_range = f"{start_year}/01/01:{today.strftime('%Y/%m/%d')}"
+            start_year_int = int(since_match.group(1))
+            date_range = f"{start_year_int}/01/01:{today.strftime('%Y/%m/%d')}"
         elif year_match := re.search(r'\b(20\d{2})\b', query_lower):
             year = int(year_match.group(1))
             date_range = f"{year}/01/01:{year}/12/31"
+            start_year_int = year
         elif 'past year' in query_lower or 'last year' in query_lower:
             date_range = f"{(today - timedelta(days=365)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
+            start_year_int = current_year - 1
         elif 'past week' in query_lower:
             date_range = f"{(today - timedelta(days=7)).strftime('%Y/%m/%d')}:{today.strftime('%Y/%m/%d')}"
+            start_year_int = current_year
+        elif search_older and start_year:
+            try:
+                start_year_int = int(start_year)
+                if start_year_int < 1900 or start_year_int > current_year:
+                    start_year_int = default_start_year
+                date_range = f"{start_year_int}/01/01:{today.strftime('%Y/%m/%d')}"
+            except ValueError:
+                start_year_int = default_start_year
+                date_range = f"{start_year_int}/01/01:{today.strftime('%Y/%m/%d')}"
         else:
-            start_year_int = int(start_year) if search_older and start_year else today.year - 10
             date_range = f"{start_year_int}/01/01:{today.strftime('%Y/%m/%d')}"
         
-        logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}")
+        logger.info(f"Extracted keywords: {keywords_with_synonyms}, Date range: {date_range}, Start year: {start_year_int}")
         return keywords_with_synonyms, date_range, start_year_int
     except Exception as e:
         logger.error(f"Error extracting keywords and date: {str(e)}")
@@ -360,7 +378,7 @@ class GoogleScholarSearchHandler(SearchHandler):
                             'title': item.get('title', 'No title'),
                             'abstract': item.get('snippet', ''),
                             'authors': ', '.join([author.get('name', 'N/A') for author in item.get('publication_info', {}).get('authors', [])]) or 'N/A',
-                            'journal': item.get('publication_info', {}).get('summary', 'Google Scholar').split(' - ')[0],
+                            'journal': item.get('publication_info', {}).get('summary', 'Google Scholar').split(' - ')[-0],
                             'publication_date': pub_date,
                             'url': item.get('link', ''),
                             'source_id': 'googlescholar'
