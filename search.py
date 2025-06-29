@@ -27,7 +27,7 @@ def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallba
     
     context = "\n".join([f"Source: {r.get('source_id', 'unknown')}\nTitle: {r['title']}\nAbstract: {r.get('abstract', '')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}" for r in context_results])
     
-    MAX_CONTEXT_LENGTH = 8000
+    MAX_CONTEXT_LENGTH = 16000
     if len(context) > MAX_CONTEXT_LENGTH:
         context = context[:MAX_CONTEXT_LENGTH] + "... [truncated]"
         logger.warning(f"Context truncated to {MAX_CONTEXT_LENGTH} characters for query: {query[:50]}...")

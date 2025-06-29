@@ -36,7 +36,7 @@ def get_search_results(user_id, query):
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT result_data FROM search_results WHERE user_id = %s AND query = %s ORDER BY created_at DESC LIMIT 10",
+            "SELECT result_data FROM search_results WHERE user_id = %s AND query = %s ORDER BY created_at DESC LIMIT 20",
             (str(user_id), query)
         )
         results = []
@@ -64,7 +64,7 @@ def rank_results(query, results, prompt_params=None):
     display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
     try:
         articles_context = []
-        for i, result in enumerate(results[:10]):
+        for i, result in enumerate(results[:20]):
             article_text = f"Article {i+1}: Title: {result['title']}\nAbstract: {result.get('abstract', '')}\nAuthors: {result.get('authors', 'N/A')}\nJournal: {result.get('journal', 'N/A')}\nDate: {result.get('publication_date', 'N/A')}"
             articles_context.append(article_text)
         
@@ -128,7 +128,7 @@ def embedding_based_ranking(query, results, prompt_params=None):
         return results[:display_result_count]
     current_year = datetime.now().year
     
-    results = results[:10]
+    results = results[:20]
     embeddings = []
     texts = []
     for result in results:

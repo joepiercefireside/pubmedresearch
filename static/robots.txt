@@ -1,0 +1,6 @@
+User-agent: *
+Disallow: /search
+Disallow: /chat
+Disallow: /previous_searches
+Disallow: /notifications
+Disallow: /prompt

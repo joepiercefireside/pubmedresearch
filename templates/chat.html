@@ -7,7 +7,7 @@
     <div class="chat-layout">
         <div class="chat-sidebar">
             <div class="card retention-card">
-                <div class="card-header">Chat Memory Retention</div>
+                <div class="card-header">Search Retention Period</div>
                 <div class="card-body">
                     <form method="POST">
                         <div class="form-group">
@@ -24,11 +24,11 @@
                         {% endif %}
                     {% endwith %}
                 </div>
-                <div class="card-header">Select Searches</div>
+                <div class="card-header">Select Searches to Chat About</div>
                 <div class="card-body">
                     <form id="select-searches-form">
                         <div class="form-group">
-                            <select name="selected_searches" class="form-control" multiple>
+                            <select name="selected_searches" id="search-select" class="form-control" multiple>
                                 {% for search in search_history %}
                                     <option value="{{ search.id }}" {% if search.id in search_ids %}selected{% endif %}>{{ search.query }} ({{ search.timestamp | datetimeformat }})</option>
                                 {% endfor %}
@@ -43,11 +43,12 @@
             <div class="card chat-card">
                 <div class="card-header">Chat</div>
                 <div class="card-body">
+                    <div id="chat-error" class="alert alert-danger" style="display: none;"></div>
                     <form id="chat-form">
                         <div class="form-group">
                             <textarea name="message" class="form-control" rows="4" placeholder="Type your message..."></textarea>
                         </div>
-                        <button type="submit" class="btn btn-primary">Send</button>
+                        <button type="submit" id="send-button" class="btn btn-primary" disabled>Send</button>
                     </form>
                     <div id="thinking" style="display: none;">Thinking...</div>
                     <div id="chat-messages">
@@ -69,9 +70,24 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
     $(document).ready(function() {
+        // Enable/disable Send button based on search selection
+        function updateSendButton() {
+            var selectedSearches = $('#search-select').val() || [];
+            $('#send-button').prop('disabled', selectedSearches.length === 0);
+        }
+        $('#search-select').on('change', updateSendButton);
+        updateSendButton();
+
+        // Add target="_blank" to AI response links
+        $('.ai-message a').attr('target', '_blank');
+
         $('#select-searches-form').on('submit', function(e) {
             e.preventDefault();
-            var selectedSearches = $('select[name="selected_searches"]').val() || [];
+            var selectedSearches = $('#search-select').val() || [];
+            if (selectedSearches.length === 0) {
+                $('#chat-error').text('Please select at least one search to chat about.').show();
+                return;
+            }
             $.ajax({
                 url: '{{ url_for("select_searches") }}',
                 type: 'POST',
@@ -81,11 +97,11 @@
                     if (response.status === 'success') {
                         window.location.reload();
                     } else {
-                        alert(response.message);
+                        $('#chat-error').text(response.message).show();
                     }
                 },
                 error: function() {
-                    alert('Error selecting searches.');
+                    $('#chat-error').text('Error selecting searches.').show();
                 }
             });
         });
@@ -94,10 +110,11 @@
             e.preventDefault();
             var message = $('textarea[name="message"]').val();
             if (!message.trim()) {
-                alert('Message cannot be empty.');
+                $('#chat-error').text('Message cannot be empty.').show();
                 return;
             }
             $('#thinking').show();
+            $('#chat-error').hide();
             $.ajax({
                 url: '{{ url_for("chat_message") }}',
                 type: 'POST',
@@ -111,13 +128,17 @@
                         );
                         $('textarea[name="message"]').val('');
                         $('#thinking').hide();
+                        // Add target="_blank" to new AI response links
+                        $('.ai-message a').attr('target', '_blank');
+                        // Scroll to top of chat messages
+                        $('#chat-messages').scrollTop(0);
                     } else {
-                        alert(response.message);
+                        $('#chat-error').text(response.message).show();
                         $('#thinking').hide();
                     }
                 },
                 error: function() {
-                    alert('Error sending message.');
+                    $('#chat-error').text('Error sending message. Please try again.').show();
                     $('#thinking').hide();
                 }
             });

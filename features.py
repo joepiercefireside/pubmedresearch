@@ -37,11 +37,11 @@ def save_search_history(user_id, query, prompt_text, sources, results, search_id
     logger.info(f"Saved search history for user={user_id}, query={query}, search_id={search_id}")
     return result_ids
 
-def get_search_history(user_id, days=7):
+def get_search_history(user_id, retention_hours):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cutoff_time = time.time() - (days * 86400)
+        cutoff_time = time.time() - (retention_hours * 3600)
         cur.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = %s AND timestamp > %s ORDER BY timestamp DESC",
                     (user_id, cutoff_time))
         results = [
@@ -108,17 +108,16 @@ def save_chat_message(user_id, session_id, message, is_user, search_ids=None):
         cur.close()
         conn.close()
 
-def get_chat_history(user_id, session_id, retention_hours, search_ids=None):
+def get_chat_history(user_id, session_id, search_ids=None):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cutoff_time = time.time() - (retention_hours * 3600)
         if search_ids:
-            cur.execute("SELECT message, is_user, timestamp, search_id FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s AND search_id = %s ORDER BY timestamp ASC",
-                        (user_id, session_id, cutoff_time, json.dumps(search_ids)))
+            cur.execute("SELECT message, is_user, timestamp, search_id FROM chat_history WHERE user_id = %s AND session_id = %s AND search_id = %s ORDER BY timestamp ASC",
+                        (user_id, session_id, json.dumps(search_ids)))
         else:
-            cur.execute("SELECT message, is_user, timestamp, search_id FROM chat_history WHERE user_id = %s AND session_id = %s AND timestamp > %s ORDER BY timestamp ASC",
-                        (user_id, session_id, cutoff_time))
+            cur.execute("SELECT message, is_user, timestamp, search_id FROM chat_history WHERE user_id = %s AND session_id = %s ORDER BY timestamp ASC",
+                        (user_id, session_id))
         messages = [{'message': row[0], 'is_user': row[1], 'timestamp': row[2], 'search_ids': json.loads(row[3]) if row[3] else None} for row in cur.fetchall()]
         return messages
     except (psycopg2.Error, json.JSONDecodeError, TypeError) as e:
@@ -402,14 +401,15 @@ def chat():
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
     
-    session_id = session.get('chat_session_id', str(hashlib.sha256(str(time.time()).encode()).hexdigest()))
+    # Generate new session ID to clear chat history
+    session_id = hashlib.sha256(str(time.time()).encode()).hexdigest()
     session['chat_session_id'] = session_id
     
     retention_hours = get_user_settings(current_user.id)
     search_ids = request.args.getlist('search_id') or session.get('selected_search_ids', [])
     if search_ids:
         session['selected_search_ids'] = search_ids
-    chat_history = get_chat_history(current_user.id, session_id, retention_hours, search_ids if search_ids else None)
+    chat_history = get_chat_history(current_user.id, session_id, search_ids if search_ids else None)
     chat_history = [
         {
             'message': msg['message'],
@@ -418,7 +418,7 @@ def chat():
             'html_message': markdown_to_html(msg['message']) if not msg['is_user'] else None
         } for msg in chat_history
     ]
-    search_history = get_search_history(current_user.id, retention_hours / 24)
+    search_history = get_search_history(current_user.id, retention_hours)
     
     if request.method == 'POST' and 'retention_hours' in request.form:
         new_retention = request.form.get('retention_hours')
@@ -429,7 +429,7 @@ def chat():
                     flash("Retention hours must be between 1 and 720.", "error")
                 else:
                     update_user_settings(current_user.id, retention_hours)
-                    flash("Chat memory retention updated.", "success")
+                    flash("Search retention period updated.", "success")
                     return redirect(url_for('chat', search_id=search_ids))
             except ValueError:
                 flash("Invalid retention hours.", "error")
@@ -448,7 +448,7 @@ def select_searches():
     selected_searches = data.get('selected_searches', [])
     
     if not selected_searches:
-        return jsonify({'status': 'error', 'message': 'At least one search must be selected'}), 400
+        return jsonify({'status': 'error', 'message': 'Please select at least one search to chat about'}), 400
     
     session['selected_search_ids'] = selected_searches
     logger.info(f"Selected search IDs {selected_searches} for user {current_user.id}")
@@ -473,7 +473,7 @@ def chat_message():
     if not search_ids:
         return jsonify({
             'status': 'error',
-            'message': 'No search results selected. Please select at least one search to chat about.'
+            'message': 'Please select at least one search to chat about.'
         }), 400
     
     search_results = []
@@ -487,6 +487,8 @@ def chat_message():
             'message': 'No relevant search results found for the selected searches.'
         }), 400
     
+    # Limit to top 20 results
+    search_results = search_results[:20]
     context = "\n".join([
         f"Title: {r['title']}\nAbstract: {r.get('abstract', 'N/A')}\nAuthors: {r.get('authors', 'N/A')}\nJournal: {r.get('journal', 'N/A')}\nDate: {r.get('publication_date', 'N/A')}\nURL: {r.get('url', 'N/A')}"
         for r in search_results
