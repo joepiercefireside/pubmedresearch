@@ -46,7 +46,7 @@ def get_search_results(user_id, search_id):
             logger.warning(f"No search history found for user={user_id}, search_id={search_id}")
             return []
         result_ids = json.loads(result[0]) if result[0] else []
-        query = result[1].strip()
+        query = result[1].strip().lower()
         logger.debug(f"Retrieving results for user={user_id}, search_id={search_id}, query={query[:50]}..., result_ids={result_ids[:5]}...")
         
         results = []
@@ -71,7 +71,7 @@ def get_search_results(user_id, search_id):
         # Fallback to query matching
         if not results:
             cur.execute(
-                "SELECT result_data FROM search_results WHERE user_id = %s AND TRIM(query) = %s ORDER BY created_at DESC LIMIT 20",
+                "SELECT result_data FROM search_results WHERE user_id = %s AND TRIM(LOWER(query)) = %s ORDER BY created_at DESC LIMIT 20",
                 (str(user_id), query)
             )
             for row in cur.fetchall():

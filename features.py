@@ -37,13 +37,22 @@ def save_search_history(user_id, query, prompt_text, sources, results, search_id
     logger.info(f"Saved search history for user={user_id}, query={query}, search_id={search_id}")
     return result_ids
 
-def get_search_history(user_id, retention_hours):
+def get_search_history(user_id, retention_hours=24):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cutoff_time = time.time() - (retention_hours * 3600)
-        cur.execute("SELECT id, query, prompt_text, sources, result_ids, timestamp FROM search_history WHERE user_id = %s AND timestamp > %s ORDER BY timestamp DESC",
-                    (user_id, cutoff_time))
+        cur.execute("""
+            SELECT sh.id, sh.query, sh.prompt_text, sh.sources, sh.result_ids, sh.timestamp 
+            FROM search_history sh
+            WHERE sh.user_id = %s AND sh.timestamp > %s 
+            AND EXISTS (
+                SELECT 1 FROM search_results sr 
+                WHERE sr.user_id = sh.user_id 
+                AND sr.result_id = ANY(sh.result_ids::text[])
+            )
+            ORDER BY sh.timestamp DESC
+        """, (user_id, cutoff_time))
         results = [
             {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]) if row[3] and isinstance(row[3], str) else [], 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
             for row in cur.fetchall()
@@ -393,6 +402,12 @@ def schedule_notification_rules():
         cur.close()
         conn.close()
 
+@app.errorhandler(TypeError)
+def handle_type_error(e):
+    logger.error(f"TypeError in application: {str(e)}")
+    flash("Invalid request parameters", "error")
+    return redirect(url_for('search'))
+
 @app.route('/chat', methods=['GET', 'POST'])
 @login_required
 def chat():
@@ -407,8 +422,34 @@ def chat():
     
     retention_hours = get_user_settings(current_user.id)
     search_ids = request.args.getlist('search_id') or session.get('selected_search_ids', [])
-    if search_ids:
-        session['selected_search_ids'] = search_ids
+    # Filter invalid search_ids
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        if search_ids:
+            cur.execute("""
+                SELECT id FROM search_history 
+                WHERE user_id = %s AND id = ANY(%s) 
+                AND EXISTS (
+                    SELECT 1 FROM search_results sr 
+                    WHERE sr.user_id = %s 
+                    AND sr.result_id = ANY(search_history.result_ids::text[])
+                )
+            """, (current_user.id, search_ids, current_user.id))
+            valid_search_ids = [row[0] for row in cur.fetchall()]
+            if valid_search_ids != search_ids:
+                session['selected_search_ids'] = valid_search_ids
+                session.modified = True
+                logger.info(f"Filtered search_ids for user={current_user.id}: {valid_search_ids}")
+        else:
+            session.pop('selected_search_ids', None)
+    except psycopg2.Error as e:
+        logger.error(f"Error validating search_ids: {str(e)}")
+        session.pop('selected_search_ids', None)
+    finally:
+        cur.close()
+        conn.close()
+
     chat_history = get_chat_history(current_user.id, session_id, search_ids if search_ids else None)
     chat_history = [
         {
@@ -452,10 +493,33 @@ def select_searches():
         logger.warning(f"No searches selected for user={current_user.id}")
         return jsonify({'status': 'error', 'message': 'Please select at least one search to chat about'}), 400
     
-    session['selected_search_ids'] = selected_searches
-    session.modified = True  # Ensure session is marked as modified
-    logger.info(f"Selected search IDs {selected_searches} for user {current_user.id}, session={session.get('chat_session_id')}")
-    return jsonify({'status': 'success', 'message': 'Searches selected'})
+    # Validate selected searches
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id FROM search_history 
+            WHERE user_id = %s AND id = ANY(%s) 
+            AND EXISTS (
+                SELECT 1 FROM search_results sr 
+                WHERE sr.user_id = %s 
+                AND sr.result_id = ANY(search_history.result_ids::text[])
+            )
+        """, (current_user.id, selected_searches, current_user.id))
+        valid_search_ids = [row[0] for row in cur.fetchall()]
+        if not valid_search_ids:
+            logger.warning(f"No valid searches found for user={current_user.id}, selected_searches={selected_searches}")
+            return jsonify({'status': 'error', 'message': 'No valid searches found for selection'}), 400
+        session['selected_search_ids'] = valid_search_ids
+        session.modified = True
+        logger.info(f"Selected search IDs {valid_search_ids} for user {current_user.id}, session={session.get('chat_session_id')}")
+        return jsonify({'status': 'success', 'message': 'Searches selected'})
+    except psycopg2.Error as e:
+        logger.error(f"Error validating selected searches: {str(e)}")
+        return jsonify({'status': 'error', 'message': 'Error selecting searches'}), 400
+    finally:
+        cur.close()
+        conn.close()
 
 @app.route('/chat_message', methods=['POST'])
 @login_required
@@ -486,6 +550,7 @@ def chat_message():
     search_results = []
     for search_id in search_ids:
         results = get_search_results(current_user.id, search_id)
+        logger.debug(f"Retrieved {len(results)} results for user={current_user.id}, search_id={search_id}")
         search_results.extend(results)
     
     if not search_results:
@@ -562,7 +627,8 @@ def previous_searches():
                 cur.close()
                 conn.close()
     
-    searches = get_search_history(current_user.id)
+    retention_hours = get_user_settings(current_user.id)
+    searches = get_search_history(current_user.id, retention_hours)
     response = make_response(render_template('previous_searches.html', searches=searches, username=current_user.email))
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
@@ -702,7 +768,7 @@ def notification_edit(rule_id):
         notification = {
             'rule_name': result[0],
             'keywords': result[1],
-            'sources': json.loads(result[2]) if result[2] and isinstance(result[2], str) else [],
+            'sources': json.loads(result[2]) if result[2] and isinstance(row[2], str) else [],
             'timeframe': result[3],
             'prompt_text': result[4],
             'email_format': result[5]

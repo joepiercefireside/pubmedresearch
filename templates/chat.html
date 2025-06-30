@@ -72,6 +72,21 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
     $(document).ready(function() {
+        // Clear invalid search_ids from session
+        $.ajax({
+            url: '{{ url_for("select_searches") }}',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ selected_searches: [] }),
+            async: false, // Ensure session is cleared before rendering
+            success: function(response) {
+                console.log('Cleared invalid search_ids');
+            },
+            error: function(xhr) {
+                console.error('Error clearing search_ids:', xhr.responseJSON?.message);
+            }
+        });
+
         // Track if search selection is complete
         var searchSelectionComplete = {{ 'true' if search_ids else 'false' }};
 
