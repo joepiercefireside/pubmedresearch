@@ -265,7 +265,10 @@ def search():
                                 primary_results = fallback_results = []
                                 break
                             continue
-                        raise
+                        logger.error(f"Search failed for {handler.name}: {str(e)}")
+                        update_search_progress(current_user.id, query, f"error: Search failed for {handler.name}: {str(e)}")
+                        primary_results = fallback_results = []
+                        break
 
                 if source_id == 'pubmed':
                     update_search_progress(current_user.id, query, f"Found {len(primary_results)} {handler.name} PMIDs")
@@ -335,15 +338,47 @@ def search():
                 source['results']['all'] = source['results']['all'][start_idx:end_idx]
                 source['results']['fallback'] = source['results']['fallback'][start_idx:end_idx]
 
-            result_ids = save_search_results(current_user.id, query, all_results)
-            search_id = hashlib.sha256((query + str(time.time())).encode()).hexdigest()[:16]
-            session['latest_search_id'] = search_id
-            session['latest_search_result_ids'] = json.dumps(result_ids[:10])
-            session['latest_query'] = query
+            try:
+                result_ids = save_search_results(current_user.id, query, all_results)
+                search_id = hashlib.sha256((query + str(time.time())).encode()).hexdigest()[:16]
+                session['latest_search_id'] = search_id
+                session['latest_search_result_ids'] = json.dumps(result_ids[:10])
+                session['latest_query'] = query
 
-            save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results, search_id)
+                save_search_history(current_user.id, query, selected_prompt_text, sources_selected, all_results, search_id)
 
-            update_search_progress(current_user.id, query, "complete")
+                update_search_progress(current_user.id, query, "complete")
+            except Exception as e:
+                logger.error(f"Error saving search data: {str(e)}")
+                update_search_progress(current_user.id, query, f"error: Failed to save search results: {str(e)}")
+                response = make_response(render_template('search.html',
+                    current_year=current_year,
+                    error=f"Failed to save search results: {str(e)}",
+                    prompts=prompts,
+                    prompt_id=prompt_id,
+                    prompt_text=selected_prompt_text,
+                    sources=sources,
+                    total_results=total_results,
+                    total_pages=total_pages,
+                    page=page,
+                    per_page=per_page,
+                    query=query,
+                    username=current_user.email,
+                    has_prompt=bool(selected_prompt_text),
+                    prompt_params=prompt_params,
+                    search_older=search_older,
+                    start_year=start_year,
+                    sort_by=sort_by,
+                    pubmed_results=pubmed_results,
+                    googlescholar_results=googlescholar_results,
+                    semanticscholar_results=semanticscholar_results,
+                    pubmed_fallback_results=pubmed_fallback_results,
+                    sources_selected=sources_selected,
+                    combined_summary='',
+                    result_limit=result_limit))
+                response.headers['X-Content-Type-Options'] = 'nosniff'
+                response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+                return response
 
             logger.debug("Rendering search template for POST/GET request")
             response = make_response(render_template(

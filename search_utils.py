@@ -18,13 +18,13 @@ def save_search_results(user_id, query, results):
             result_data = json.dumps(result)
             cur.execute(
                 "INSERT INTO search_results (user_id, query, source_id, result_data, created_at, result_id) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (str(user_id), query, result.get('source_id', 'unknown'), result_data, datetime.now(), result_id)
+                (str(user_id), query.strip(), result.get('source_id', 'unknown'), result_data, datetime.now(), result_id)
             )
             result_ids.append(result_id)
         conn.commit()
     except Exception as e:
-        from core import logger  # Lazy import
-        logger.error(f"Error saving search results: {str(e)}")
+        from core import logger
+        logger.error(f"Error saving search results for user={user_id}, query={query[:50]}...: {str(e)}")
         conn.rollback()
     finally:
         cur.close()
@@ -35,9 +35,9 @@ def get_search_results(user_id, search_id):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # Get result_ids from search_history
+        # Get result_ids and query from search_history
         cur.execute(
-            "SELECT result_ids FROM search_history WHERE user_id = %s AND id = %s",
+            "SELECT result_ids, query FROM search_history WHERE user_id = %s AND id = %s",
             (str(user_id), search_id)
         )
         result = cur.fetchone()
@@ -46,28 +46,51 @@ def get_search_results(user_id, search_id):
             logger.warning(f"No search history found for user={user_id}, search_id={search_id}")
             return []
         result_ids = json.loads(result[0]) if result[0] else []
+        query = result[1].strip()
+        logger.debug(f"Retrieving results for user={user_id}, search_id={search_id}, query={query[:50]}..., result_ids={result_ids[:5]}...")
         
-        # Query search_results by result_id
-        cur.execute(
-            "SELECT result_data FROM search_results WHERE user_id = %s AND result_id = ANY(%s) ORDER BY created_at DESC LIMIT 20",
-            (str(user_id), result_ids)
-        )
         results = []
-        for row in cur.fetchall():
-            try:
-                result_data = row[0]
-                if isinstance(result_data, str):
-                    results.append(json.loads(result_data))
-                else:
-                    results.append(result_data)
-            except json.JSONDecodeError as e:
-                from core import logger  # Lazy import
-                logger.error(f"Error decoding JSON for search result: {str(e)}")
-                continue
+        # Try querying by result_id
+        if result_ids:
+            cur.execute(
+                "SELECT result_data FROM search_results WHERE user_id = %s AND result_id = ANY(%s) ORDER BY created_at DESC LIMIT 20",
+                (str(user_id), result_ids)
+            )
+            for row in cur.fetchall():
+                try:
+                    result_data = row[0]
+                    if isinstance(result_data, str):
+                        results.append(json.loads(result_data))
+                    else:
+                        results.append(result_data)
+                except json.JSONDecodeError as e:
+                    from core import logger
+                    logger.error(f"Error decoding JSON for search result: {str(e)}")
+                    continue
+        
+        # Fallback to query matching
+        if not results:
+            cur.execute(
+                "SELECT result_data FROM search_results WHERE user_id = %s AND TRIM(query) = %s ORDER BY created_at DESC LIMIT 20",
+                (str(user_id), query)
+            )
+            for row in cur.fetchall():
+                try:
+                    result_data = row[0]
+                    if isinstance(result_data, str):
+                        results.append(json.loads(result_data))
+                    else:
+                        results.append(result_data)
+                except json.JSONDecodeError as e:
+                    from core import logger
+                    logger.error(f"Error decoding JSON for search result: {str(e)}")
+                    continue
+        
+        logger.debug(f"Retrieved {len(results)} results for user={user_id}, search_id={search_id}")
         return results
     except Exception as e:
-        from core import logger  # Lazy import
-        logger.error(f"Error retrieving search results: {str(e)}")
+        from core import logger
+        logger.error(f"Error retrieving search results for user={user_id}, search_id={search_id}: {str(e)}")
         return []
     finally:
         cur.close()

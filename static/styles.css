@@ -161,18 +161,26 @@ h1, h2, h3, h5, h6 {
     display: flex;
     align-items: center;
     margin-bottom: 8px;
+    max-width: 100%;
+    padding-right: 10px;
 }
 
 .form-check-input {
+    width: 16px;
+    height: 16px;
     margin-right: 8px;
-    width: auto;
+    flex-shrink: 0;
+    -webkit-appearance: checkbox;
+    -moz-appearance: checkbox;
+    appearance: checkbox;
 }
 
 .form-check-label {
-    flex-grow: 1;
     word-wrap: break-word;
     overflow-wrap: break-word;
-    max-width: 100%;
+    max-width: calc(100% - 30px);
+    font-size: 0.85em;
+    line-height: 1.2;
 }
 
 .btn {
