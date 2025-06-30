@@ -157,8 +157,22 @@ h1, h2, h3, h5, h6 {
     opacity: 0.65;
 }
 
+.form-check {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
 .form-check-input {
-    margin-top: 0.3rem;
+    margin-right: 8px;
+    width: auto;
+}
+
+.form-check-label {
+    flex-grow: 1;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
 }
 
 .btn {

@@ -34,6 +34,14 @@
                                     <label class="form-check-label">{{ search.query }} ({{ search.timestamp | datetimeformat }})</label>
                                 </div>
                             {% endfor %}
+                            <!-- Fallback multi-line select (uncomment if preferred over checkboxes) -->
+                            <!--
+                            <select name="selected_searches" id="search-select" class="form-control" multiple size="5">
+                                {% for search in search_history %}
+                                    <option value="{{ search.id }}" {% if search.id in search_ids %}selected{% endif %}>{{ search.query }} ({{ search.timestamp | datetimeformat }})</option>
+                                {% endfor %}
+                            </select>
+                            -->
                             <button type="submit" class="btn btn-primary mt-2" id="select-searches-button">Update</button>
                             <div id="select-searches-loading" style="display: none;">Updating...</div>
                         </div>

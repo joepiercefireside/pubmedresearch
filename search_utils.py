@@ -17,8 +17,8 @@ def save_search_results(user_id, query, results):
             result_id = hashlib.md5(json.dumps(result, sort_keys=True).encode()).hexdigest()
             result_data = json.dumps(result)
             cur.execute(
-                "INSERT INTO search_results (user_id, query, source_id, result_data, created_at) VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (str(user_id), query, result.get('source_id', 'unknown'), result_data, datetime.now())
+                "INSERT INTO search_results (user_id, query, source_id, result_data, created_at, result_id) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                (str(user_id), query, result.get('source_id', 'unknown'), result_data, datetime.now(), result_id)
             )
             result_ids.append(result_id)
         conn.commit()
@@ -31,13 +31,26 @@ def save_search_results(user_id, query, results):
         conn.close()
     return result_ids
 
-def get_search_results(user_id, query):
+def get_search_results(user_id, search_id):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        # Get result_ids from search_history
         cur.execute(
-            "SELECT result_data FROM search_results WHERE user_id = %s AND query = %s ORDER BY created_at DESC LIMIT 20",
-            (str(user_id), query)
+            "SELECT result_ids FROM search_history WHERE user_id = %s AND id = %s",
+            (str(user_id), search_id)
+        )
+        result = cur.fetchone()
+        if not result:
+            from core import logger
+            logger.warning(f"No search history found for user={user_id}, search_id={search_id}")
+            return []
+        result_ids = json.loads(result[0]) if result[0] else []
+        
+        # Query search_results by result_id
+        cur.execute(
+            "SELECT result_data FROM search_results WHERE user_id = %s AND result_id = ANY(%s) ORDER BY created_at DESC LIMIT 20",
+            (str(user_id), result_ids)
         )
         results = []
         for row in cur.fetchall():
