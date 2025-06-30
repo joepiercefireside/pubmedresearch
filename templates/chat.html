@@ -28,12 +28,14 @@
                 <div class="card-body">
                     <form id="select-searches-form">
                         <div class="form-group">
-                            <select name="selected_searches" id="search-select" class="form-control" multiple required>
-                                {% for search in search_history %}
-                                    <option value="{{ search.id }}" {% if search.id in search_ids %}selected{% endif %}>{{ search.query }} ({{ search.timestamp | datetimeformat }})</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit" class="btn btn-primary mt-2">Update</button>
+                            {% for search in search_history %}
+                                <div class="form-check">
+                                    <input type="checkbox" name="selected_searches" value="{{ search.id }}" class="form-check-input" {% if search.id in search_ids %}checked{% endif %}>
+                                    <label class="form-check-label">{{ search.query }} ({{ search.timestamp | datetimeformat }})</label>
+                                </div>
+                            {% endfor %}
+                            <button type="submit" class="btn btn-primary mt-2" id="select-searches-button">Update</button>
+                            <div id="select-searches-loading" style="display: none;">Updating...</div>
                         </div>
                     </form>
                 </div>
@@ -70,12 +72,17 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
     $(document).ready(function() {
-        // Enable/disable Send button based on search selection
+        // Track if search selection is complete
+        var searchSelectionComplete = {{ 'true' if search_ids else 'false' }};
+
+        // Enable/disable Send button
         function updateSendButton() {
-            var selectedSearches = $('#search-select').val() || [];
-            $('#send-button').prop('disabled', selectedSearches.length === 0);
+            var selectedSearches = $('input[name="selected_searches"]:checked').map(function() {
+                return $(this).val();
+            }).get();
+            $('#send-button').prop('disabled', selectedSearches.length === 0 || !searchSelectionComplete);
         }
-        $('#search-select').on('change', updateSendButton);
+        $('input[name="selected_searches"]').on('change', updateSendButton);
         updateSendButton();
 
         // Add target="_blank" to AI response links
@@ -83,11 +90,16 @@
 
         $('#select-searches-form').on('submit', function(e) {
             e.preventDefault();
-            var selectedSearches = $('#search-select').val() || [];
+            var selectedSearches = $('input[name="selected_searches"]:checked').map(function() {
+                return $(this).val();
+            }).get();
             if (selectedSearches.length === 0) {
                 $('#chat-error').text('Please select at least one search to chat about.').show();
                 return;
             }
+            $('#select-searches-button').prop('disabled', true);
+            $('#select-searches-loading').show();
+            $('#chat-error').hide();
             $.ajax({
                 url: '{{ url_for("select_searches") }}',
                 type: 'POST',
@@ -95,6 +107,8 @@
                 data: JSON.stringify({ selected_searches: selectedSearches }),
                 success: function(response) {
                     if (response.status === 'success') {
+                        searchSelectionComplete = true;
+                        updateSendButton();
                         window.location.reload();
                     } else {
                         $('#chat-error').text(response.message).show();
@@ -102,20 +116,23 @@
                 },
                 error: function(xhr) {
                     $('#chat-error').text('Error selecting searches: ' + (xhr.responseJSON?.message || 'Please try again.')).show();
+                },
+                complete: function() {
+                    $('#select-searches-button').prop('disabled', false);
+                    $('#select-searches-loading').hide();
                 }
             });
         });
 
         $('#chat-form').on('submit', function(e) {
             e.preventDefault();
-            var message = $('textarea[name="message"]').val().trim();
-            var selectedSearches = $('#search-select').val() || [];
-            if (!message) {
-                $('#chat-error').text('Message cannot be empty.').show();
+            if (!searchSelectionComplete) {
+                $('#chat-error').text('Please update search selection before sending a message.').show();
                 return;
             }
-            if (selectedSearches.length === 0) {
-                $('#chat-error').text('Please select at least one search to chat about.').show();
+            var message = $('textarea[name="message"]').val().trim();
+            if (!message) {
+                $('#chat-error').text('Message cannot be empty.').show();
                 return;
             }
             $('#thinking').show();

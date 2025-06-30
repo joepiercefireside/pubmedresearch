@@ -445,13 +445,16 @@ def select_searches():
         return jsonify({'status': 'error', 'message': 'User not authenticated'}), 401
     
     data = request.get_json()
+    logger.debug(f"Received select_searches request for user={current_user.id}: data={data}")
     selected_searches = data.get('selected_searches', [])
     
     if not selected_searches:
+        logger.warning(f"No searches selected for user={current_user.id}")
         return jsonify({'status': 'error', 'message': 'Please select at least one search to chat about'}), 400
     
     session['selected_search_ids'] = selected_searches
-    logger.info(f"Selected search IDs {selected_searches} for user {current_user.id}")
+    session.modified = True  # Ensure session is marked as modified
+    logger.info(f"Selected search IDs {selected_searches} for user {current_user.id}, session={session.get('chat_session_id')}")
     return jsonify({'status': 'success', 'message': 'Searches selected'})
 
 @app.route('/chat_message', methods=['POST'])
