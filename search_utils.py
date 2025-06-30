@@ -1,5 +1,5 @@
 import mistune
-from core import get_db_connection
+from core import get_db_connection, logger
 import psycopg2
 import hashlib
 import json
@@ -22,8 +22,8 @@ def save_search_results(user_id, query, results):
             )
             result_ids.append(result_id)
         conn.commit()
+        logger.info(f"Saved {len(result_ids)} search results for user={user_id}, query={query[:50]}...")
     except Exception as e:
-        from core import logger
         logger.error(f"Error saving search results for user={user_id}, query={query[:50]}...: {str(e)}")
         conn.rollback()
     finally:
@@ -42,7 +42,6 @@ def get_search_results(user_id, search_id):
         )
         result = cur.fetchone()
         if not result:
-            from core import logger
             logger.warning(f"No search history found for user={user_id}, search_id={search_id}")
             return []
         result_ids = json.loads(result[0]) if result[0] else []
@@ -64,15 +63,15 @@ def get_search_results(user_id, search_id):
                     else:
                         results.append(result_data)
                 except json.JSONDecodeError as e:
-                    from core import logger
                     logger.error(f"Error decoding JSON for search result: {str(e)}")
                     continue
         
-        # Fallback to query matching
+        # Fallback to query matching with partial match
         if not results:
+            logger.debug(f"No results found by result_id, falling back to query match for user={user_id}, query={query[:50]}...")
             cur.execute(
-                "SELECT result_data FROM search_results WHERE user_id = %s AND TRIM(LOWER(query)) = %s ORDER BY created_at DESC LIMIT 20",
-                (str(user_id), query)
+                "SELECT result_data FROM search_results WHERE user_id = %s AND TRIM(LOWER(query)) LIKE %s ORDER BY created_at DESC LIMIT 20",
+                (str(user_id), '%' + query + '%')
             )
             for row in cur.fetchall():
                 try:
@@ -82,14 +81,12 @@ def get_search_results(user_id, search_id):
                     else:
                         results.append(result_data)
                 except json.JSONDecodeError as e:
-                    from core import logger
                     logger.error(f"Error decoding JSON for search result: {str(e)}")
                     continue
         
         logger.debug(f"Retrieved {len(results)} results for user={user_id}, search_id={search_id}")
         return results
     except Exception as e:
-        from core import logger
         logger.error(f"Error retrieving search results for user={user_id}, search_id={search_id}: {str(e)}")
         return []
     finally:
@@ -118,7 +115,7 @@ Ensure the response is valid JSON. Example:
 Articles:
 {context}
 """
-        from core import logger, query_grok_api, get_cached_grok_response, cache_grok_response  # Lazy imports
+        from core import query_grok_api, get_cached_grok_response, cache_grok_response
         cache_key = hashlib.md5((query.lower().strip() + context + ranking_prompt).encode()).hexdigest()
         cached_response = get_cached_grok_response(cache_key)
         if cached_response:
@@ -157,7 +154,7 @@ Articles:
 
 def embedding_based_ranking(query, results, prompt_params=None):
     display_result_count = prompt_params.get('display_result_count', 20) if prompt_params else 20
-    from core import logger, generate_embedding, get_cached_embedding, cache_embedding  # Lazy imports
+    from core import generate_embedding, get_cached_embedding, cache_embedding
     query_embedding = generate_embedding(query)
     if query_embedding is None:
         logger.error("Failed to generate query embedding")
