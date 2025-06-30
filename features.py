@@ -37,28 +37,55 @@ def save_search_history(user_id, query, prompt_text, sources, results, search_id
     logger.info(f"Saved search history for user={user_id}, query={query}, search_id={search_id}")
     return result_ids
 
+def clean_invalid_search_history(user_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, result_ids FROM search_history WHERE user_id = %s", (user_id,))
+        for row in cur.fetchall():
+            search_id, result_ids = row
+            try:
+                json.loads(result_ids) if result_ids else []
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid JSON in result_ids for search_id={search_id}, user_id={user_id}")
+                cur.execute("UPDATE search_history SET result_ids = '[]' WHERE id = %s AND user_id = %s", (search_id, user_id))
+        conn.commit()
+    except psycopg2.Error as e:
+        logger.error(f"Error cleaning search history: {str(e)}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
 def get_search_history(user_id, retention_hours=24):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cutoff_time = time.time() - (retention_hours * 3600)
         cur.execute("""
-            SELECT sh.id, sh.query, sh.prompt_text, sh.sources, sh.result_ids, sh.timestamp 
-            FROM search_history sh
-            WHERE sh.user_id = %s AND sh.timestamp > %s 
-            AND EXISTS (
-                SELECT 1 FROM search_results sr 
-                WHERE sr.user_id = sh.user_id 
-                AND sr.result_id = ANY(sh.result_ids::text[])
-            )
-            ORDER BY sh.timestamp DESC
+            SELECT id, query, prompt_text, sources, result_ids, timestamp 
+            FROM search_history 
+            WHERE user_id = %s AND timestamp > %s 
+            ORDER BY timestamp DESC
         """, (user_id, cutoff_time))
-        results = [
-            {'id': row[0], 'query': row[1], 'prompt_text': row[2], 'sources': json.loads(row[3]) if row[3] and isinstance(row[3], str) else [], 'result_ids': json.loads(row[4]), 'timestamp': row[5]}
-            for row in cur.fetchall()
-        ]
+        results = []
+        for row in cur.fetchall():
+            try:
+                result_ids = json.loads(row[4]) if row[4] else []
+                results.append({
+                    'id': row[0],
+                    'query': row[1],
+                    'prompt_text': row[2],
+                    'sources': json.loads(row[3]) if row[3] and isinstance(row[3], str) else [],
+                    'result_ids': result_ids,
+                    'timestamp': row[5]
+                })
+            except json.JSONDecodeError:
+                logger.warning(f"Skipping search_id={row[0]} due to invalid result_ids JSON")
+                continue
+        logger.debug(f"Retrieved {len(results)} search history entries for user={user_id}")
         return results
-    except (psycopg2.Error, json.JSONDecodeError, TypeError) as e:
+    except psycopg2.Error as e:
         logger.error(f"Error retrieving search history: {str(e)}")
         return []
     finally:
@@ -416,6 +443,9 @@ def chat():
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
     
+    # Clean invalid search history entries
+    clean_invalid_search_history(current_user.id)
+    
     # Generate new session ID to clear chat history
     session_id = hashlib.sha256(str(time.time()).encode()).hexdigest()
     session['chat_session_id'] = session_id
@@ -430,12 +460,7 @@ def chat():
             cur.execute("""
                 SELECT id FROM search_history 
                 WHERE user_id = %s AND id = ANY(%s) 
-                AND EXISTS (
-                    SELECT 1 FROM search_results sr 
-                    WHERE sr.user_id = %s 
-                    AND sr.result_id = ANY(search_history.result_ids::text[])
-                )
-            """, (current_user.id, search_ids, current_user.id))
+            """, (current_user.id, search_ids))
             valid_search_ids = [row[0] for row in cur.fetchall()]
             if valid_search_ids != search_ids:
                 session['selected_search_ids'] = valid_search_ids
@@ -500,12 +525,7 @@ def select_searches():
         cur.execute("""
             SELECT id FROM search_history 
             WHERE user_id = %s AND id = ANY(%s) 
-            AND EXISTS (
-                SELECT 1 FROM search_results sr 
-                WHERE sr.user_id = %s 
-                AND sr.result_id = ANY(search_history.result_ids::text[])
-            )
-        """, (current_user.id, selected_searches, current_user.id))
+        """, (current_user.id, selected_searches))
         valid_search_ids = [row[0] for row in cur.fetchall()]
         if not valid_search_ids:
             logger.warning(f"No valid searches found for user={current_user.id}, selected_searches={selected_searches}")
@@ -591,6 +611,9 @@ def previous_searches():
         response = make_response(redirect(url_for('login')))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
+    
+    # Clean invalid search history entries
+    clean_invalid_search_history(current_user.id)
     
     if request.method == 'POST':
         if 'delete_period' in request.form:
@@ -768,7 +791,7 @@ def notification_edit(rule_id):
         notification = {
             'rule_name': result[0],
             'keywords': result[1],
-            'sources': json.loads(result[2]) if result[2] and isinstance(row[2], str) else [],
+            'sources': json.loads(result[2]) if result[2] and isinstance(result[2], str) else [],
             'timeframe': result[3],
             'prompt_text': result[4],
             'email_format': result[5]

@@ -34,6 +34,9 @@
                                     <label class="form-check-label">{{ search.query }} ({{ search.timestamp | datetimeformat }})</label>
                                 </div>
                             {% endfor %}
+                            {% if not search_history %}
+                                <p>No recent searches found. Please run a new search.</p>
+                            {% endif %}
                             <button type="submit" class="btn btn-primary mt-2" id="select-searches-button">Update</button>
                             <div id="select-searches-loading" style="display: none;">Updating...</div>
                         </div>
@@ -72,13 +75,16 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
     $(document).ready(function() {
+        // Log search_history for debugging
+        console.log('Search history:', {{ search_history | tojson }});
+
         // Clear invalid search_ids from session
         $.ajax({
             url: '{{ url_for("select_searches") }}',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({ selected_searches: [] }),
-            async: false, // Ensure session is cleared before rendering
+            async: false,
             success: function(response) {
                 console.log('Cleared invalid search_ids');
             },
