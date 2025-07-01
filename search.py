@@ -13,6 +13,7 @@ from prompt_utils import parse_prompt
 import nltk
 from nltk.tokenize import sent_tokenize
 from search_utils import markdown_to_html
+import requests
 
 def generate_prompt_output(query, results, prompt_text, prompt_params, is_fallback=False):
     from core import get_cached_grok_response, cache_grok_response  # Lazy imports
@@ -252,11 +253,15 @@ def search():
 
                 max_retries = 3
                 retry_delay = 5
+                timeout = 30  # Add timeout in seconds
                 for attempt in range(max_retries):
                     try:
-                        primary_results, fallback_results = handler.search(query, keywords_with_synonyms, date_range, start_year_int or current_year - 10, result_limit=result_limit)
+                        # Set a timeout for the API call
+                        response = requests.get(handler.url, params=handler.build_params(query, keywords_with_synonyms, date_range, start_year_int or current_year - 10, result_limit), timeout=timeout)
+                        response.raise_for_status()
+                        primary_results, fallback_results = handler.parse_response(response.text)
                         break
-                    except Exception as e:
+                    except requests.exceptions.RequestException as e:
                         if attempt < max_retries - 1 and "429" in str(e):
                             logger.warning(f"Rate limit hit for {handler.name}, retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})")
                             time.sleep(retry_delay)
