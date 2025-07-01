@@ -452,6 +452,8 @@ def chat():
     
     retention_hours = get_user_settings(current_user.id)
     search_ids = request.args.getlist('search_id') or session.get('selected_search_ids', [])
+    if request.args.get('search_id'):
+        search_ids = [request.args.get('search_id')]  # Preselect search_id from URL if provided
     # Filter invalid search_ids
     conn = get_db_connection()
     cur = conn.cursor()
@@ -638,7 +640,7 @@ def previous_searches():
                     query, prompt_text, sources = result
                     try:
                         sources = json.loads(sources) if sources and isinstance(sources, str) else []
-                    except (json.JSONDecodeError, TypeError):
+                    except (json.JSONDecodeError, TypeTypeError):
                         logger.warning(f"Invalid sources JSON for search {search_id}: {sources}")
                         sources = []
                     return redirect(url_for('search', query=query, prompt_text=prompt_text, sources=sources))
