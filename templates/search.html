@@ -11,7 +11,7 @@
                 </label>
                 <div class="form-group">
                     <label for="start_year">Start Year</label>
-                    <select id="start_year" name="start_year" class="form-control" {{ 'disabled' unless search_older }}>
+                    <select id="start_year" name="start_year" class="form-control" {{ 'disabled' if not search_older else '' }}>
                         <option value="" {{ '' if start_year else 'selected' }}>Any</option>
                         {% for year in range(current_year, 1899, -1) %}
                             <option value="{{ year }}" {{ 'selected' if start_year == year else '' }}>
