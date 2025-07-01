@@ -137,9 +137,14 @@ def get_mesh_synonyms(keyword, api_key=None):
         logger.debug(f"MeSH API response for {keyword}: {response.content[:200]}...")
         try:
             root = ET.fromstring(response.content)
+            # Validate XML structure
+            if not root.findall(".//IdList") and not root.findall(".//DescriptorRecord"):
+                logger.warning(f"Invalid MeSH ESearch response structure for {keyword}: {response.content[:200]}")
+                return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))
         except ET.ParseError as e:
             logger.error(f"Invalid XML in MeSH esearch response for {keyword}: {str(e)}, response: {response.content[:200]}")
             return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))
+        
         id_list = root.findall(".//Id")
         if not id_list:
             logger.info(f"No MeSH descriptors found for {keyword}")
@@ -154,6 +159,10 @@ def get_mesh_synonyms(keyword, api_key=None):
         logger.debug(f"MeSH efetch response for {keyword}: {efetch_response.content[:200]}...")
         try:
             efetch_root = ET.fromstring(efetch_response.content)
+            # Validate efetch XML structure
+            if not efetch_root.findall(".//DescriptorRecord"):
+                logger.warning(f"Invalid MeSH EFetch response structure for {keyword}: {efetch_response.content[:200]}")
+                return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))
         except ET.ParseError as e:
             logger.error(f"Invalid XML in MeSH efetch response for {keyword}: {str(e)}, response: {efetch_response.content[:200]}")
             return BIOMEDICAL_VOCAB.get(keyword_lower, get_datamuse_synonyms(keyword))

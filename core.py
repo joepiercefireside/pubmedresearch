@@ -52,7 +52,7 @@ if not sendgrid_api_key:
     logger.error("SENDGRID_API_KEY not set in environment variables")
 sg = SendGridAPIClient(sendgrid_api_key) if sendgrid_api_key else None
 
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2', force_download=True)
 logger.info("Embedding model loaded at startup.")
 
 def datetimeformat(value, format='%Y-%m-%d %H:%M:%S'):
